@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
-import { findRoute } from '../services/models'
+import { findRoute, listEnabledModels } from '../services/models'
 import { writeLog } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
@@ -114,7 +114,6 @@ proxyRoutes.all('*', async (c) => {
   try {
     // GET /v1/models：返回本地已启用的模型列表（不转发上游）
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
-      const { listEnabledModels } = await import('../services/models')
       const models = listEnabledModels(protocol)
       if (!models.length) {
         return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'no enabled models')

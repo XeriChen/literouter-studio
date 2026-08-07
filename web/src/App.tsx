@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { getToken } from './api/client'
 import { Layout } from './components/Layout'
+import Home from './pages/Home'
 import Login from './pages/Login'
 import Logs from './pages/Logs'
 import Models from './pages/Models'
@@ -25,7 +26,8 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Providers />} />
+          <Route index element={<Home />} />
+          <Route path="providers" element={<Providers />} />
           <Route path="models" element={<Models />} />
           <Route path="logs" element={<Logs />} />
           <Route path="settings" element={<Settings />} />
