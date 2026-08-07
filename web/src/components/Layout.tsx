@@ -1,5 +1,5 @@
 import React from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Providers', end: true },
@@ -9,7 +9,7 @@ const NAV_ITEMS = [
   { to: '/settings', label: 'Settings', end: false },
 ]
 
-export function Layout({ children }: { children?: React.ReactNode }) {
+export function Layout() {
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       <nav className="w-48 shrink-0 border-r p-4">
@@ -32,7 +32,9 @@ export function Layout({ children }: { children?: React.ReactNode }) {
           ))}
         </ul>
       </nav>
-      <main className="flex-1 p-6">{children}</main>
+      <main className="flex-1 p-6">
+        <Outlet />
+      </main>
     </div>
   )
 }

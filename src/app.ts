@@ -14,8 +14,8 @@ app.route('/api', api)
 app.route('/openai', proxyRoutes)
 app.route('/anthropic', proxyRoutes)
 
-// 生产环境：托管 web/dist 静态文件 + SPA fallback
-const distDir = path.resolve(process.cwd(), 'web/dist')
+// 生产环境：托管 web/dist 静态文件 + SPA fallback（相对源码定位，与启动目录无关）
+const distDir = path.resolve(import.meta.dirname, '../web/dist')
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -35,20 +35,23 @@ if (existsSync(distDir)) {
       return c.notFound()
     }
     const urlPath = c.req.path === '/' ? '/index.html' : c.req.path
-    const safePath = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, '')
-    const filePath = path.join(distDir, safePath)
-    if (urlPath !== '/index.html' && existsSync(filePath) && (!filePath.startsWith(distDir) && !existsSync(filePath))) {
+    const filePath = path.resolve(distDir, '.' + path.normalize(urlPath))
+    if (filePath !== distDir && !filePath.startsWith(distDir + path.sep)) {
       return c.notFound()
     }
-    if (existsSync(filePath)) {
+    if (existsSync(filePath) && statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase()
+      const isHtml = ext === '.html'
       return new Response(readFileSync(filePath), {
-        headers: { 'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream' },
+        headers: {
+          'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+          'cache-control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
+        },
       })
     }
     // SPA fallback：统一回 index.html
     return new Response(readFileSync(path.join(distDir, 'index.html')), {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
     })
   })
 }

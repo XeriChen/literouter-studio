@@ -112,6 +112,11 @@ proxyRoutes.all('*', async (c) => {
   c.set('proxyLog', EMPTY_LOG)
   c.set('_protocol', protocol)
 
+  // OpenAI 入口严格限定 /openai/v1/*：不带 /v1 的路径一律 404
+  if (protocol === 'openai' && !upstreamPath.startsWith('/v1/')) {
+    return logAndFail(c, protocol, path, c.req.method, null, startedAt, 404, 'not_found', 'not found')
+  }
+
   try {
     // GET /v1/models：转发到该协议第一个已启用的 Provider
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {

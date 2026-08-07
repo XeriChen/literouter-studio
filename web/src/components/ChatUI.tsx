@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, SendHorizontal } from 'lucide-react'
+import { getToken } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
@@ -77,7 +78,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          ...(localStorage.getItem('llm_gateway_token') ? { authorization: `Bearer ${localStorage.getItem('llm_gateway_token')}` } : {}),
+          ...(getToken() ? { authorization: `Bearer ${getToken()}` } : {}),
         },
         body: JSON.stringify(reqBody),
         signal: controller.signal,

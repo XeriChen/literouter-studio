@@ -29,10 +29,10 @@
 | :--- | :--- | :--- | :--- |
 | D1 | 超 50MB 返回 400 `invalid_request_body`（错误码表里标注 413） | 返回 **413** + `invalid_request_body` | 遵循错误码表内 "(413)" 标注 |
 | D2 | 代理 5xx 包装 502 `upstream_error` | 直接**丢弃**上游响应体后返回网关 JSON | 5xx 无透传价值，省带宽 |
-| D3 | 409 未定义 | 模型启用等 PATCH 目标行不存在时**静默成功**（UPDATE 0 行） | 建议补丁 P1 |
-| D4 | 日志表写入时机 | 代理日志在路由内写（非中间件），API 日志由中间件写；`GET /api/logs` 等读操作也产生日志 | 建议补丁 P2 |
+| D3 | 409 未定义 | 模型启用等 PATCH 目标行不存在时**静默成功**（UPDATE 0 行） | **已修复**：返回 404 `model_not_found` |
+| D4 | 日志表写入时机 | 代理日志在路由内写（非中间件），API 日志由中间件写；`GET /api/logs` 等读操作也产生日志 | **已修复**：API 日志仅记非 GET |
 | D5 | 生产 SPA fallback "非静态 GET 回 index.html" | `/api` 未匹配返回 404 JSON，仅非 API 路径回 index.html | 遵循 plan.md §7.1 原文 |
-| D6 | OpenAI 入口 `ALL /openai/v1/*` | 实际接受 `/openai/*` 任意路径（去掉前缀后透传） | 宽松透传；建议补丁 P3 |
+| D6 | OpenAI 入口 `ALL /openai/v1/*` | 实际接受 `/openai/*` 任意路径（去掉前缀后透传） | **已修复**：严格限 `/openai/v1/*`，其他 404 |
 
 ---
 
@@ -78,9 +78,9 @@
 
 | # | 建议 | 影响 |
 | :--- | :--- | :--- |
-| P1 | PATCH `/api/models` 目标行不存在时返回 404 `model_not_found`，避免前端误以为成功 | 后端 3 行 |
-| P2 | API 日志只记**非 GET**（跳过 `/api/logs`、`/api/me` 等读请求的自污染） | 后端 2 行 |
-| P3 | OpenAI 入口严格校验 `upstreamPath.startsWith('/v1/')`，否则 404 | 后端 3 行 |
+| P1 | **✅ 已实施**：PATCH `/api/models` 目标行不存在时返回 404 `model_not_found`，避免前端误以为成功 | 后端 3 行 |
+| P2 | **✅ 已实施**：API 日志只记**非 GET**（跳过 `/api/logs`、`/api/me` 等读请求的自污染） | 后端 2 行 |
+| P3 | **✅ 已实施**：OpenAI 入口严格校验 `upstreamPath.startsWith('/v1/')`，否则 404 | 后端 3 行 |
 | P4 | 日志表增加保留策略（如 7 天/1 万条自动裁剪），当前只靠前端分页 | 后续版本 |
 | P5 | `GET /v1/models` 支持查询参数 `?provider_id=` 显式指定 Provider | 后续版本 |
 

@@ -4,7 +4,7 @@ import { authMiddleware } from '../middlewares/auth'
 import { logMiddleware } from '../middlewares/log'
 import { verifyToken, resetAdminToken, getAdminToken } from '../services/auth'
 import { createProvider, deleteProvider, fetchProviderModels, getProvider, listProviders, testProviderConnection, updateProvider } from '../services/providers'
-import { addModel, deleteModel, listModels, setModelEnabled } from '../services/models'
+import { addModel, deleteModel, getModel, listModels, setModelEnabled } from '../services/models'
 import { clearLogs, listLogs } from '../services/logs'
 import { getSettings, updateSettings } from '../services/settings'
 import { exportBackup, importBackup } from '../services/backup'
@@ -182,6 +182,9 @@ api.patch('/models', async (c) => {
     .safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid model', 'invalid_request_body')
   if (!getProvider(parsed.data.provider_id)) return fail(c, 404, 'provider not found', 'provider_not_found')
+  if (!getModel(parsed.data.provider_id, parsed.data.model_id)) {
+    return fail(c, 404, 'model not found', 'model_not_found')
+  }
   const row = setModelEnabled(parsed.data)
   return ok(c, row)
 })
