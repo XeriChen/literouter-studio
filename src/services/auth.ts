@@ -18,6 +18,10 @@ export function resetAdminToken(): string {
   return token
 }
 
+export function setAdminToken(token: string): void {
+  setSetting(TOKEN_KEY, token)
+}
+
 export function verifyToken(token: string | null | undefined): boolean {
   if (!token) return false
   return token === getAdminToken()

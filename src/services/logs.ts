@@ -1,13 +1,47 @@
 import { db } from '../db'
 import type { LogRow } from '../types'
 
-export function listLogs(params: { page: number; pageSize: number }): { total: number; rows: LogRow[] } {
-  const { page, pageSize } = params
-  const offset = (page - 1) * pageSize
-  const total = (db.prepare('SELECT COUNT(*) AS c FROM logs').get() as { c: number }).c
+export interface LogFilters {
+  page: number
+  pageSize: number
+  protocol?: string
+  provider_id?: string
+  model?: string
+  status?: number
+}
+
+const MAX_PAGE_SIZE = 10_000
+
+export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] } {
+  const pageSize = Math.min(Math.max(filters.pageSize, 1), MAX_PAGE_SIZE)
+  const page = Math.max(filters.page, 1)
+  const where: string[] = []
+  const params: Array<string | number> = []
+  if (filters.protocol) {
+    where.push('protocol = ?')
+    params.push(filters.protocol)
+  }
+  if (filters.provider_id) {
+    where.push('provider_id = ?')
+    params.push(filters.provider_id)
+  }
+  if (filters.model) {
+    where.push('model = ?')
+    params.push(filters.model)
+  }
+  if (filters.status !== undefined) {
+    where.push('status = ?')
+    params.push(filters.status)
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const total = (
+    db.prepare(`SELECT COUNT(*) AS c FROM logs ${whereSql}`).get(...params) as { c: number }
+  ).c
   const rows = db
-    .prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT ? OFFSET ?')
-    .all(pageSize, offset) as LogRow[]
+    .prepare(
+      `SELECT * FROM logs ${whereSql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, pageSize, (page - 1) * pageSize) as LogRow[]
   return { total, rows }
 }
 

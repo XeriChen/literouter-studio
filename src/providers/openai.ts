@@ -1,19 +1,35 @@
-type Protocol = 'openai' | 'anthropic'
+import type { ProviderRow } from '../types'
+import { parseAuth } from './headers'
 
-export interface BuildHeadersResult {
-  headers: Record<string, string>
+export interface ChatRequestInput {
+  model: string
+  prompt: string
 }
 
-/** 构造 OpenAI 上游请求头（注入 Authorization: Bearer） */
-export async function buildOpenAIHeaders(
-  auth: Record<string, string>,
-  customHeaders: Record<string, string>,
-  _protocol: Protocol,
-): Promise<BuildHeadersResult> {
-  // TODO: 注入 Authorization: Bearer <token>，合并 custom_headers（严禁覆盖认证头）
-  return { headers: {} }
+/** 构造 OpenAI 非流式 Chat 请求体（测活用） */
+export function buildOpenAIChatBody(input: ChatRequestInput): Record<string, unknown> {
+  return {
+    model: input.model,
+    messages: [{ role: 'user', content: input.prompt }],
+    stream: false,
+  }
 }
 
 export function buildOpenAIModelsUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/$/, '')}/models`
+  return `${baseUrl.replace(/\/+$/, '')}/models`
+}
+
+export function extractOpenAIReply(body: unknown): string {
+  const choices = (body as { choices?: { message?: { content?: string } }[] })?.choices
+  return choices?.[0]?.message?.content ?? ''
+}
+
+export function openaiAuthHeaders(auth: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = {}
+  if (auth.api_key) h['authorization'] = `Bearer ${auth.api_key}`
+  return h
+}
+
+export function getOpenAIAuth(provider: ProviderRow): Record<string, string> {
+  return openaiAuthHeaders(parseAuth(provider))
 }

@@ -6,6 +6,8 @@ export const DEFAULT_SETTINGS = {
   global_timeout_ms: '120000',
 }
 
+export type SettingsKey = keyof typeof DEFAULT_SETTINGS
+
 export function getSettings(): Record<string, string> {
   const out: Record<string, string> = { ...DEFAULT_SETTINGS }
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -15,7 +17,7 @@ export function getSettings(): Record<string, string> {
   return out
 }
 
-export function updateSettings(patch: Partial<Record<string, string>>): Record<string, string> {
+export function updateSettings(patch: Partial<Record<SettingsKey, string>>): Record<string, string> {
   for (const [key, value] of Object.entries(patch)) {
     if (key in DEFAULT_SETTINGS && value !== undefined) setSetting(key, value)
   }

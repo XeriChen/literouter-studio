@@ -5,6 +5,7 @@
 ## 1. 权威设计文档
 
 - `plan.md`（v1.1）是**唯一权威设计指南**，实现必须以其为准（架构、业务逻辑、边界条件、实现陷阱）。
+- `plan-patch.md` 是**补充补丁**：记录实现期与 plan 的行为偏差（D1-D6）、未覆盖的推断点（I1-I7）、依赖层陷阱（undici v7）。冲突时以补丁中的偏差声明为准。
 - 遇到文档未覆盖的细节时，遵循核心原则推断：**最小可用、原生透传、不修改请求体**。
 
 ## 2. 红线（绝对不可违背）
@@ -74,7 +75,8 @@
 - [ ] 日志在收到上游响应头时立即写入，`latency_ms` = 网关收请求到收响应头耗时（首包）
 - [ ] 上游 4xx（400/401/429 等）原样透传不重新包装；5xx 才包 `upstream_error`（502）；超时 `upstream_timeout`（504）
 - [ ] `accept-encoding: identity` 防止上游压缩破坏 SSE
-- [ ] 生产环境 Hono 配 SPA fallback；/api 与非静态 G GET 均回 `index.html`
+- [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
+- [ ] 代理请求须用 undici v7 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
 - [ ] 测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时
 
 ## 8. 错误码速查
