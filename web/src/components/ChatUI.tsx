@@ -49,6 +49,11 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => { mountedRef.current = false }
+  }, [])
 
   // 切换协议 / Provider / 模型时清空聊天记录
   useEffect(() => {
@@ -108,7 +113,9 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
       if ((err as Error)?.name === 'AbortError') return
       setMessages([...history, { role: 'assistant', content: `请求失败：${err instanceof Error ? err.message : String(err)}` }])
     } finally {
-      setStreaming(false)
+      if (mountedRef.current) {
+        setStreaming(false)
+      }
       abortRef.current = null
     }
   }

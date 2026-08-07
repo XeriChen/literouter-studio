@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { z } from 'zod'
 import { authMiddleware } from '../middlewares/auth'
 import { logMiddleware } from '../middlewares/log'
@@ -23,7 +24,7 @@ function ok(c: ApiC, data: unknown) {
 function fail(c: ApiC, status: number, message: string, code: string) {
   return c.json(
     { ok: false, error: { message, type: code, code } } as ApiResponse<never>,
-    status as 400,
+    status as ContentfulStatusCode,
   )
 }
 

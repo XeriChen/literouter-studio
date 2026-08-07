@@ -19,6 +19,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error('unauthorized')
   }
 
+  if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T
   const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null
   if (!res.ok) {
     throw new Error(body?.error?.message ?? `HTTP ${res.status}`)

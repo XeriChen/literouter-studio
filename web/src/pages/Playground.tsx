@@ -25,63 +25,71 @@ export default function Playground() {
     [providers.data, protocol],
   )
   const modelsOfProvider = useMemo(
-    () => (models.data ?? []).filter((m) => m.provider_id === providerId && m.protocol === protocol),
+    () => (models.data ?? []).filter((m) => m.provider_id === providerId && m.protocol === protocol && m.enabled === 1 && m.provider_enabled === 1),
     [models.data, providerId, protocol],
   )
   const activeProvider = providersOfProtocol.find((p) => p.id === providerId) ?? null
   const activeModel = modelsOfProvider.find((m) => `${m.provider_id}/${m.model_id}` === modelKey) ?? null
 
   return (
-    <div className="flex h-full flex-col space-y-3">
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="space-y-1">
-          <Label>协议</Label>
-          <Select
-            value={protocol}
-            onValueChange={(v) => {
-              setProtocol(v as 'openai' | 'anthropic')
-              setProviderId('')
-              setModelKey('')
-            }}
-          >
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="openai">openai</SelectItem>
-              <SelectItem value="anthropic">anthropic</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label>Provider</Label>
-          <Select value={providerId} onValueChange={(id) => { setProviderId(id); setModelKey('') }} disabled={providersOfProtocol.length === 0}>
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="选择 Provider" />
-            </SelectTrigger>
-            <SelectContent>
-              {providersOfProtocol.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label>模型（仅启用）</Label>
-          <Select value={modelKey} onValueChange={setModelKey} disabled={modelsOfProvider.length === 0}>
-            <SelectTrigger className="w-52">
-              <SelectValue placeholder="选择模型" />
-            </SelectTrigger>
-            <SelectContent>
-              {modelsOfProvider.map((m) => (
-                <SelectItem key={`${m.provider_id}/${m.model_id}`} value={`${m.provider_id}/${m.model_id}`} disabled={m.enabled !== 1 || m.provider_enabled !== 1}>
-                  {m.model_id} {m.enabled !== 1 ? '（未启用）' : m.provider_enabled !== 1 ? '（Provider 禁用）' : ''}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+    <div className="flex h-full flex-col space-y-4">
+      <div>
+        <h1 className="text-lg font-semibold">Playground</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">选择模型，发起对话测试</p>
+      </div>
+
+      <div className="rounded-lg border bg-card p-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs">协议</Label>
+            <Select
+              value={protocol}
+              onValueChange={(v) => {
+                setProtocol(v as 'openai' | 'anthropic')
+                setProviderId('')
+                setModelKey('')
+              }}
+            >
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="openai">openai</SelectItem>
+                <SelectItem value="anthropic">anthropic</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Provider</Label>
+            <Select value={providerId} onValueChange={(id) => { setProviderId(id); setModelKey('') }} disabled={providersOfProtocol.length === 0}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder={providersOfProtocol.length === 0 ? '请先添加 Provider' : '选择 Provider'} />
+              </SelectTrigger>
+              <SelectContent>
+                {providersOfProtocol.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">模型</Label>
+            <Select value={modelKey} onValueChange={setModelKey} disabled={modelsOfProvider.length === 0}>
+              <SelectTrigger className="w-52">
+                <SelectValue placeholder={modelsOfProvider.length === 0 ? '请先拉取或添加模型' : '选择模型'} />
+              </SelectTrigger>
+              <SelectContent>
+                {modelsOfProvider.map((m) => (
+                  <SelectItem key={`${m.provider_id}/${m.model_id}`} value={`${m.provider_id}/${m.model_id}`}>
+                    {m.display_name || m.model_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
+
       <div className="min-h-0 flex-1">
         <ChatUI protocol={protocol} provider={activeProvider} model={activeModel} />
       </div>

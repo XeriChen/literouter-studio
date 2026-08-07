@@ -1,10 +1,11 @@
 import { Hono, type Context } from 'hono'
-import { db } from '../db'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
 import { findRoute } from '../services/models'
 import { writeLog } from '../services/logs'
+import { getFirstEnabledProvider } from '../services/providers'
 import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
 
@@ -15,13 +16,7 @@ const MAX_BODY_BYTES = 50 * 1024 * 1024
 const EMPTY_LOG = { model: null, providerId: null, headerAt: null, errorCode: null, status: null }
 
 function proxyError(c: Context, status: number, message: string, code: string) {
-  return c.json({ error: { message, type: code, code } }, status as 400)
-}
-
-function firstEnabledProvider(protocol: 'openai' | 'anthropic'): ProviderRow | undefined {
-  return db
-    .prepare('SELECT * FROM providers WHERE protocol = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1')
-    .get(protocol) as ProviderRow | undefined
+  return c.json({ error: { message, type: code, code } }, status as ContentfulStatusCode)
 }
 
 async function forward(
@@ -120,7 +115,7 @@ proxyRoutes.all('*', async (c) => {
   try {
     // GET /v1/models：转发到该协议第一个已启用的 Provider
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
-      const provider = firstEnabledProvider(protocol)
+      const provider = getFirstEnabledProvider(protocol)
       if (!provider) {
         return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'model not found')
       }
@@ -157,7 +152,7 @@ proxyRoutes.all('*', async (c) => {
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
-    c.set('proxyLog', { ...(c.get('proxyLog') ?? EMPTY_LOG), model, providerId: route.provider.id })
+    c.set('proxyLog', { ...(c.get('proxyLog') ?? EMPTY_LOG), model })
     return forward(c, route.provider, upstreamPath, 'POST', bodyBytes, startedAt)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {

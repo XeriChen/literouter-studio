@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { getSetting, setSetting } from '../db'
 
 const TOKEN_KEY = 'admin_token'
@@ -24,5 +24,7 @@ export function setAdminToken(token: string): void {
 
 export function verifyToken(token: string | null | undefined): boolean {
   if (!token) return false
-  return token === getAdminToken()
+  const expected = getAdminToken()
+  if (token.length !== expected.length) return false
+  return timingSafeEqual(Buffer.from(token), Buffer.from(expected))
 }

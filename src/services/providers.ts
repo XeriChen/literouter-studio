@@ -7,6 +7,12 @@ import { buildProviderHeaders } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
 import type { ProviderProtocol, ProviderRow } from '../types'
 
+export function getFirstEnabledProvider(protocol: 'openai' | 'anthropic'): ProviderRow | undefined {
+  return db
+    .prepare('SELECT * FROM providers WHERE protocol = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1')
+    .get(protocol) as ProviderRow | undefined
+}
+
 export function listProviders(): ProviderRow[] {
   return db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as ProviderRow[]
 }
@@ -70,27 +76,31 @@ export function fetchProviderModels(providerId: string): Promise<{ added: number
       signal: AbortSignal.timeout(timeoutMs || 30_000),
       dispatcher,
     })
-    const json = await new Response(res.body as unknown as BodyInit).json().catch(() => null)
-    const ids = (json?.data ?? []).map((m: { id?: string }) => m.id).filter((x: unknown): x is string => typeof x === 'string')
-    const now = new Date().toISOString()
-    const upsert = db.prepare(
-      `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
-       VALUES (?, ?, NULL, 0, 'fetched', ?, ?, ?)
-       ON CONFLICT(provider_id, model_id) DO UPDATE SET fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
-    )
-    const tx = db.transaction((idsToUpsert: string[]) => {
-      let added = 0
-      let updated = 0
-      const existsStmt = db.prepare('SELECT 1 FROM provider_models WHERE provider_id = ? AND model_id = ?')
-      for (const id of idsToUpsert) {
-        const existed = existsStmt.get(providerId, id) !== undefined
-        upsert.run(providerId, id, now, now, now)
-        if (existed) updated++
-        else added++
-      }
-      return { added, updated }
-    })
-    return tx(ids)
+    try {
+      const json = await new Response(res.body as unknown as BodyInit).json().catch(() => null)
+      const ids = (json?.data ?? []).map((m: { id?: string }) => m.id).filter((x: unknown): x is string => typeof x === 'string')
+      const now = new Date().toISOString()
+      const upsert = db.prepare(
+        `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
+         VALUES (?, ?, NULL, 0, 'fetched', ?, ?, ?)
+         ON CONFLICT(provider_id, model_id) DO UPDATE SET fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+      )
+      const tx = db.transaction((idsToUpsert: string[]) => {
+        let added = 0
+        let updated = 0
+        const existsStmt = db.prepare('SELECT 1 FROM provider_models WHERE provider_id = ? AND model_id = ?')
+        for (const id of idsToUpsert) {
+          const existed = existsStmt.get(providerId, id) !== undefined
+          upsert.run(providerId, id, now, now, now)
+          if (existed) updated++
+          else added++
+        }
+        return { added, updated }
+      })
+      return tx(ids)
+    } finally {
+      await drainBody(res.body)
+    }
   })()
 }
 
@@ -105,7 +115,7 @@ export async function testProviderConnection(providerId: string): Promise<{
   const url = getProviderModelsUrl(provider)
   const timeoutMs = provider.timeout_ms ?? getGlobalTimeoutMs()
   try {
-const res = await sendToUpstream({
+    const res = await sendToUpstream({
       method: 'GET',
       url,
       headers: buildProviderHeaders(provider),

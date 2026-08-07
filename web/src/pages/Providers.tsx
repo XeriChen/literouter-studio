@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, RefreshCw, Trash2, Wifi } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Trash2, Wifi, X, ServerOff } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -45,8 +45,7 @@ export default function Providers() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Provider | null>(null)
   const [form, setForm] = useState<ProviderForm>(EMPTY_FORM)
-  const [result, setResult] = useState<{ providerId: string; message: string } | null>(null)
-  const [fetching, setFetching] = useState<string | null>(null)
+  const [result, setResult] = useState<{ message: string; ok: boolean } | null>(null)
 
   const providers = useQuery({
     queryKey: ['providers'],
@@ -108,77 +107,109 @@ export default function Providers() {
 
   const testMutation = useMutation({
     mutationFn: (id: string) => api<{ ok: true; data: { ok: boolean; status?: number; message: string } }>(`/api/providers/${id}/test`, { method: 'POST' }),
+    onSuccess: (res) => {
+      setResult({ message: res.data.message, ok: res.data.ok })
+    },
+    onError: (err) => {
+      setResult({ message: err instanceof Error ? err.message : '测试失败', ok: false })
+    },
   })
 
-  async function fetchModels(id: string) {
-    setFetching(id)
-    try {
-      const res = await api<{ ok: true; data: { added: number; updated: number } }>(`/api/providers/${id}/fetch-models`, { method: 'POST' })
-      setResult({ providerId: id, message: `拉取成功：新增 ${res.data.added}，刷新 ${res.data.updated}` })
+  const fetchModelsMutation = useMutation({
+    mutationFn: (id: string) =>
+      api<{ ok: true; data: { added: number; updated: number } }>(`/api/providers/${id}/fetch-models`, { method: 'POST' }),
+    onSuccess: (res) => {
+      setResult({ message: `拉取成功：新增 ${res.data.added}，刷新 ${res.data.updated}`, ok: true })
       qc.invalidateQueries({ queryKey: ['providers'] })
       qc.invalidateQueries({ queryKey: ['models'] })
-    } catch (err) {
-      setResult({ providerId: id, message: `拉取失败：${err instanceof Error ? err.message : 'unknown'}` })
-    } finally {
-      setFetching(null)
-    }
-  }
+    },
+    onError: (err) => {
+      setResult({ message: `拉取失败：${err instanceof Error ? err.message : 'unknown'}`, ok: false })
+    },
+  })
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Providers</h1>
-        <Button onClick={openCreate}>
+    <div className="space-y-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-lg font-semibold">Providers</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">管理 LLM 服务接入点</p>
+        </div>
+        <Button onClick={openCreate} size="sm">
           <Plus className="h-4 w-4" /> 新增 Provider
         </Button>
       </div>
 
-      {result && <p className="text-sm text-muted-foreground">{result.message}</p>}
+      {result && (
+        <div className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${result.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300'}`}>
+          <span>{result.message}</span>
+          <button onClick={() => setResult(null)} className="ml-2 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Provider 列表</CardTitle>
+        <CardHeader className="py-4">
+          <CardTitle className="text-sm font-medium">Provider 列表</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>名称</TableHead>
+                <TableHead className="pl-6">名称</TableHead>
                 <TableHead>协议</TableHead>
                 <TableHead>Base URL</TableHead>
-                <TableHead>已启用</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead className="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {providers.data?.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="pl-6 font-medium">{p.name}</TableCell>
                   <TableCell>
                     <Badge variant={p.protocol === 'openai' ? 'outline' : 'secondary'}>{p.protocol}</Badge>
                   </TableCell>
-                  <TableCell className="max-w-[260px] truncate">{p.base_url}</TableCell>
+                  <TableCell className="max-w-[240px] truncate font-mono text-xs">{p.base_url}</TableCell>
                   <TableCell>
                     <Badge variant={p.enabled ? 'success' : 'warning'}>{p.enabled ? '启用' : '禁用'}</Badge>
                   </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Button variant="outline" size="sm" onClick={() => testMutation.mutate(p.id)}>
-                        <Wifi className="h-3.5 w-3.5" /> 测试
+                  <TableCell className="pr-6">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => testMutation.mutate(p.id)} disabled={testMutation.isPending}>
+                        <Wifi className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="outline" size="sm" disabled={fetching === p.id} onClick={() => fetchModels(p.id)}>
-                        <RefreshCw className={`h-3.5 w-3.5 ${fetching === p.id ? 'animate-spin' : ''}`} /> 拉取模型
+                      <Button variant="ghost" size="sm" disabled={fetchModelsMutation.isPending && fetchModelsMutation.variables === p.id} onClick={() => fetchModelsMutation.mutate(p.id)}>
+                        <RefreshCw className={`h-3.5 w-3.5 ${fetchModelsMutation.isPending && fetchModelsMutation.variables === p.id ? 'animate-spin' : ''}`} />
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => openEdit(p)}>编辑</Button>
-                      <Button variant="ghost" size="sm" onClick={() => delMutation.mutate(p.id)}>删除</Button>
+                      <Button variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                        编辑
+                      </Button>
+                      <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除 Provider「${p.name}」？关联的模型也会一并删除。`)) delMutation.mutate(p.id) }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
               ))}
-              {!providers.data?.length && (
+              {!providers.data?.length && !providers.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                    {providers.isLoading ? '加载中...' : '暂无 Provider，点击右上角新增'}
+                  <TableCell colSpan={5} className="h-32 text-center">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                      <ServerOff className="h-8 w-8" />
+                      <p className="text-sm">还没有 Provider</p>
+                      <Button variant="outline" size="sm" onClick={openCreate}>
+                        <Plus className="h-4 w-4" /> 新增 Provider
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+              {providers.isLoading && (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-24 text-center text-sm text-muted-foreground">
+                    加载中...
                   </TableCell>
                 </TableRow>
               )}
@@ -193,13 +224,13 @@ export default function Providers() {
             <DialogTitle>{editing ? '编辑 Provider' : '新增 Provider'}</DialogTitle>
             <DialogDescription>API Key 会以明文存储在本机数据库中，请妥善保管。</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
+          <div className="space-y-4 py-2">
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label>名称</Label>
                 <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="如：OpenAI 官方" />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label>协议</Label>
                 <Select value={form.protocol} onValueChange={(v) => setForm({ ...form, protocol: v as ProviderForm['protocol'] })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -210,39 +241,42 @@ export default function Providers() {
                 </Select>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>Base URL（不含 /v1 后缀）</Label>
+            <div className="space-y-1.5">
+              <Label>Base URL</Label>
               <Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://api.openai.com" />
+              <p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <Label>API Key</Label>
               <Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." />
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label>代理 URL（可选）</Label>
                 <Input value={form.proxy_url} onChange={(e) => setForm({ ...form, proxy_url: e.target.value })} placeholder="http://127.0.0.1:7890" />
               </div>
-              <div className="space-y-2">
-                <Label>超时毫秒（0 表示不超时）</Label>
-                <Input value={form.timeout_ms} onChange={(e) => setForm({ ...form, timeout_ms: e.target.value })} placeholder="120000" />
+              <div className="space-y-1.5">
+                <Label>超时毫秒</Label>
+                <Input value={form.timeout_ms} onChange={(e) => setForm({ ...form, timeout_ms: e.target.value })} placeholder="120000（0 表示不超时）" />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>自定义请求头（JSON，不可覆盖认证头/accept-encoding）</Label>
+            <div className="space-y-1.5">
+              <Label>自定义请求头</Label>
               <Textarea
                 value={form.custom_headers}
                 onChange={(e) => setForm({ ...form, custom_headers: e.target.value })}
                 rows={3}
                 className="font-mono text-xs"
+                placeholder='{"X-Custom": "value"}'
               />
+              <p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || !form.base_url.trim()}>
               {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-              保存
+              {editing ? '保存修改' : '创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

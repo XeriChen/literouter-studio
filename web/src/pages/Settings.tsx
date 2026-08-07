@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Download, KeyRound, Loader2, Upload } from 'lucide-react'
+import { Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
 import { api, clearToken } from '@/api/client'
 import type { BackupData } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 export default function Settings() {
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null)
   const [exportWarnOpen, setExportWarnOpen] = useState(false)
   const [importWarnOpen, setImportWarnOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
@@ -35,8 +35,10 @@ export default function Settings() {
     queryFn: () => api<{ ok: true; data: { token: string } }>('/api/me').then((r) => r.data),
   })
 
+  const initialized = useRef(false)
   useEffect(() => {
-    if (settingsQuery.data) {
+    if (settingsQuery.data && !initialized.current) {
+      initialized.current = true
       setForm({
         host: settingsQuery.data.host ?? '0.0.0.0',
         port: settingsQuery.data.port ?? '3000',
@@ -47,15 +49,15 @@ export default function Settings() {
 
   const saveSettings = useMutation({
     mutationFn: () => api('/api/settings', { method: 'PUT', body: JSON.stringify(form) }),
-    onSuccess: () => setNotice('设置已保存（host/port 需重启后端生效）'),
-    onError: (err) => setNotice(`保存失败：${err instanceof Error ? err.message : String(err)}`),
+    onSuccess: () => setNotice({ message: '设置已保存（host / port 需重启后端生效）', ok: true }),
+    onError: (err) => setNotice({ message: `保存失败：${err instanceof Error ? err.message : String(err)}`, ok: false }),
   })
 
   const resetToken = useMutation({
     mutationFn: () =>
       api<{ ok: true; data: { token: string } }>('/api/token/reset', { method: 'POST' }).then((r) => r.data.token),
     onSuccess: () => {
-      setNotice('Token 已重置，请立即复制保存')
+      setNotice({ message: 'Token 已重置，请立即复制保存', ok: true })
       setResetConfirmOpen(false)
       meQuery.refetch()
     },
@@ -69,7 +71,7 @@ export default function Settings() {
     a.download = `llm-gateway-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
     a.click()
     URL.revokeObjectURL(url)
-    setNotice('备份已导出，请妥善保管（含明文 API Key）')
+    setNotice({ message: '备份已导出，请妥善保管（含明文 API Key）', ok: true })
     setExportWarnOpen(false)
   }
 
@@ -84,7 +86,7 @@ export default function Settings() {
         clearToken()
         window.location.href = '/login'
       } catch (err) {
-        setNotice(`导入失败：${err instanceof Error ? err.message : '文件格式错误'}`)
+        setNotice({ message: `导入失败：${err instanceof Error ? err.message : '文件格式错误'}`, ok: false })
         setImportWarnOpen(false)
       }
     }
@@ -92,29 +94,38 @@ export default function Settings() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        {notice && <span className="text-sm text-muted-foreground">{notice}</span>}
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold">Settings</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">网关运行配置与数据管理</p>
       </div>
+
+      {notice && (
+        <div className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${notice.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300'}`}>
+          <span>{notice.message}</span>
+          <button onClick={() => setNotice(null)} className="ml-2 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
-          <CardTitle>网关设置</CardTitle>
-          <CardDescription>监听地址与端口修改后需重启后端生效；全局超时 0 表示不超时</CardDescription>
+          <CardTitle className="text-base">网关设置</CardTitle>
+          <CardDescription>监听地址与端口修改后需重启后端生效；全局超时设为 0 表示不超时</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid max-w-lg grid-cols-3 gap-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <Label>监听地址</Label>
               <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <Label>端口</Label>
               <Input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} />
             </div>
-            <div className="space-y-2">
-              <Label>全局超时(ms)</Label>
+            <div className="space-y-1.5">
+              <Label>全局超时 (ms)</Label>
               <Input
                 value={form.global_timeout_ms}
                 onChange={(e) => setForm({ ...form, global_timeout_ms: e.target.value })}
@@ -131,8 +142,8 @@ export default function Settings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Token</CardTitle>
-          <CardDescription>网关管理 API 与代理入口的统一校验 Token，明文存储于 data/gateway.db</CardDescription>
+          <CardTitle className="text-base">Token</CardTitle>
+          <CardDescription>网关管理 API 与代理入口的统一校验 Token</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center gap-2">
@@ -150,6 +161,7 @@ export default function Settings() {
               复制
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">明文存储于 data/gateway.db</p>
           <Button variant="destructive" size="sm" onClick={() => setResetConfirmOpen(true)}>
             <KeyRound className="h-4 w-4" /> 重置 Token
           </Button>
@@ -158,30 +170,33 @@ export default function Settings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>备份</CardTitle>
-          <CardDescription>导出/导入全部 Provider、模型、设置与 Token；导入会全量覆盖并强制重新登录</CardDescription>
+          <CardTitle className="text-base">备份</CardTitle>
+          <CardDescription>导出或导入全部 Provider、模型、设置与 Token</CardDescription>
         </CardHeader>
-        <CardContent className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setExportWarnOpen(true)}>
-            <Download className="h-4 w-4" /> 导出备份
-          </Button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null
-              if (f) {
-                setImportFile(f)
-                setImportWarnOpen(true)
-              }
-              e.target.value = ''
-            }}
-          />
-          <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-            <Upload className="h-4 w-4" /> 导入备份
-          </Button>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setExportWarnOpen(true)}>
+              <Download className="h-4 w-4" /> 导出备份
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null
+                if (f) {
+                  setImportFile(f)
+                  setImportWarnOpen(true)
+                }
+                e.target.value = ''
+              }}
+            />
+            <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" /> 导入备份
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">导入会全量覆盖现有数据，成功后需使用备份中的 Token 重新登录</p>
         </CardContent>
       </Card>
 
@@ -189,7 +204,7 @@ export default function Settings() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导出前警告</DialogTitle>
-            <DialogDescription className="text-amber-600">
+            <DialogDescription className="text-amber-600 dark:text-amber-400">
               备份文件包含所有 Provider 的明文 API Key 和网关 Token，请妥善保管，切勿泄露到不信任环境。
             </DialogDescription>
           </DialogHeader>
@@ -201,7 +216,7 @@ export default function Settings() {
                   const res = await api<{ ok: true; data: BackupData }>('/api/backup')
                   doExport(res.data)
                 } catch (err) {
-                  setNotice(`导出失败：${err instanceof Error ? err.message : String(err)}`)
+                  setNotice({ message: `导出失败：${err instanceof Error ? err.message : String(err)}`, ok: false })
                   setExportWarnOpen(false)
                 }
               }}
@@ -216,7 +231,7 @@ export default function Settings() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导入警告</DialogTitle>
-            <DialogDescription className="text-amber-600">
+            <DialogDescription className="text-amber-600 dark:text-amber-400">
               导入将全量覆盖现有 Providers、模型、设置与 Token。成功后需使用备份中的 Token 重新登录。
             </DialogDescription>
           </DialogHeader>
@@ -235,7 +250,7 @@ export default function Settings() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResetConfirmOpen(false)}>取消</Button>
-            <Button onClick={() => resetToken.mutate()}>确认重置</Button>
+            <Button variant="destructive" onClick={() => resetToken.mutate()}>确认重置</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
