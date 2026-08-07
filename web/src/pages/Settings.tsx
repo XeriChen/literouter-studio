@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
-import { api, clearToken } from '@/api/client'
+import { api, clearToken, setToken } from '@/api/client'
 import type { BackupData } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,16 +23,16 @@ export default function Settings() {
   const [importWarnOpen, setImportWarnOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
-  const [form, setForm] = useState({ host: '0.0.0.0', port: '3000', global_timeout_ms: '120000' })
+  const [form, setForm] = useState({ host: '0.0.0.0', port: '3000', global_timeout_ms: '120000', log_retention_days: '30' })
   const fileRef = useRef<HTMLInputElement>(null)
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
-    queryFn: () => api<{ ok: true; data: Record<string, string> }>('/api/settings').then((r) => r.data),
+    queryFn: () => api<Record<string, string>>('/api/settings'),
   })
   const meQuery = useQuery({
     queryKey: ['me'],
-    queryFn: () => api<{ ok: true; data: { token: string } }>('/api/me').then((r) => r.data),
+    queryFn: () => api<{ token: string }>('/api/me'),
   })
 
   const initialized = useRef(false)
@@ -43,6 +43,7 @@ export default function Settings() {
         host: settingsQuery.data.host ?? '0.0.0.0',
         port: settingsQuery.data.port ?? '3000',
         global_timeout_ms: settingsQuery.data.global_timeout_ms ?? '120000',
+        log_retention_days: settingsQuery.data.log_retention_days ?? '30',
       })
     }
   }, [settingsQuery.data])
@@ -54,11 +55,13 @@ export default function Settings() {
   })
 
   const resetToken = useMutation({
-    mutationFn: () =>
-      api<{ ok: true; data: { token: string } }>('/api/token/reset', { method: 'POST' }).then((r) => r.data.token),
-    onSuccess: () => {
-      setNotice({ message: 'Token 已重置，请立即复制保存', ok: true })
+    mutationFn: () => api<{ token: string }>('/api/token/reset', { method: 'POST' }),
+    onSuccess: (data) => {
+      // 旧 Token 已失效，立即清除本地 token 并用新 token 重新登录
+      clearToken()
+      setToken(data.token)
       setResetConfirmOpen(false)
+      setNotice({ message: 'Token 已重置并自动续期，旧 Token 立即失效', ok: true })
       meQuery.refetch()
     },
   })
@@ -130,6 +133,14 @@ export default function Settings() {
                 value={form.global_timeout_ms}
                 onChange={(e) => setForm({ ...form, global_timeout_ms: e.target.value })}
                 placeholder="0 不超时"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>日志保留天数</Label>
+              <Input
+                value={form.log_retention_days}
+                onChange={(e) => setForm({ ...form, log_retention_days: e.target.value })}
+                placeholder="30（0 表示永不清理）"
               />
             </div>
           </div>
@@ -213,8 +224,8 @@ export default function Settings() {
             <Button
               onClick={async () => {
                 try {
-                  const res = await api<{ ok: true; data: BackupData }>('/api/backup')
-                  doExport(res.data)
+                  const data = await api<BackupData>('/api/backup')
+                  doExport(data)
                 } catch (err) {
                   setNotice({ message: `导出失败：${err instanceof Error ? err.message : String(err)}`, ok: false })
                   setExportWarnOpen(false)

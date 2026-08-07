@@ -9,11 +9,11 @@ import { Badge } from '@/components/ui/badge'
 export default function Home() {
   const providers = useQuery({
     queryKey: ['providers'],
-    queryFn: () => api<{ ok: true; data: Provider[] }>('/api/providers').then((r) => r.data),
+    queryFn: () => api<Provider[]>('/api/providers'),
   })
   const models = useQuery({
     queryKey: ['models'],
-    queryFn: () => api<{ ok: true; data: ProviderModel[] }>('/api/models').then((r) => r.data),
+    queryFn: () => api<ProviderModel[]>('/api/models'),
   })
 
   const providerCount = providers.data?.length ?? 0
