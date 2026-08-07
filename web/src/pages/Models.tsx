@@ -36,6 +36,7 @@ export default function Models() {
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string; latency_ms: number }>>([])
   const toastIdRef = useRef(0)
   const [onlyEnabled, setOnlyEnabled] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
@@ -99,6 +100,60 @@ export default function Models() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
   })
 
+  function modelKey(m: ProviderModel) {
+    return `${m.provider_id}/${m.model_id}`
+  }
+
+  function toggleSelect(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function selectAll() {
+    if (selected.size === filtered.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(filtered.map((m) => modelKey(m))))
+    }
+  }
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: async (items: ProviderModel[]) => {
+      await Promise.all(items.map((m) =>
+        api('/api/models', { method: 'DELETE', body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id }) })
+      ))
+    },
+    onSuccess: () => {
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['models'] })
+      addToast(true, '批量删除完成', 0)
+    },
+  })
+
+  const batchSetEnabledMutation = useMutation({
+    mutationFn: async ({ items, enabled }: { items: ProviderModel[]; enabled: number }) => {
+      await Promise.all(items.map((m) =>
+        api('/api/models', {
+          method: 'PATCH',
+          body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id, enabled }),
+        })
+      ))
+    },
+    onSuccess: (_data, { enabled }) => {
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['models'] })
+      addToast(true, enabled ? '批量启用完成' : '批量禁用完成', 0)
+    },
+  })
+
+  const selectedModels = useMemo(() => {
+    return filtered.filter((m) => selected.has(modelKey(m)))
+  }, [filtered, selected])
+
   const runTest = useMutation({
     mutationFn: ({ model, prompt }: { model: ProviderModel; prompt: string }) =>
       api<{ ok: true; data: { reply: string; latency_ms: number } }>('/api/models/test', {
@@ -124,6 +179,26 @@ export default function Models() {
 
   return (
     <>
+    {/* Batch action bar */}
+    {selected.size > 0 && (
+      <div className="fixed bottom-6 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-3 rounded-xl border bg-card px-5 py-3 shadow-xl">
+        <span className="text-sm font-medium">已选 {selected.size} 个模型</span>
+        <div className="h-4 w-px bg-border" />
+        <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 1 })}>
+          启用
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 0 })}>
+          禁用
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selected.size} 个模型？`)) batchDeleteMutation.mutate(selectedModels) }}>
+          <Trash2 className="h-3.5 w-3.5" /> 删除
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    )}
+
     {/* Toast stack */}
     {toasts.length > 0 && (
       <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col items-center gap-2">
@@ -207,7 +282,15 @@ export default function Models() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-6">Provider</TableHead>
+                <TableHead className="w-10 pl-4">
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && selected.size === filtered.length}
+                    onChange={selectAll}
+                    className="h-3.5 w-3.5"
+                  />
+                </TableHead>
+                <TableHead>Provider</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>协议</TableHead>
                 <TableHead>来源</TableHead>
@@ -218,9 +301,17 @@ export default function Models() {
             </TableHeader>
             <TableBody>
               {filtered.map((m) => {
-                const rowKey = `${m.provider_id}/${m.model_id}`
+                const rowKey = modelKey(m)
                 return (
-                  <TableRow key={rowKey}>
+                  <TableRow key={rowKey} className={selected.has(rowKey) ? 'bg-muted/50' : ''}>
+                    <TableCell className="pl-4">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(rowKey)}
+                        onChange={() => toggleSelect(rowKey)}
+                        className="h-3.5 w-3.5"
+                      />
+                    </TableCell>
                     <TableCell className="pl-6">{m.provider_name}</TableCell>
                     <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
                     <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
