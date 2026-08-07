@@ -33,11 +33,18 @@ export default function Models() {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testLatency, setTestLatency] = useState<number | null>(null)
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
-  const [quickResult, setQuickResult] = useState<{ key: string; reply: string; latency_ms: number } | null>(null)
+  const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string; latency_ms: number }>>([])
+  const toastIdRef = useRef(0)
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
+
+  function addToast(ok: boolean, message: string, latency_ms: number) {
+    const id = ++toastIdRef.current
+    setToasts((prev) => [...prev, { id, ok, message, latency_ms }])
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
+  }
 
   const models = useQuery({
     queryKey: ['models'],
@@ -116,6 +123,29 @@ export default function Models() {
   }
 
   return (
+    <>
+    {/* Toast stack */}
+    {toasts.length > 0 && (
+      <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col items-center gap-2">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={`flex items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm transition-all ${
+              t.ok
+                ? 'border-emerald-200 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-200'
+                : 'border-red-200 bg-red-50/95 text-red-800 dark:border-red-800 dark:bg-red-950/90 dark:text-red-200'
+            }`}
+          >
+            <span className="max-w-md line-clamp-2">{t.message}</span>
+            {t.latency_ms > 0 && <span className="shrink-0 text-xs opacity-70">{t.latency_ms}ms</span>}
+            <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -210,12 +240,11 @@ export default function Models() {
                         <Button variant="ghost" size="sm" disabled={quickTestId === rowKey}
                           onClick={() => {
                             setQuickTestId(rowKey)
-                            setQuickResult(null)
                             runTest.mutate(
                               { model: m, prompt: '现在的美国总统是谁' },
                               {
-                                onSuccess: (r) => setQuickResult({ key: rowKey, reply: r.data.reply, latency_ms: r.data.latency_ms }),
-                                onError: (err) => setQuickResult({ key: rowKey, reply: err instanceof Error ? err.message : '测试失败', latency_ms: 0 }),
+                                onSuccess: (r) => addToast(true, `${m.model_id}: ${r.data.reply}`, r.data.latency_ms),
+                                onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),
                                 onSettled: () => setQuickTestId(null),
                               },
                             )
@@ -234,21 +263,6 @@ export default function Models() {
                   </TableRow>
                 )
               })}
-              {quickResult && (
-                <TableRow>
-                  <TableCell colSpan={7} className="bg-muted/30 px-6 py-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="flex-1 text-xs text-foreground line-clamp-2">{quickResult.reply}</p>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {quickResult.latency_ms > 0 && <span className="text-xs text-muted-foreground">{quickResult.latency_ms}ms</span>}
-                        <button onClick={() => setQuickResult(null)} className="rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
-                          <X className="h-3 w-3 text-muted-foreground" />
-                        </button>
-                      </div>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
               {!filtered.length && !models.isLoading && (
                 <TableRow>
                   <TableCell colSpan={7} className="h-32 text-center">
@@ -339,5 +353,6 @@ export default function Models() {
         </DialogContent>
       </Dialog>
     </div>
+    </>
   )
 }
