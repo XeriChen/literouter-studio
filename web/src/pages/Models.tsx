@@ -35,7 +35,7 @@ export default function Models() {
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string; latency_ms: number }>>([])
   const toastIdRef = useRef(0)
-  const [showAll, setShowAll] = useState(false)
+  const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
@@ -59,7 +59,7 @@ export default function Models() {
     let rows = models.data ?? []
     if (protocol !== 'all') rows = rows.filter((m) => m.protocol === protocol)
     if (providerId !== 'all') rows = rows.filter((m) => m.provider_id === providerId)
-    if (!showAll) rows = rows.filter((m) => m.enabled)
+    if (onlyEnabled) rows = rows.filter((m) => m.enabled)
     if (debouncedSearch.trim()) {
       const q = debouncedSearch.trim().toLowerCase()
       rows = rows.filter((m) =>
@@ -69,7 +69,7 @@ export default function Models() {
       )
     }
     return rows
-  }, [models.data, protocol, providerId, showAll, debouncedSearch])
+  }, [models.data, protocol, providerId, onlyEnabled, debouncedSearch])
 
   const toggleMutation = useMutation({
     mutationFn: (m: ProviderModel) =>
@@ -186,11 +186,11 @@ export default function Models() {
           <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
             <input
               type="checkbox"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.target.checked)}
+              checked={onlyEnabled}
+              onChange={(e) => setOnlyEnabled(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-muted-foreground"
             />
-            显示全部
+            仅启用
           </label>
           <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 手动添加</Button>
         </div>
