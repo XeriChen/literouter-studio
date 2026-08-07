@@ -22,6 +22,18 @@ export function getDispatcher(proxyUrl: string | null | undefined, timeoutMs: nu
   return dispatcher
 }
 
+/** 关闭并移除所有缓存的 dispatcher（用于 Provider 更新/删除时释放旧连接池） */
+export function invalidateAllDispatchers(): void {
+  for (const dispatcher of dispatcherCache.values()) {
+    try {
+      ;(dispatcher as Agent & { close?: () => Promise<void> }).close?.()
+    } catch {
+      // ignore
+    }
+  }
+  dispatcherCache.clear()
+}
+
 export interface UpstreamRequest {
   method: string
   url: string
