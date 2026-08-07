@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, RefreshCw, Trash2, Wifi, X, ServerOff } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Search, Trash2, Wifi, X, ServerOff } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -48,6 +48,11 @@ export default function Providers() {
   const [editing, setEditing] = useState<Provider | null>(null)
   const [form, setForm] = useState<ProviderForm>(EMPTY_FORM)
   const [result, setResult] = useState<{ message: string; ok: boolean } | null>(null)
+  const [fetchDialog, setFetchDialog] = useState<{ providerId: string; providerName: string } | null>(null)
+  const [upstreamModels, setUpstreamModels] = useState<string[]>([])
+  const [upstreamLoading, setUpstreamLoading] = useState(false)
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
+  const [modelSearch, setModelSearch] = useState('')
 
   const providers = useQuery({
     queryKey: ['providers'],
@@ -119,18 +124,45 @@ export default function Providers() {
     },
   })
 
-  const fetchModelsMutation = useMutation({
-    mutationFn: (id: string) =>
-      api<{ ok: true; data: { added: number; updated: number } }>(`/api/providers/${id}/fetch-models`, { method: 'POST' }),
+  async function openFetchDialog(id: string, name: string) {
+    setFetchDialog({ providerId: id, providerName: name })
+    setUpstreamModels([])
+    setSelectedModels(new Set())
+    setModelSearch('')
+    setUpstreamLoading(true)
+    try {
+      const res = await api<{ ok: true; data: { model_ids: string[] } }>(`/api/providers/${id}/upstream-models`, { method: 'POST' })
+      setUpstreamModels(res.data.model_ids)
+      setSelectedModels(new Set(res.data.model_ids))
+    } catch (err) {
+      setResult({ message: `拉取失败：${err instanceof Error ? err.message : 'unknown'}`, ok: false })
+      setFetchDialog(null)
+    } finally {
+      setUpstreamLoading(false)
+    }
+  }
+
+  const importModelsMutation = useMutation({
+    mutationFn: ({ providerId, modelIds }: { providerId: string; modelIds: string[] }) =>
+      api<{ ok: true; data: { added: number; updated: number } }>(`/api/providers/${providerId}/import-models`, {
+        method: 'POST',
+        body: JSON.stringify({ model_ids: modelIds }),
+      }),
     onSuccess: (res) => {
-      setResult({ message: `拉取成功：新增 ${res.data.added}，刷新 ${res.data.updated}`, ok: true })
-      qc.invalidateQueries({ queryKey: ['providers'] })
+      setResult({ message: `导入成功：新增 ${res.data.added}，刷新 ${res.data.updated}`, ok: true })
+      setFetchDialog(null)
       qc.invalidateQueries({ queryKey: ['models'] })
     },
     onError: (err) => {
-      setResult({ message: `拉取失败：${err instanceof Error ? err.message : 'unknown'}`, ok: false })
+      setResult({ message: `导入失败：${err instanceof Error ? err.message : 'unknown'}`, ok: false })
     },
   })
+
+  const filteredUpstream = useMemo(() => {
+    if (!modelSearch.trim()) return upstreamModels
+    const q = modelSearch.trim().toLowerCase()
+    return upstreamModels.filter((id) => id.toLowerCase().includes(q))
+  }, [upstreamModels, modelSearch])
 
   return (
     <div className="space-y-6">
@@ -184,8 +216,8 @@ export default function Providers() {
                       <Button variant="ghost" size="sm" onClick={() => testMutation.mutate(p.id)} disabled={testMutation.isPending}>
                         <Wifi className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={fetchModelsMutation.isPending && fetchModelsMutation.variables === p.id} onClick={() => fetchModelsMutation.mutate(p.id)}>
-                        <RefreshCw className={`h-3.5 w-3.5 ${fetchModelsMutation.isPending && fetchModelsMutation.variables === p.id ? 'animate-spin' : ''}`} />
+                      <Button variant="ghost" size="sm" onClick={() => openFetchDialog(p.id, p.name)}>
+                        <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => openEdit(p)}>
                         编辑
@@ -290,6 +322,78 @@ export default function Providers() {
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || !form.base_url.trim()}>
               {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               {editing ? '保存修改' : '创建'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>选择要导入的模型</DialogTitle>
+            <DialogDescription>
+              {fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {upstreamLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-8 text-sm"
+                  placeholder="搜索模型..."
+                  value={modelSearch}
+                  onChange={(e) => setModelSearch(e.target.value)}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>已选 {selectedModels.size} / {upstreamModels.length}</span>
+                <div className="flex gap-2">
+                  <button className="hover:underline" onClick={() => setSelectedModels(new Set(upstreamModels))}>全选</button>
+                  <button className="hover:underline" onClick={() => setSelectedModels(new Set())}>全不选</button>
+                </div>
+              </div>
+              <div className="h-64 overflow-y-auto rounded-md border p-2 space-y-0.5">
+                {filteredUpstream.map((id) => (
+                  <label key={id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedModels.has(id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedModels)
+                        if (e.target.checked) next.add(id)
+                        else next.delete(id)
+                        setSelectedModels(next)
+                      }}
+                      className="h-3.5 w-3.5"
+                    />
+                    <span className="font-mono text-xs">{id}</span>
+                  </label>
+                ))}
+                {!filteredUpstream.length && (
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    {upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button>
+            <Button
+              disabled={selectedModels.size === 0 || importModelsMutation.isPending}
+              onClick={() => {
+                if (fetchDialog) {
+                  importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels] })
+                }
+              }}
+            >
+              {importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              导入 {selectedModels.size} 个模型
             </Button>
           </DialogFooter>
         </DialogContent>

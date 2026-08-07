@@ -5,7 +5,6 @@ import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../p
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
 import { findRoute } from '../services/models'
 import { writeLog } from '../services/logs'
-import { getFirstEnabledProvider } from '../services/providers'
 import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
 
@@ -113,13 +112,15 @@ proxyRoutes.all('*', async (c) => {
   }
 
   try {
-    // GET /v1/models：转发到该协议第一个已启用的 Provider
+    // GET /v1/models：返回本地已启用的模型列表（不转发上游）
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
-      const provider = getFirstEnabledProvider(protocol)
-      if (!provider) {
-        return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'model not found')
+      const { listEnabledModels } = await import('../services/models')
+      const models = listEnabledModels(protocol)
+      if (!models.length) {
+        return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'no enabled models')
       }
-      return forward(c, provider, '/v1/models', 'GET', null, startedAt)
+      const data = models.map((m) => ({ id: m.model_id, object: 'model', owned_by: 'gateway' }))
+      return c.json({ object: 'list', data })
     }
 
     if (c.req.method !== 'POST') {

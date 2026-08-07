@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { authMiddleware } from '../middlewares/auth'
 import { logMiddleware } from '../middlewares/log'
 import { verifyToken, resetAdminToken, getAdminToken } from '../services/auth'
-import { createProvider, deleteProvider, fetchProviderModels, getProvider, listProviders, testProviderConnection, updateProvider } from '../services/providers'
+import { createProvider, deleteProvider, listUpstreamModels, importModels, getProvider, listProviders, testProviderConnection, updateProvider } from '../services/providers'
 import { addModel, deleteModel, getModel, listModels, setModelEnabled } from '../services/models'
 import { clearLogs, listLogs } from '../services/logs'
 import { getSettings, updateSettings } from '../services/settings'
@@ -151,15 +151,28 @@ api.post('/providers/:id/test', async (c) => {
   return ok(c, result)
 })
 
-api.post('/providers/:id/fetch-models', async (c) => {
+api.post('/providers/:id/upstream-models', async (c) => {
   const p = getProvider(c.req.param('id'))
   if (!p) return fail(c, 404, 'provider not found', 'provider_not_found')
   try {
-    const result = await fetchProviderModels(p.id)
-    return ok(c, result)
+    const modelIds = await listUpstreamModels(p.id)
+    return ok(c, { model_ids: modelIds })
   } catch (err) {
     return fail(c, 502, err instanceof Error ? err.message : 'fetch models failed', 'upstream_error')
   }
+})
+
+api.post('/providers/:id/import-models', async (c) => {
+  const p = getProvider(c.req.param('id'))
+  if (!p) return fail(c, 404, 'provider not found', 'provider_not_found')
+  const body = await c.req.json().catch(() => null) as { model_ids?: unknown } | null
+  if (!Array.isArray(body?.model_ids) || body.model_ids.length === 0) {
+    return fail(c, 400, 'model_ids must be a non-empty array', 'invalid_request_body')
+  }
+  const ids = body.model_ids.filter((x: unknown): x is string => typeof x === 'string')
+  if (!ids.length) return fail(c, 400, 'no valid model ids', 'invalid_request_body')
+  const result = importModels(p.id, ids)
+  return ok(c, result)
 })
 
 // ---------- Models (Body 传参，支持含 / 的 model_id) ----------

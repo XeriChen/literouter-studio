@@ -18,6 +18,18 @@ export function listModels(): ModelWithProvider[] {
     .all() as ModelWithProvider[]
 }
 
+export function listEnabledModels(protocol: 'openai' | 'anthropic'): ModelWithProvider[] {
+  return db
+    .prepare(
+      `SELECT pm.*, p.name AS provider_name, p.protocol AS protocol, p.enabled AS provider_enabled
+       FROM provider_models pm
+       JOIN providers p ON p.id = pm.provider_id
+       WHERE pm.enabled = 1 AND p.enabled = 1 AND p.protocol = ?
+       ORDER BY pm.model_id ASC`,
+    )
+    .all(protocol) as ModelWithProvider[]
+}
+
 export function getModel(providerId: string, modelId: string): ProviderModelRow | undefined {
   return db
     .prepare('SELECT * FROM provider_models WHERE provider_id = ? AND model_id = ?')

@@ -72,52 +72,54 @@ function matchesFilter(modelId: string, filter: string | null): boolean {
   })
 }
 
-/** 拉取上游模型列表。新增的模型 enabled=0；已存在的保持 source/enabled 不变，仅刷新 fetched_at */
-export function fetchProviderModels(providerId: string): Promise<{ added: number; updated: number }> {
+/** 从上游拉取模型 ID 列表（不入库），应用 model_filter */
+export async function listUpstreamModels(providerId: string): Promise<string[]> {
   const provider = getProvider(providerId)
   if (!provider) throw new Error('provider not found')
   const url = getProviderModelsUrl(provider)
   const timeoutMs = provider.timeout_ms ?? getGlobalTimeoutMs()
   const dispatcher = getDispatcher(provider.proxy_url, timeoutMs)
 
-  return (async () => {
-    const res = await sendToUpstream({
-      method: 'GET',
-      url,
-      headers: buildProviderHeaders(provider),
-      signal: AbortSignal.timeout(timeoutMs || 30_000),
-      dispatcher,
-    })
-    try {
-      const chunks: Buffer[] = []
-      for await (const chunk of res.body) chunks.push(Buffer.from(chunk))
-      const raw = Buffer.concat(chunks).toString('utf-8')
-      const json = JSON.parse(raw) as { data?: { id?: string }[] } | null
-      const allIds = (json?.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === 'string')
-      const ids = allIds.filter((id) => matchesFilter(id, provider.model_filter))
-      const now = new Date().toISOString()
-      const upsert = db.prepare(
-        `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
-         VALUES (?, ?, NULL, 0, 'fetched', ?, ?, ?)
-         ON CONFLICT(provider_id, model_id) DO UPDATE SET fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
-      )
-      const tx = db.transaction((idsToUpsert: string[]) => {
-        let added = 0
-        let updated = 0
-        const existsStmt = db.prepare('SELECT 1 FROM provider_models WHERE provider_id = ? AND model_id = ?')
-        for (const id of idsToUpsert) {
-          const existed = existsStmt.get(providerId, id) !== undefined
-          upsert.run(providerId, id, now, now, now)
-          if (existed) updated++
-          else added++
-        }
-        return { added, updated }
-      })
-      return tx(ids)
-    } finally {
-      await drainBody(res.body)
+  const res = await sendToUpstream({
+    method: 'GET',
+    url,
+    headers: buildProviderHeaders(provider),
+    signal: AbortSignal.timeout(timeoutMs || 30_000),
+    dispatcher,
+  })
+  try {
+    const chunks: Buffer[] = []
+    for await (const chunk of res.body) chunks.push(Buffer.from(chunk))
+    const raw = Buffer.concat(chunks).toString('utf-8')
+    const json = JSON.parse(raw) as { data?: { id?: string }[] } | null
+    const allIds = (json?.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === 'string')
+    return allIds.filter((id) => matchesFilter(id, provider.model_filter))
+  } finally {
+    await drainBody(res.body)
+  }
+}
+
+/** 将选中的模型 ID 写入数据库。新增 enabled=0；已存在的仅刷新 fetched_at */
+export function importModels(providerId: string, modelIds: string[]): { added: number; updated: number } {
+  const now = new Date().toISOString()
+  const upsert = db.prepare(
+    `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
+     VALUES (?, ?, NULL, 0, 'fetched', ?, ?, ?)
+     ON CONFLICT(provider_id, model_id) DO UPDATE SET fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+  )
+  const tx = db.transaction((ids: string[]) => {
+    let added = 0
+    let updated = 0
+    const existsStmt = db.prepare('SELECT 1 FROM provider_models WHERE provider_id = ? AND model_id = ?')
+    for (const id of ids) {
+      const existed = existsStmt.get(providerId, id) !== undefined
+      upsert.run(providerId, id, now, now, now)
+      if (existed) updated++
+      else added++
     }
-  })()
+    return { added, updated }
+  })
+  return tx(modelIds)
 }
 
 /** 网络连通性测试：收到任意 HTTP 响应（含 404）即可达；401/403 为认证失败；网络异常/超时/5xx 为失败 */
