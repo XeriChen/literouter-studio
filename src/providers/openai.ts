@@ -16,7 +16,7 @@ export function buildOpenAIChatBody(input: ChatRequestInput): Record<string, unk
 }
 
 export function buildOpenAIModelsUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/models`
+  return `${baseUrl.replace(/\/+$/, '')}/v1/models`
 }
 
 export function extractOpenAIReply(body: unknown): string {

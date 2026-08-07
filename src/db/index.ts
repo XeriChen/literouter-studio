@@ -67,6 +67,13 @@ CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
 db.exec(SCHEMA_V1)
 db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (1)').run()
 
+// v2: model_filter column for provider-level model prefix filtering
+const currentVersion = (db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number }).v
+if (currentVersion < 2) {
+  db.exec(`ALTER TABLE providers ADD COLUMN model_filter TEXT`)
+  db.prepare('INSERT INTO schema_version (version) VALUES (2)').run()
+}
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }

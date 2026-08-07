@@ -33,6 +33,7 @@ export default function Models() {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testLatency, setTestLatency] = useState<number | null>(null)
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
 
   const models = useQuery({
     queryKey: ['models'],
@@ -47,8 +48,9 @@ export default function Models() {
     let rows = models.data ?? []
     if (protocol !== 'all') rows = rows.filter((m) => m.protocol === protocol)
     if (providerId !== 'all') rows = rows.filter((m) => m.provider_id === providerId)
+    if (!showAll) rows = rows.filter((m) => m.enabled)
     return rows
-  }, [models.data, protocol, providerId])
+  }, [models.data, protocol, providerId, showAll])
 
   const toggleMutation = useMutation({
     mutationFn: (m: ProviderModel) =>
@@ -126,6 +128,15 @@ export default function Models() {
               ))}
             </SelectContent>
           </Select>
+          <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-muted-foreground"
+            />
+            显示全部
+          </label>
           <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 手动添加</Button>
         </div>
       </div>

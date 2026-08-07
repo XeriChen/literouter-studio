@@ -74,6 +74,7 @@ const providerSchema = z.object({
   custom_headers: authSchema.default({}),
   proxy_url: z.string().nullable().optional(),
   timeout_ms: z.number().int().min(0).nullable().optional(),
+  model_filter: z.string().nullable().optional(),
 })
 
 function providerOut(p: ProviderRow) {
@@ -86,6 +87,7 @@ function providerOut(p: ProviderRow) {
     custom_headers: parseCustomHeaders(p),
     proxy_url: p.proxy_url,
     timeout_ms: p.timeout_ms,
+    model_filter: p.model_filter,
     enabled: p.enabled,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -106,6 +108,7 @@ api.post('/providers', async (c) => {
     custom_headers_json: JSON.stringify(p.custom_headers),
     proxy_url: p.proxy_url ?? null,
     timeout_ms: p.timeout_ms ?? null,
+    model_filter: p.model_filter ?? null,
   })
   return ok(c, providerOut(row))
 })
@@ -130,6 +133,7 @@ api.put('/providers/:id', async (c) => {
     custom_headers_json: p.custom_headers ? JSON.stringify(p.custom_headers) : undefined,
     proxy_url: p.proxy_url === undefined ? undefined : p.proxy_url,
     timeout_ms: p.timeout_ms === undefined ? undefined : p.timeout_ms,
+    model_filter: p.model_filter === undefined ? undefined : p.model_filter,
   })
   return ok(c, providerOut(row))
 })

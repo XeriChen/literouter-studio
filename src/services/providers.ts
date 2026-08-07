@@ -29,18 +29,19 @@ export function createProvider(input: {
   custom_headers_json: string
   proxy_url: string | null
   timeout_ms: number | null
+  model_filter: string | null
 }): ProviderRow {
   const id = randomUUID()
   const now = new Date().toISOString()
   db.prepare(
-    `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.protocol, input.base_url, input.auth_json, input.custom_headers_json, input.proxy_url, input.timeout_ms, now, now)
+    `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.name, input.protocol, input.base_url, input.auth_json, input.custom_headers_json, input.proxy_url, input.timeout_ms, input.model_filter, now, now)
   return getProvider(id)!
 }
 
 export function updateProvider(id: string, patch: Partial<ProviderRow>): ProviderRow {
-  const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms'] as const
+  const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter'] as const
   const sets = allowed.filter((k) => patch[k] !== undefined)
   if (sets.length > 0) {
     db.prepare(
@@ -60,6 +61,17 @@ export function getProviderModelsUrl(provider: ProviderRow): string {
     : buildAnthropicModelsUrl(provider.base_url)
 }
 
+function matchesFilter(modelId: string, filter: string | null): boolean {
+  if (!filter) return true
+  const patterns = filter.split(',').map((p) => p.trim()).filter(Boolean)
+  if (!patterns.length) return true
+  return patterns.some((p) => {
+    if (p.endsWith('*')) return modelId.startsWith(p.slice(0, -1))
+    if (p.startsWith('*')) return modelId.endsWith(p.slice(1))
+    return modelId === p
+  })
+}
+
 /** 拉取上游模型列表。新增的模型 enabled=0；已存在的保持 source/enabled 不变，仅刷新 fetched_at */
 export function fetchProviderModels(providerId: string): Promise<{ added: number; updated: number }> {
   const provider = getProvider(providerId)
@@ -77,8 +89,12 @@ export function fetchProviderModels(providerId: string): Promise<{ added: number
       dispatcher,
     })
     try {
-      const json = await new Response(res.body as unknown as BodyInit).json().catch(() => null)
-      const ids = (json?.data ?? []).map((m: { id?: string }) => m.id).filter((x: unknown): x is string => typeof x === 'string')
+      const chunks: Buffer[] = []
+      for await (const chunk of res.body) chunks.push(Buffer.from(chunk))
+      const raw = Buffer.concat(chunks).toString('utf-8')
+      const json = JSON.parse(raw) as { data?: { id?: string }[] } | null
+      const allIds = (json?.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === 'string')
+      const ids = allIds.filter((id) => matchesFilter(id, provider.model_filter))
       const now = new Date().toISOString()
       const upsert = db.prepare(
         `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)

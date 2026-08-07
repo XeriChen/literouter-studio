@@ -28,6 +28,7 @@ interface ProviderForm {
   proxy_url: string
   timeout_ms: string
   custom_headers: string
+  model_filter: string
 }
 
 const EMPTY_FORM: ProviderForm = {
@@ -37,6 +38,7 @@ const EMPTY_FORM: ProviderForm = {
   api_key: '',
   proxy_url: '',
   timeout_ms: '',
+  model_filter: '',
   custom_headers: '{}',
 }
 
@@ -68,6 +70,7 @@ export default function Providers() {
       proxy_url: p.proxy_url ?? '',
       timeout_ms: p.timeout_ms == null ? '' : String(p.timeout_ms),
       custom_headers: JSON.stringify(p.custom_headers ?? {}, null, 2),
+      model_filter: p.model_filter ?? '',
     })
     setDialogOpen(true)
   }
@@ -81,6 +84,7 @@ export default function Providers() {
         auth: form.api_key ? { api_key: form.api_key } : {},
         proxy_url: form.proxy_url.trim() || null,
         timeout_ms: form.timeout_ms.trim() ? Number(form.timeout_ms) : null,
+        model_filter: form.model_filter.trim() || null,
       }
       let custom_headers: Record<string, string> = {}
       try {
@@ -270,6 +274,15 @@ export default function Providers() {
                 placeholder='{"X-Custom": "value"}'
               />
               <p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>模型过滤规则（可选）</Label>
+              <Input
+                value={form.model_filter}
+                onChange={(e) => setForm({ ...form, model_filter: e.target.value })}
+                placeholder="grok-*,mimo-*"
+              />
+              <p className="text-xs text-muted-foreground">逗号分隔的前缀匹配规则，拉取时只入库匹配的模型。留空不过滤。例：gpt-*,claude-*</p>
             </div>
           </div>
           <DialogFooter>
