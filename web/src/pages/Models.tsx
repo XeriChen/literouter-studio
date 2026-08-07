@@ -215,7 +215,7 @@ export default function Models() {
                               { model: m, prompt: '现在的美国总统是谁' },
                               {
                                 onSuccess: (r) => setQuickResult({ key: rowKey, reply: r.data.reply, latency_ms: r.data.latency_ms }),
-                                onError: () => setQuickResult({ key: rowKey, reply: '测试失败', latency_ms: 0 }),
+                                onError: (err) => setQuickResult({ key: rowKey, reply: err instanceof Error ? err.message : '测试失败', latency_ms: 0 }),
                                 onSettled: () => setQuickTestId(null),
                               },
                             )
