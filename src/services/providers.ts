@@ -99,13 +99,13 @@ export async function listUpstreamModels(providerId: string): Promise<string[]> 
   }
 }
 
-/** 将选中的模型 ID 写入数据库。新增 enabled=0；已存在的仅刷新 fetched_at */
+/** 将选中的模型 ID 写入数据库。新增 enabled=1；已存在的仅刷新 fetched_at */
 export function importModels(providerId: string, modelIds: string[]): { added: number; updated: number } {
   const now = new Date().toISOString()
   const upsert = db.prepare(
     `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
-     VALUES (?, ?, NULL, 0, 'fetched', ?, ?, ?)
-     ON CONFLICT(provider_id, model_id) DO UPDATE SET fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+     VALUES (?, ?, NULL, 1, 'fetched', ?, ?, ?)
+     ON CONFLICT(provider_id, model_id) DO UPDATE SET enabled = 1, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
   )
   const tx = db.transaction((ids: string[]) => {
     let added = 0
