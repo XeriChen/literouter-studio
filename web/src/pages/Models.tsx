@@ -33,6 +33,7 @@ export default function Models() {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testLatency, setTestLatency] = useState<number | null>(null)
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
+  const [quickResult, setQuickResult] = useState<{ key: string; reply: string; latency_ms: number } | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -186,46 +187,68 @@ export default function Models() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((m) => (
-                <TableRow key={`${m.provider_id}/${m.model_id}`}>
-                  <TableCell className="pl-6">{m.provider_name}</TableCell>
-                  <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
-                  <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
-                  <TableCell><Badge variant="secondary">{m.source}</Badge></TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={!!m.enabled}
-                      disabled={!m.provider_enabled}
-                      onCheckedChange={() => toggleMutation.mutate(m)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
-                        <Activity className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" disabled={quickTestId === `${m.provider_id}/${m.model_id}`}
-                        onClick={() => {
-                          const key = `${m.provider_id}/${m.model_id}`
-                          setQuickTestId(key)
-                          runTest.mutate(
-                            { model: m, prompt: '现在的美国总统是谁' },
-                            { onSettled: () => setQuickTestId(null) },
-                          )
-                        }}>
-                        {quickTestId === `${m.provider_id}/${m.model_id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '快速测试'}
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell className="pr-6">
-                    <div className="flex justify-end">
-                      <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除模型「${m.model_id}」？`)) delMutation.mutate(m) }}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+              {filtered.map((m) => {
+                const rowKey = `${m.provider_id}/${m.model_id}`
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell className="pl-6">{m.provider_name}</TableCell>
+                    <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
+                    <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
+                    <TableCell><Badge variant="secondary">{m.source}</Badge></TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={!!m.enabled}
+                        disabled={!m.provider_enabled}
+                        onCheckedChange={() => toggleMutation.mutate(m)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="sm" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
+                          <Activity className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="sm" disabled={quickTestId === rowKey}
+                          onClick={() => {
+                            setQuickTestId(rowKey)
+                            setQuickResult(null)
+                            runTest.mutate(
+                              { model: m, prompt: '现在的美国总统是谁' },
+                              {
+                                onSuccess: (r) => setQuickResult({ key: rowKey, reply: r.data.reply, latency_ms: r.data.latency_ms }),
+                                onError: () => setQuickResult({ key: rowKey, reply: '测试失败', latency_ms: 0 }),
+                                onSettled: () => setQuickTestId(null),
+                              },
+                            )
+                          }}>
+                          {quickTestId === rowKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '快速测试'}
+                        </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell className="pr-6">
+                      <div className="flex justify-end">
+                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除模型「${m.model_id}」？`)) delMutation.mutate(m) }}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+              {quickResult && (
+                <TableRow>
+                  <TableCell colSpan={7} className="bg-muted/30 px-6 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="flex-1 text-xs text-foreground line-clamp-2">{quickResult.reply}</p>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {quickResult.latency_ms > 0 && <span className="text-xs text-muted-foreground">{quickResult.latency_ms}ms</span>}
+                        <button onClick={() => setQuickResult(null)} className="rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+                          <X className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                      </div>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
               {!filtered.length && !models.isLoading && (
                 <TableRow>
                   <TableCell colSpan={7} className="h-32 text-center">
