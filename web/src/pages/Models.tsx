@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Loader2, Plus, Trash2, X, Box } from 'lucide-react'
+import { Activity, Loader2, Plus, Search, Trash2, X, Box } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -34,6 +34,9 @@ export default function Models() {
   const [testLatency, setTestLatency] = useState<number | null>(null)
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
 
   const models = useQuery({
     queryKey: ['models'],
@@ -49,8 +52,16 @@ export default function Models() {
     if (protocol !== 'all') rows = rows.filter((m) => m.protocol === protocol)
     if (providerId !== 'all') rows = rows.filter((m) => m.provider_id === providerId)
     if (!showAll) rows = rows.filter((m) => m.enabled)
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.trim().toLowerCase()
+      rows = rows.filter((m) =>
+        m.model_id.toLowerCase().includes(q) ||
+        (m.display_name ?? '').toLowerCase().includes(q) ||
+        m.provider_name.toLowerCase().includes(q)
+      )
+    }
     return rows
-  }, [models.data, protocol, providerId, showAll])
+  }, [models.data, protocol, providerId, showAll, debouncedSearch])
 
   const toggleMutation = useMutation({
     mutationFn: (m: ProviderModel) =>
@@ -111,6 +122,19 @@ export default function Models() {
           <p className="mt-0.5 text-sm text-muted-foreground">管理可用模型，同协议内同名互斥</p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="h-8 w-40 pl-8 text-xs"
+              placeholder="搜索模型..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                if (searchTimer.current) clearTimeout(searchTimer.current)
+                searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200)
+              }}
+            />
+          </div>
           <Select value={protocol} onValueChange={(v) => setProtocol(v as typeof protocol)}>
             <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
             <SelectContent>
