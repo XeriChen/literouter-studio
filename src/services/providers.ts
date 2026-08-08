@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
-import { isTimeoutError, sendToUpstream, getDispatcher, drainBody } from '../proxy'
+import { isTimeoutError, sendToUpstream, getDispatcher, drainBody, invalidateAllDispatchers } from '../proxy'
 import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
@@ -48,11 +48,16 @@ export function updateProvider(id: string, patch: Partial<ProviderRow>): Provide
       `UPDATE providers SET ${sets.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
     ).run(...sets.map((k) => patch[k]), new Date().toISOString(), id)
   }
+  // proxy_url / timeout_ms 变更后旧 dispatcher 不再匹配，清空缓存让下次请求重建
+  if (sets.includes('proxy_url') || sets.includes('timeout_ms')) {
+    invalidateAllDispatchers()
+  }
   return getProvider(id)!
 }
 
 export function deleteProvider(id: string): void {
   db.prepare('DELETE FROM providers WHERE id = ?').run(id)
+  invalidateAllDispatchers()
 }
 
 export function getProviderModelsUrl(provider: ProviderRow): string {

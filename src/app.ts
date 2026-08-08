@@ -1,4 +1,6 @@
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { createReadStream } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { Hono } from 'hono'
 import { api } from './routes/api'
@@ -39,18 +41,24 @@ if (existsSync(distDir)) {
     if (filePath !== distDir && !filePath.startsWith(distDir + path.sep)) {
       return c.notFound()
     }
-    if (existsSync(filePath) && statSync(filePath).isFile()) {
-      const ext = path.extname(filePath).toLowerCase()
-      const isHtml = ext === '.html'
-      return new Response(readFileSync(filePath), {
-        headers: {
-          'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
-          'cache-control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
-        },
-      })
+    try {
+      const stats = await stat(filePath)
+      if (stats.isFile()) {
+        const ext = path.extname(filePath).toLowerCase()
+        const isHtml = ext === '.html'
+        return new Response(createReadStream(filePath) as unknown as BodyInit, {
+          headers: {
+            'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+            'cache-control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
+          },
+        })
+      }
+    } catch {
+      // file not found, fall through to SPA fallback
     }
     // SPA fallback：统一回 index.html
-    return new Response(readFileSync(path.join(distDir, 'index.html')), {
+    const html = await readFile(path.join(distDir, 'index.html'))
+    return new Response(html, {
       headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
     })
   })
