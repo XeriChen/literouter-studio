@@ -99,7 +99,6 @@ export function Layout() {
             {theme === 'light' && <Sun className="h-3.5 w-3.5" />}
             {theme === 'dark' && <Moon className="h-3.5 w-3.5" />}
             {theme === 'system' && <span className="text-[10px]">AUTO</span>}
-            <span className="hidden sm:inline">{theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}</span>
           </button>
         </div>
       </nav>

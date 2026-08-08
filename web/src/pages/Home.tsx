@@ -70,7 +70,7 @@ export default function Home() {
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">3</div>
             <div>
               <p className="font-medium">通过网关调用</p>
-              <p className="text-muted-foreground">使用网关地址替代上游地址，请求格式完全兼容。OpenAI 走 <code className="rounded bg-muted px-1 py-0.5 text-xs">/openai/v1/chat/completions</code>，Anthropic 走 <code className="rounded bg-muted px-1 py-0.5 text-xs">/anthropic/v1/messages</code>。</p>
+              <p className="text-muted-foreground">使用网关地址替代上游地址，请求格式完全兼容。OpenAI 走 <code className="rounded bg-muted px-1 py-0.5 text-xs">/openai/v1/chat/completions</code> 与 <code className="rounded bg-muted px-1 py-0.5 text-xs">/openai/v1/responses</code>，Anthropic 走 <code className="rounded bg-muted px-1 py-0.5 text-xs">/anthropic/v1/messages</code>。</p>
             </div>
           </div>
         </CardContent>
