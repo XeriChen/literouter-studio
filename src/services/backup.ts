@@ -16,6 +16,7 @@ export interface BackupData {
     custom_headers: Record<string, string>
     proxy_url: string | null
     timeout_ms: number | null
+    model_filter: string | null
     enabled: number
     created_at: string
     updated_at: string
@@ -39,6 +40,7 @@ export function exportBackup(): BackupData {
     custom_headers: parseCustomHeaders(p),
     proxy_url: p.proxy_url,
     timeout_ms: p.timeout_ms,
+    model_filter: p.model_filter,
     enabled: p.enabled,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -58,8 +60,8 @@ export function importBackup(data: BackupData): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM providers').run()
     const insertProvider = db.prepare(
-      `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, enabled, created_at, updated_at)
-       VALUES (@id, @name, @protocol, @base_url, @auth_json, @custom_headers_json, @proxy_url, @timeout_ms, @enabled, @created_at, @updated_at)`,
+      `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
+       VALUES (@id, @name, @protocol, @base_url, @auth_json, @custom_headers_json, @proxy_url, @timeout_ms, @model_filter, @enabled, @created_at, @updated_at)`,
     )
     for (const p of data.providers) {
       insertProvider.run({
@@ -71,6 +73,7 @@ export function importBackup(data: BackupData): void {
         custom_headers_json: JSON.stringify(p.custom_headers),
         proxy_url: p.proxy_url,
         timeout_ms: p.timeout_ms,
+        model_filter: p.model_filter ?? null,
         enabled: p.enabled,
         created_at: p.created_at,
         updated_at: p.updated_at,

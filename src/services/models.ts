@@ -1,5 +1,5 @@
 import { db } from '../db'
-import type { ProviderModelRow, ProviderRow } from '../types'
+import type { ProviderModelRow, ProviderRow, ProviderProtocol } from '../types'
 
 export interface ModelWithProvider extends ProviderModelRow {
   provider_name: string
@@ -90,21 +90,48 @@ export type RouteResult =
   | { kind: 'not_found' }
   | { kind: 'provider_disabled' }
 
-/** 按 (protocol, model_id) 查找启用的模型及其 Provider */
+/** 按 (protocol, model_id) 查找启用的模型及其 Provider（单次 JOIN 查询） */
 export function findRoute(protocol: 'openai' | 'anthropic', modelId: string): RouteResult {
   const row = db
     .prepare(
-      `SELECT pm.* FROM provider_models pm
+      `SELECT pm.*, p.id AS p_id, p.name AS p_name, p.protocol AS p_protocol, p.base_url AS p_base_url,
+              p.auth_json AS p_auth_json, p.custom_headers_json AS p_custom_headers_json, p.proxy_url AS p_proxy_url,
+              p.timeout_ms AS p_timeout_ms, p.model_filter AS p_model_filter, p.enabled AS p_enabled,
+              p.created_at AS p_created_at, p.updated_at AS p_updated_at
+       FROM provider_models pm
        JOIN providers p ON p.id = pm.provider_id
        WHERE pm.model_id = ? AND pm.enabled = 1 AND p.protocol = ?`,
     )
-    .get(modelId, protocol) as ProviderModelRow | undefined
+    .get(modelId, protocol) as (ProviderModelRow & Record<string, unknown>) | undefined
   if (row) {
-    const provider = db.prepare('SELECT * FROM providers WHERE id = ?').get(row.provider_id) as
-      | ProviderRow
-      | undefined
-    if (provider?.enabled) return { kind: 'ok', provider, model: row }
-    if (provider) return { kind: 'provider_disabled' }
+    const provider: ProviderRow = {
+      id: row.p_id as string,
+      name: row.p_name as string,
+      protocol: row.p_protocol as ProviderProtocol,
+      base_url: row.p_base_url as string,
+      auth_json: row.p_auth_json as string,
+      custom_headers_json: row.p_custom_headers_json as string,
+      proxy_url: row.p_proxy_url as string | null,
+      timeout_ms: row.p_timeout_ms as number | null,
+      model_filter: row.p_model_filter as string | null,
+      enabled: row.p_enabled as number,
+      created_at: row.p_created_at as string,
+      updated_at: row.p_updated_at as string,
+    }
+    if (provider.enabled) {
+      const model: ProviderModelRow = {
+        provider_id: row.provider_id,
+        model_id: row.model_id,
+        display_name: row.display_name,
+        enabled: row.enabled,
+        source: row.source,
+        fetched_at: row.fetched_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }
+      return { kind: 'ok', provider, model }
+    }
+    return { kind: 'provider_disabled' }
   }
   return { kind: 'not_found' }
 }

@@ -71,6 +71,7 @@ export interface BackupData {
     custom_headers: Record<string, string>
     proxy_url: string | null
     timeout_ms: number | null
+    model_filter: string | null
     enabled: number
     created_at: string
     updated_at: string
