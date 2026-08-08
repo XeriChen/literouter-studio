@@ -4,6 +4,10 @@ export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY)
 export const setToken = (token: string): void => localStorage.setItem(TOKEN_KEY, token)
 export const clearToken = (): void => localStorage.removeItem(TOKEN_KEY)
 
+/**
+ * 调用管理 API，自动解包 { ok: true, data: T } → T。
+ * 401 自动清 token 跳转登录；非 2xx 抛 Error。
+ */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   const token = getToken()
@@ -20,22 +24,18 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T
-  const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null
-  if (!res.ok) {
+  const body = (await res.json().catch(() => null)) as { ok?: boolean; data?: T; error?: { message?: string } } | null
+  if (!res.ok || !body) {
     throw new Error(body?.error?.message ?? `HTTP ${res.status}`)
   }
-  return body as T
+  return body.data as T
 }
 
-/** 直接调用网关代理入口（带网关 Token），返回原始响应体 */
-export function proxyStream(path: string, body: Record<string, unknown>): Promise<Response> {
+/** 构建带网关 Token 的请求头（供 ChatUI 等直接调用代理入口的组件使用） */
+export function authHeaders(): Record<string, string> {
   const token = getToken()
-  return fetch(path, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  })
+  return {
+    'content-type': 'application/json',
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  }
 }

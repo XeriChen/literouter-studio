@@ -38,7 +38,7 @@ export default function Models() {
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   function addToast(ok: boolean, message: string, latency_ms: number) {
     const id = ++toastIdRef.current
@@ -48,11 +48,11 @@ export default function Models() {
 
   const models = useQuery({
     queryKey: ['models'],
-    queryFn: () => api<{ ok: true; data: ProviderModel[] }>('/api/models').then((r) => r.data),
+    queryFn: () => api<ProviderModel[]>('/api/models'),
   })
   const providers = useQuery({
     queryKey: ['providers'],
-    queryFn: () => api<{ ok: true; data: Provider[] }>('/api/providers').then((r) => r.data),
+    queryFn: () => api<Provider[]>('/api/providers'),
   })
 
   const filtered = useMemo(() => {
@@ -101,7 +101,7 @@ export default function Models() {
 
   const runTest = useMutation({
     mutationFn: ({ model, prompt }: { model: ProviderModel; prompt: string }) =>
-      api<{ ok: true; data: { reply: string; latency_ms: number } }>('/api/models/test', {
+      api<{ reply: string; latency_ms: number }>('/api/models/test', {
         method: 'POST',
         body: JSON.stringify({ provider_id: model.provider_id, model_id: model.model_id, prompt }),
       }),
@@ -113,9 +113,9 @@ export default function Models() {
     runTest.mutate(
       { model, prompt },
       {
-        onSuccess: (r) => {
-          setTestResult(r.data.reply)
-          setTestLatency(r.data.latency_ms)
+        onSuccess: (data) => {
+          setTestResult(data.reply)
+          setTestLatency(data.latency_ms)
         },
         onError: (err) => setTestResult(`测试失败：${err instanceof Error ? err.message : 'unknown'}`),
       },
@@ -243,7 +243,7 @@ export default function Models() {
                             runTest.mutate(
                               { model: m, prompt: '现在的美国总统是谁' },
                               {
-                                onSuccess: (r) => addToast(true, `${m.model_id}: ${r.data.reply}`, r.data.latency_ms),
+                                onSuccess: (data) => addToast(true, `${m.model_id}: ${data.reply}`, data.latency_ms),
                                 onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),
                                 onSettled: () => setQuickTestId(null),
                               },

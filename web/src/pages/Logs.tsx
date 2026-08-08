@@ -26,11 +26,11 @@ export default function Logs() {
   const [model, setModel] = useState('')
   const [debouncedModel, setDebouncedModel] = useState('')
   const [status, setStatus] = useState('')
-  const modelTimerRef = useRef<ReturnType<typeof setTimeout>>(null)
+  const modelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const providers = useQuery({
     queryKey: ['providers'],
-    queryFn: () => api<{ ok: true; data: Provider[] }>('/api/providers').then((r) => r.data),
+    queryFn: () => api<Provider[]>('/api/providers'),
   })
 
   const logs = useQuery({
@@ -41,7 +41,7 @@ export default function Logs() {
       if (providerId) p.set('provider_id', providerId)
       if (debouncedModel.trim()) p.set('model', debouncedModel.trim())
       if (status.trim()) p.set('status', status.trim())
-      return api<{ ok: true; data: { total: number; rows: LogRow[] } }>(`/api/logs?${p.toString()}`).then((r) => r.data)
+      return api<{ total: number; rows: LogRow[] }>(`/api/logs?${p.toString()}`)
     },
   })
 

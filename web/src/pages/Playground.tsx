@@ -13,11 +13,11 @@ export default function Playground() {
 
   const providers = useQuery({
     queryKey: ['providers'],
-    queryFn: () => api<{ ok: true; data: Provider[] }>('/api/providers').then((r) => r.data),
+    queryFn: () => api<Provider[]>('/api/providers'),
   })
   const models = useQuery({
     queryKey: ['models'],
-    queryFn: () => api<{ ok: true; data: ProviderModel[] }>('/api/models').then((r) => r.data),
+    queryFn: () => api<ProviderModel[]>('/api/models'),
   })
 
   const providersOfProtocol = useMemo(

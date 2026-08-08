@@ -19,11 +19,11 @@ export default function Login() {
     setLoading(true)
     setError(null)
     try {
-      const res = await api<{ ok: true; data: { token: string } }>('/api/login', {
+      const data = await api<{ token: string }>('/api/login', {
         method: 'POST',
         body: JSON.stringify({ token: token.trim() }),
       })
-      setToken(res.data.token)
+      setToken(data.token)
       navigate('/', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
