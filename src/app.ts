@@ -5,12 +5,22 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { api } from './routes/api'
 import { proxyRoutes } from './routes/proxy'
-import { errorMiddleware } from './middlewares/error'
+import { isAbortError } from './proxy'
 import type { Env } from './types'
 
 export const app = new Hono<Env>()
 
-app.use('*', errorMiddleware)
+// 全局错误处理：客户端断连的 AbortError 静默处理（连接已关闭，写回响应无意义且产生噪音日志）
+app.onError((err, c) => {
+  if (isAbortError(err) || c.req.raw.signal.aborted) {
+    return new Response(null, { status: 499 })
+  }
+  console.error('[gateway] unhandled error:', err)
+  return c.json(
+    { ok: false, error: { message: 'internal error', type: 'internal_error', code: 'internal_error' } },
+    500 as const,
+  )
+})
 
 app.route('/api', api)
 app.route('/openai', proxyRoutes)

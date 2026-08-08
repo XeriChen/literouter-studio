@@ -153,7 +153,7 @@ proxyRoutes.all('*', async (c) => {
     }
 
     c.set('proxyLog', { ...(c.get('proxyLog') ?? EMPTY_LOG), model })
-    return forward(c, route.provider, upstreamPath, 'POST', bodyBytes, startedAt)
+    return await forward(c, route.provider, upstreamPath, 'POST', bodyBytes, startedAt)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err
