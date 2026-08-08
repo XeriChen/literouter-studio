@@ -25,6 +25,7 @@ interface ProviderForm {
   protocol: 'openai' | 'anthropic'
   base_url: string
   api_key: string
+  anthropic_version: string
   proxy_url: string
   timeout_ms: string
   custom_headers: string
@@ -36,6 +37,7 @@ const EMPTY_FORM: ProviderForm = {
   protocol: 'openai',
   base_url: '',
   api_key: '',
+  anthropic_version: '',
   proxy_url: '',
   timeout_ms: '',
   model_filter: '',
@@ -56,7 +58,7 @@ export default function Providers() {
 
   const providers = useQuery({
     queryKey: ['providers'],
-    queryFn: () => api<{ ok: true; data: Provider[] }>('/api/providers').then((r) => r.data),
+    queryFn: () => api<Provider[]>('/api/providers'),
   })
 
   function openCreate() {
@@ -72,6 +74,7 @@ export default function Providers() {
       protocol: p.protocol,
       base_url: p.base_url,
       api_key: p.auth.api_key ?? '',
+      anthropic_version: p.auth.version ?? '',
       proxy_url: p.proxy_url ?? '',
       timeout_ms: p.timeout_ms == null ? '' : String(p.timeout_ms),
       custom_headers: JSON.stringify(p.custom_headers ?? {}, null, 2),
@@ -82,11 +85,14 @@ export default function Providers() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      const auth: Record<string, string> = {}
+      if (form.api_key) auth.api_key = form.api_key
+      if (form.protocol === 'anthropic' && form.anthropic_version.trim()) auth.version = form.anthropic_version.trim()
       const payload = {
         name: form.name,
         protocol: form.protocol,
         base_url: form.base_url,
-        auth: form.api_key ? { api_key: form.api_key } : {},
+        auth,
         proxy_url: form.proxy_url.trim() || null,
         timeout_ms: form.timeout_ms.trim() ? Number(form.timeout_ms) : null,
         model_filter: form.model_filter.trim() || null,
@@ -115,9 +121,9 @@ export default function Providers() {
   })
 
   const testMutation = useMutation({
-    mutationFn: (id: string) => api<{ ok: true; data: { ok: boolean; status?: number; message: string } }>(`/api/providers/${id}/test`, { method: 'POST' }),
-    onSuccess: (res) => {
-      setResult({ message: res.data.message, ok: res.data.ok })
+    mutationFn: (id: string) => api<{ ok: boolean; status?: number; message: string }>(`/api/providers/${id}/test`, { method: 'POST' }),
+    onSuccess: (data) => {
+      setResult({ message: data.message, ok: data.ok })
     },
     onError: (err) => {
       setResult({ message: err instanceof Error ? err.message : '测试失败', ok: false })
@@ -131,9 +137,9 @@ export default function Providers() {
     setModelSearch('')
     setUpstreamLoading(true)
     try {
-      const res = await api<{ ok: true; data: { model_ids: string[] } }>(`/api/providers/${id}/upstream-models`, { method: 'POST' })
-      setUpstreamModels(res.data.model_ids)
-      setSelectedModels(new Set(res.data.model_ids))
+      const data = await api<{ model_ids: string[] }>(`/api/providers/${id}/upstream-models`, { method: 'POST' })
+      setUpstreamModels(data.model_ids)
+      setSelectedModels(new Set(data.model_ids))
     } catch (err) {
       setResult({ message: `拉取失败：${err instanceof Error ? err.message : 'unknown'}`, ok: false })
       setFetchDialog(null)
@@ -144,12 +150,12 @@ export default function Providers() {
 
   const importModelsMutation = useMutation({
     mutationFn: ({ providerId, modelIds }: { providerId: string; modelIds: string[] }) =>
-      api<{ ok: true; data: { added: number; updated: number } }>(`/api/providers/${providerId}/import-models`, {
+      api<{ added: number; updated: number }>(`/api/providers/${providerId}/import-models`, {
         method: 'POST',
         body: JSON.stringify({ model_ids: modelIds }),
       }),
-    onSuccess: (res) => {
-      setResult({ message: `导入成功：新增 ${res.data.added}，刷新 ${res.data.updated}`, ok: true })
+    onSuccess: (data) => {
+      setResult({ message: `导入成功：新增 ${data.added}，刷新 ${data.updated}`, ok: true })
       setFetchDialog(null)
       qc.invalidateQueries({ queryKey: ['models'] })
     },
@@ -286,6 +292,12 @@ export default function Providers() {
               <Label>API Key</Label>
               <Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." />
             </div>
+            {form.protocol === 'anthropic' && (
+              <div className="space-y-1.5">
+                <Label>Anthropic Version（可选）</Label>
+                <Input value={form.anthropic_version} onChange={(e) => setForm({ ...form, anthropic_version: e.target.value })} placeholder="2023-06-01（留空使用默认值）" />
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>代理 URL（可选）</Label>

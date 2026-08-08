@@ -4,6 +4,7 @@ export const DEFAULT_SETTINGS = {
   host: '0.0.0.0',
   port: '3000',
   global_timeout_ms: '120000',
+  log_retention_days: '30',
 }
 
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS
@@ -26,4 +27,8 @@ export function updateSettings(patch: Partial<Record<SettingsKey, string>>): Rec
 
 export function getGlobalTimeoutMs(): number {
   return Number(getSetting('global_timeout_ms') ?? DEFAULT_SETTINGS.global_timeout_ms)
+}
+
+export function getLogRetentionDays(): number {
+  return Number(getSetting('log_retention_days') ?? DEFAULT_SETTINGS.log_retention_days)
 }

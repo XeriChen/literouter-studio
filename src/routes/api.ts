@@ -300,6 +300,7 @@ api.post('/backup', async (c) => {
         custom_headers: p.custom_headers,
         proxy_url: p.proxy_url ?? null,
         timeout_ms: p.timeout_ms ?? null,
+        model_filter: p.model_filter ?? null,
         enabled: p.enabled,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

@@ -67,3 +67,11 @@ export function clearLogs(): void {
   db.prepare('DELETE FROM logs').run()
   db.prepare("DELETE FROM sqlite_sequence WHERE name = 'logs'").run()
 }
+
+/** 清理超过保留天数的日志；retentionDays <= 0 表示不清理 */
+export function cleanOldLogs(retentionDays: number): number {
+  if (retentionDays <= 0) return 0
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString()
+  const result = db.prepare('DELETE FROM logs WHERE created_at < ?').run(cutoff)
+  return result.changes
+}
