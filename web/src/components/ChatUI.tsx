@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, SendHorizontal, Trash2 } from 'lucide-react'
 import { authHeaders } from '@/api/client'
-import type { Provider, ProviderModel } from '@/api/types'
+import type { ModelAlias } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,8 +13,7 @@ export interface ChatMessage {
 
 interface ChatUIProps {
   protocol: 'openai' | 'anthropic'
-  provider: Provider | null
-  model: ProviderModel | null
+  alias: ModelAlias | null
 }
 
 const decoder = new TextDecoder()
@@ -40,20 +39,20 @@ function parseSSELine(buf: string, protocol: 'openai' | 'anthropic', onDelta: (t
   }
 }
 
-function storageKey(protocol: string, providerId: string, modelKey: string): string {
-  return `chat:${protocol}:${providerId}:${modelKey}`
+function storageKey(protocol: string, aliasName: string): string {
+  return `chat:${protocol}:${aliasName}`
 }
 
-export function ChatUI({ protocol, provider, model }: ChatUIProps) {
+export function ChatUI({ protocol, alias }: ChatUIProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // ——— 持久化：按 protocol+provider+model 存取对话 ———
-  const modelKey = model ? `${model.provider_id}/${model.model_id}` : ''
-  const persistKey = provider && model ? storageKey(protocol, provider.id, modelKey) : ''
+  // ——— 持久化：按 protocol+alias 存取对话 ———
+  const aliasKey = alias ? alias.alias_name : ''
+  const persistKey = alias ? storageKey(protocol, alias.alias_name) : ''
 
   useEffect(() => {
     if (!persistKey) {
@@ -90,7 +89,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
   }, [persistKey])
 
   const send = useCallback(async () => {
-    if (!input.trim() || !provider || !model || streaming) return
+    if (!input.trim() || !alias || streaming) return
 
     const userMsg: ChatMessage = { role: 'user', content: input.trim() }
     const history = [...messages, userMsg]
@@ -104,7 +103,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
 
     const path = protocol === 'openai' ? '/openai/v1/chat/completions' : '/anthropic/v1/messages'
     const payload: Record<string, unknown> = {
-      model: model.model_id,
+      model: alias.alias_name,
       messages: history.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
     }
@@ -185,7 +184,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, provider, model, messages, streaming, protocol, persist])
+  }, [input, alias, messages, streaming, protocol, persist])
 
   useEffect(() => () => abortRef.current?.abort(), [])
 
@@ -196,7 +195,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
         {!hasMessages && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            选择 Provider 和模型后开始对话
+            选择模型映射后开始对话
           </div>
         )}
         {messages.map((m, i) => (
@@ -246,7 +245,7 @@ export function ChatUI({ protocol, provider, model }: ChatUIProps) {
               <Loader2 className="h-4 w-4 animate-spin" />
             </Button>
           ) : (
-            <Button size="icon" onClick={send} disabled={!input.trim() || !provider || !model}>
+            <Button size="icon" onClick={send} disabled={!input.trim() || !alias}>
               <SendHorizontal className="h-4 w-4" />
             </Button>
           )}

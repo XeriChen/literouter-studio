@@ -9,7 +9,7 @@ interface DispatcherOptions {
 
 const dispatcherCache = new Map<string, Dispatcher>()
 
-/** 按 (proxy_url, timeout_ms) 缓存复用 dispatcher；时间戳口径与 plan.md §5.4 一致（bodyTimeout 恒为 0） */
+/** 按 (proxy_url, timeout_ms) 缓存复用 dispatcher；时间戳口径与 ARCHITECTURE.md §6 一致（bodyTimeout 恒为 0） */
 export function getDispatcher(proxyUrl: string | null | undefined, timeoutMs: number): Dispatcher {
   const timeout = timeoutMs || 0
   const opts: DispatcherOptions = { connectTimeout: timeout, headersTimeout: timeout, bodyTimeout: 0 }

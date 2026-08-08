@@ -28,6 +28,12 @@ export interface BackupData {
     enabled: number
     source: 'fetched' | 'manual'
   }>
+  aliases: Array<{
+    protocol: 'openai' | 'anthropic'
+    alias_name: string
+    provider_id: string
+    model_id: string
+  }>
 }
 
 export function exportBackup(): BackupData {
@@ -48,11 +54,15 @@ export function exportBackup(): BackupData {
   const models = db
     .prepare('SELECT provider_id, model_id, display_name, enabled, source FROM provider_models')
     .all() as BackupData['models']
+  const aliases = db
+    .prepare('SELECT protocol, alias_name, provider_id, model_id FROM model_aliases')
+    .all() as BackupData['aliases']
   return {
     token: getAdminToken(),
     settings: getSettings(),
     providers,
     models,
+    aliases,
   }
 }
 
@@ -83,9 +93,16 @@ export function importBackup(data: BackupData): void {
       `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
+    const insertAlias = db.prepare(
+      `INSERT INTO model_aliases (protocol, alias_name, provider_id, model_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
     const now = new Date().toISOString()
     for (const m of data.models) {
       insertModel.run(m.provider_id, m.model_id, m.display_name, m.enabled, m.source, now, now)
+    }
+    for (const a of data.aliases ?? []) {
+      insertAlias.run(a.protocol, a.alias_name, a.provider_id, a.model_id, now, now)
     }
     setAdminToken(data.token)
     updateSettings(data.settings)

@@ -95,7 +95,7 @@ export default function Home() {
               <span className="font-medium">Models</span>
               <Badge variant="secondary" className="text-[10px]">管理</Badge>
             </div>
-            <p className="pl-6 text-muted-foreground">管理可用模型，支持手动添加或从上游拉取。同协议内同名模型互斥，启用时自动禁用其他 Provider 的同名模型。</p>
+            <p className="pl-6 text-muted-foreground">管理可用模型，支持手动添加或从上游拉取。模型映射按协议隔离，客户端仅能通过映射名调用模型。</p>
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-2">

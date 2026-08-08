@@ -74,6 +74,25 @@ if (currentVersion < 2) {
   db.prepare('INSERT INTO schema_version (version) VALUES (2)').run()
 }
 
+// v3: model_aliases 客户端可见的模型名映射层（映射名 -> 真实模型），按协议隔离
+if (currentVersion < 3) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_aliases (
+      protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+      alias_name TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (protocol, alias_name),
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE,
+      FOREIGN KEY (provider_id, model_id) REFERENCES provider_models(provider_id, model_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_aliases_target ON model_aliases(provider_id, model_id);
+  `)
+  db.prepare('INSERT INTO schema_version (version) VALUES (3)').run()
+}
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }

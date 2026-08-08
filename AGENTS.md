@@ -1,11 +1,10 @@
 # AGENTS.md — 项目开发约定（AI 助手必读）
 
-本文件为参与本仓库的 AI 助手提供上下文与硬性约定。**先读本文件，再读 `plan.md`。**
+本文件为参与本仓库的 AI 助手提供上下文与硬性约定。**先读本文件，再读 `ARCHITECTURE.md`。**
 
 ## 1. 权威设计文档
 
-- `plan.md`（v1.1）是**唯一权威设计指南**，实现必须以其为准（架构、业务逻辑、边界条件、实现陷阱）。
-- `plan-patch.md` 是**补充补丁**：记录实现期与 plan 的行为偏差（D1-D6）、未覆盖的推断点（I1-I7）、依赖层陷阱（undici v7）。冲突时以补丁中的偏差声明为准。
+- `ARCHITECTURE.md` 是**唯一权威设计指南**，实现必须以其为准（架构、数据模型、代理管线、红线、已知陷阱）。
 - 遇到文档未覆盖的细节时，遵循核心原则推断：**最小可用、原生透传、不修改请求体**。
 
 ## 2. 红线（绝对不可违背）
@@ -53,7 +52,7 @@
 ## 6. 硬性约定
 
 - **模型管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）。
-- **同名模型互斥**必须在**同协议内**执行：启用某模型时，事务内先 `UPDATE ... SET enabled=0` 同协议同名模型，再启用目标模型。
+- **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；新增真实模型/导入时自动建同名映射（`INSERT OR IGNORE`，已有同名映射不覆盖）；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
 - 新增 shadcn/ui 组件时用 `pnpm dlx shadcn@latest add ...`，配置见 `components.json`。
 
@@ -68,7 +67,7 @@
 ## 8. 代理实现陷阱（提交前逐项核对）
 
 - [ ] undici `bodyTimeout` 显式设为 `0`（防流式长连接被掐断）；`connectTimeout`/`headersTimeout` = timeout；timeout 为 0 时三者都为 0
-- [ ] 同名互斥 SQL 限定 `protocol` 作用域
+- [ ] 映射路由走 `model_aliases`（协议隔离），模型未启用 404 / Provider 禁用 503；未建映射 404
 - [ ] `custom_headers` 禁止覆盖 `authorization` / `x-api-key` / `accept-encoding`
 - [ ] 透传保留了客户端 Query String；`base_url` 拼接前去除尾部 `/`
 - [ ] 客户端断连（`c.req.raw.signal`）立即 abort 上游请求
@@ -86,7 +85,8 @@
 | 400 | `invalid_request_body` | body 非 JSON / 缺 model / 超 50MB（413） |
 | 400 | `invalid_test_prompt` | 测活提示词命中黑名单或过短 |
 | 401 | `invalid_api_key` | 网关 Token 校验失败 |
-| 404 | `model_not_found` | 模型不存在/未启用/Provider 不存在 |
+| 404 | `model_not_found` | 模型不存在/未启用/未建映射/Provider 不存在 |
+| 400 | `alias_exists` | 同协议映射名重复 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
 | 502 | `upstream_error` | 上游不可达 / 拒绝连接 / 5xx |
 | 504 | `upstream_timeout` | 连接或头阶段超时 |
@@ -95,4 +95,4 @@
 
 - `pnpm typecheck` 与 `pnpm build:web` 通过
 - 第 7 节代理陷阱清单逐项核对通过
-- 行为与 `plan.md` 中 API、错误码、边界行为一致
+- 行为与 `ARCHITECTURE.md` 中 API、错误码、边界行为一致

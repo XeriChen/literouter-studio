@@ -5,7 +5,7 @@ import { authMiddleware } from '../middlewares/auth'
 import { logMiddleware } from '../middlewares/log'
 import { verifyToken, resetAdminToken, getAdminToken } from '../services/auth'
 import { createProvider, deleteProvider, listUpstreamModels, importModels, getProvider, listProviders, testProviderConnection, updateProvider } from '../services/providers'
-import { addModel, deleteModel, getModel, listModels, setModelEnabled } from '../services/models'
+import { addAlias, addModel, deleteAlias, deleteModel, getAlias, getModel, listAliases, listModels, setModelEnabled, updateAlias } from '../services/models'
 import { clearLogs, listLogs } from '../services/logs'
 import { getSettings, updateSettings } from '../services/settings'
 import { exportBackup, importBackup } from '../services/backup'
@@ -214,6 +214,64 @@ api.delete('/models', async (c) => {
   return ok(c, {})
 })
 
+// ---------- Aliases（模型映射：客户端可见模型名 -> 真实模型） ----------
+
+const aliasRefSchema = z.object({
+  protocol: z.enum(['openai', 'anthropic']),
+  alias_name: z.string().min(1),
+})
+
+const aliasSchema = aliasRefSchema.extend({
+  provider_id: z.string().min(1),
+  model_id: z.string().min(1),
+})
+
+/** 校验映射目标：Provider 存在且协议一致、模型存在且已启用；通过返回 null */
+function aliasTargetError(c: ApiC, body: { protocol: ProviderProtocol; provider_id: string; model_id: string }): Response | null {
+  const provider = getProvider(body.provider_id)
+  if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
+  if (provider.protocol !== body.protocol) {
+    return fail(c, 400, 'provider protocol mismatch', 'invalid_request_body')
+  }
+  const model = getModel(body.provider_id, body.model_id)
+  if (!model) return fail(c, 404, 'model not found', 'model_not_found')
+  if (!model.enabled) return fail(c, 400, 'target model must be enabled first', 'invalid_request_body')
+  return null
+}
+
+api.get('/aliases', (c) => ok(c, listAliases()))
+
+api.post('/aliases', async (c) => {
+  const parsed = aliasSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
+  if (getAlias(parsed.data.protocol, parsed.data.alias_name)) {
+    return fail(c, 400, 'alias name already exists', 'alias_exists')
+  }
+  const err = aliasTargetError(c, parsed.data)
+  if (err) return err
+  const row = addAlias(parsed.data)
+  return ok(c, row)
+})
+
+api.patch('/aliases', async (c) => {
+  const parsed = aliasSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
+  if (!getAlias(parsed.data.protocol, parsed.data.alias_name)) {
+    return fail(c, 404, 'alias not found', 'alias_not_found')
+  }
+  const err = aliasTargetError(c, parsed.data)
+  if (err) return err
+  const row = updateAlias(parsed.data)
+  return ok(c, row)
+})
+
+api.delete('/aliases', async (c) => {
+  const parsed = aliasRefSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
+  deleteAlias(parsed.data)
+  return ok(c, {})
+})
+
 const DEFAULT_TEST_PROMPT = '现在的美国总统是谁'
 
 api.post('/models/test', async (c) => {
@@ -281,6 +339,14 @@ const backupSchema = z.object({
       source: z.enum(['fetched', 'manual']).default('manual'),
     }),
   ).default([]),
+  aliases: z.array(
+    z.object({
+      protocol: z.enum(['openai', 'anthropic']),
+      alias_name: z.string().min(1),
+      provider_id: z.string().min(1),
+      model_id: z.string().min(1),
+    }),
+  ).default([]),
 })
 
 api.post('/backup', async (c) => {
@@ -306,6 +372,7 @@ api.post('/backup', async (c) => {
         updated_at: new Date().toISOString(),
       })),
       models: data.models.map((m) => ({ ...m, display_name: m.display_name ?? null })),
+      aliases: data.aliases.map((a) => ({ ...a })),
     })
     // 导入后 token 已被备份内容覆盖，重新读取返回
     return ok(c, { token: getAdminToken() })

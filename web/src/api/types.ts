@@ -45,6 +45,19 @@ export interface ProviderModel {
   provider_enabled: number
 }
 
+export interface ModelAlias {
+  protocol: 'openai' | 'anthropic'
+  alias_name: string
+  provider_id: string
+  model_id: string
+  created_at: string
+  updated_at: string
+  provider_name: string
+  provider_protocol: 'openai' | 'anthropic'
+  provider_enabled: number
+  target_enabled: number
+}
+
 export interface LogRow {
   id: number
   created_at: string
@@ -82,5 +95,11 @@ export interface BackupData {
     display_name: string | null
     enabled: number
     source: 'fetched' | 'manual'
+  }>
+  aliases: Array<{
+    protocol: 'openai' | 'anthropic'
+    alias_name: string
+    provider_id: string
+    model_id: string
   }>
 }

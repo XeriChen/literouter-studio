@@ -44,6 +44,15 @@ export interface ProviderModelRow {
   updated_at: string
 }
 
+export interface ModelAliasRow {
+  protocol: ProviderProtocol
+  alias_name: string
+  provider_id: string
+  model_id: string
+  created_at: string
+  updated_at: string
+}
+
 export interface LogRow {
   id: number
   created_at: string

@@ -21,8 +21,37 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import ModelAliases from './ModelAliases'
 
 export default function Models() {
+  const [tab, setTab] = useState<'aliases' | 'real'>('aliases')
+
+  return (
+    <>
+      <div className="mb-4 flex items-center gap-1 border-b">
+        <button
+          onClick={() => setTab('aliases')}
+          className={`rounded-t-md px-3 py-1.5 text-sm font-medium ${
+            tab === 'aliases' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          模型映射
+        </button>
+        <button
+          onClick={() => setTab('real')}
+          className={`rounded-t-md px-3 py-1.5 text-sm font-medium ${
+            tab === 'real' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          真实模型
+        </button>
+      </div>
+      {tab === 'aliases' ? <ModelAliases /> : <RealModelsList />}
+    </>
+  )
+}
+
+function RealModelsList() {
   const qc = useQueryClient()
   const [protocol, setProtocol] = useState<'all' | 'openai' | 'anthropic'>('all')
   const [providerId, setProviderId] = useState('all')
@@ -224,8 +253,8 @@ export default function Models() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">Models</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">管理可用模型，同协议内同名互斥</p>
+          <h1 className="text-lg font-semibold">真实模型</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">按 Provider 管理真实模型，客户端仅可通过模型映射调用</p>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -383,7 +412,7 @@ export default function Models() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>手动添加模型</DialogTitle>
-            <DialogDescription>添加后需手动启用才会出现在代理路由中</DialogDescription>
+            <DialogDescription>添加后自动启用，并自动建立同名模型映射</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">

@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
-import { findRoute, listEnabledModels } from '../services/models'
+import { findRoute, listAliasNames } from '../services/models'
 import { writeLog } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
@@ -112,13 +112,13 @@ proxyRoutes.all('*', async (c) => {
   }
 
   try {
-    // GET /v1/models：返回本地已启用的模型列表（不转发上游）
+    // GET /v1/models：只返回已建立映射的模型名（未建映射不可见、不可调用）
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
-      const models = listEnabledModels(protocol)
-      if (!models.length) {
-        return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'no enabled models')
+      const aliases = listAliasNames(protocol)
+      if (!aliases.length) {
+        return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'no model aliases')
       }
-      const data = models.map((m) => ({ id: m.model_id, object: 'model', owned_by: 'gateway' }))
+      const data = aliases.map((name) => ({ id: name, object: 'model', owned_by: 'gateway' }))
       return c.json({ object: 'list', data })
     }
 
