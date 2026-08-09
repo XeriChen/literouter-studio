@@ -127,11 +127,13 @@ export function updateAlias(input: {
   alias_name: string
   provider_id: string
   model_id: string
+  new_alias_name?: string
 }): ModelAliasRow {
+  const targetName = input.new_alias_name ?? input.alias_name
   db.prepare(
-    'UPDATE model_aliases SET provider_id = ?, model_id = ?, updated_at = ? WHERE protocol = ? AND alias_name = ?',
-  ).run(input.provider_id, input.model_id, new Date().toISOString(), input.protocol, input.alias_name)
-  return getAlias(input.protocol, input.alias_name)!
+    'UPDATE model_aliases SET provider_id = ?, model_id = ?, alias_name = ?, updated_at = ? WHERE protocol = ? AND alias_name = ?',
+  ).run(input.provider_id, input.model_id, targetName, new Date().toISOString(), input.protocol, input.alias_name)
+  return getAlias(input.protocol, targetName)!
 }
 
 export function deleteAlias(input: { protocol: 'openai' | 'anthropic'; alias_name: string }): void {

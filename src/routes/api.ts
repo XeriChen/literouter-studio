@@ -224,6 +224,7 @@ const aliasRefSchema = z.object({
 const aliasSchema = aliasRefSchema.extend({
   provider_id: z.string().min(1),
   model_id: z.string().min(1),
+  new_alias_name: z.string().min(1).optional(),
 })
 
 /** 校验映射目标：Provider 存在且协议一致、模型存在且已启用；通过返回 null */
@@ -258,6 +259,11 @@ api.patch('/aliases', async (c) => {
   if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
   if (!getAlias(parsed.data.protocol, parsed.data.alias_name)) {
     return fail(c, 404, 'alias not found', 'alias_not_found')
+  }
+  if (parsed.data.new_alias_name && parsed.data.new_alias_name !== parsed.data.alias_name) {
+    if (getAlias(parsed.data.protocol, parsed.data.new_alias_name)) {
+      return fail(c, 400, 'alias name already exists', 'alias_exists')
+    }
   }
   const err = aliasTargetError(c, parsed.data)
   if (err) return err

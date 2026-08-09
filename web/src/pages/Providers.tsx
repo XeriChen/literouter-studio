@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, RefreshCw, Search, Trash2, Wifi, X, ServerOff } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Search, Trash2, Unlock, Wifi, X, ServerOff } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -65,6 +65,29 @@ export default function Providers() {
     setEditing(null)
     setForm(EMPTY_FORM)
     setDialogOpen(true)
+  }
+
+  /** 将 API Key 输入的内容按 Base64 解码并直接回填 */
+  function decodeApiKey() {
+    const raw = form.api_key.replace(/\s+/g, '')
+    if (!raw) {
+      setResult({ message: '请先输入要解码的内容', ok: false })
+      return
+    }
+    const normalized = raw.replace(/-/g, '+').replace(/_/g, '/')
+    if (normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+      setResult({ message: '输入内容不是合法的 Base64', ok: false })
+      return
+    }
+    try {
+      const bin = atob(normalized)
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      setForm({ ...form, api_key: decoded })
+      setResult({ message: '已解码为明文并回填', ok: true })
+    } catch {
+      setResult({ message: 'Base64 解码失败（内容可能不是文本）', ok: false })
+    }
   }
 
   function openEdit(p: Provider) {
@@ -290,7 +313,15 @@ export default function Providers() {
             </div>
             <div className="space-y-1.5">
               <Label>API Key</Label>
-              <Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." />
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." />
+                </div>
+                <Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文">
+                  <Unlock className="h-3.5 w-3.5" /> 解码
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p>
             </div>
             {form.protocol === 'anthropic' && (
               <div className="space-y-1.5">

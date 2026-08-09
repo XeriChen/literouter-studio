@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Loader2, Plus, Trash2, X } from 'lucide-react'
+import { Copy, Check, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { ModelAlias, Provider, ProviderModel } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -19,11 +19,67 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
+/** 行内指向热切换：Provider + 目标模型两个下拉，改动即 PATCH 生效 */
+function TargetSelects({
+  a,
+  protocolProviders,
+  allModels,
+  onRetarget,
+}: {
+  a: ModelAlias
+  protocolProviders: Provider[]
+  allModels: ProviderModel[]
+  onRetarget: (a: ModelAlias) => void
+}) {
+  const [providerId, setProviderId] = useState(a.provider_id)
+  useEffect(() => setProviderId(a.provider_id), [a.provider_id])
+  const providerModels = useMemo(
+    () => allModels.filter((m) => m.provider_id === providerId),
+    [allModels, providerId],
+  )
+  return (
+    <div className="flex items-center gap-1.5">
+      <Select
+        value={providerId}
+        onValueChange={(v) => {
+          setProviderId(v)
+          const first = allModels.find((m) => m.provider_id === v && m.enabled === 1)
+          onRetarget({ ...a, provider_id: v, model_id: first?.model_id ?? '' })
+        }}
+      >
+        <SelectTrigger className="h-7 w-32 text-xs"><SelectValue placeholder="选择 Provider" /></SelectTrigger>
+        <SelectContent>
+          {protocolProviders.map((p) => (
+            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select
+        key={providerId}
+        value={a.model_id}
+        onValueChange={(v) => onRetarget({ ...a, provider_id: providerId, model_id: v })}
+      >
+        <SelectTrigger className="h-7 w-48 text-xs"><SelectValue placeholder="选择模型" /></SelectTrigger>
+        <SelectContent>
+          {providerModels.map((m) => (
+            <SelectItem key={m.model_id} value={m.model_id} disabled={!m.enabled}>
+              {m.display_name || m.model_id}
+              {m.enabled ? '' : '（未启用）'}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 export default function ModelAliases() {
   const qc = useQueryClient()
   const [protocol, setProtocol] = useState<'all' | 'openai' | 'anthropic'>('all')
   const [addOpen, setAddOpen] = useState(false)
   const [addForm, setAddForm] = useState({ protocol: 'openai', alias_name: '', provider_id: '', model_id: '' })
+  const [renaming, setRenaming] = useState<ModelAlias | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
   const toastIdRef = useRef(0)
 
@@ -66,6 +122,24 @@ export default function ModelAliases() {
   const nameTaken = filtered.some(
     (a) => a.protocol === addForm.protocol && a.alias_name === addForm.alias_name.trim() && a.alias_name.trim(),
   )
+  const renameTaken =
+    renaming !== null &&
+    (aliases.data ?? []).some(
+      (x) =>
+        x.protocol === renaming.protocol &&
+        x.alias_name === renameValue.trim() &&
+        x.alias_name !== renaming.alias_name,
+    )
+
+  function saveRename() {
+    if (!renaming) return
+    const name = renameValue.trim()
+    if (!name || name === renaming.alias_name) {
+      setRenaming(null)
+      return
+    }
+    renameMutation.mutate({ ...renaming, new_alias_name: name })
+  }
 
   const addMutation = useMutation({
     mutationFn: () =>
@@ -90,6 +164,36 @@ export default function ModelAliases() {
       addToast(true, '映射已删除')
     },
     onError: (err) => addToast(false, err instanceof Error ? err.message : '删除失败'),
+  })
+
+  const retargetMutation = useMutation({
+    mutationFn: (a: ModelAlias) =>
+      api('/api/aliases', {
+        method: 'PATCH',
+        body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name, provider_id: a.provider_id, model_id: a.model_id }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['aliases'] }),
+    onError: (err) => addToast(false, err instanceof Error ? err.message : '指向更新失败'),
+  })
+
+  const renameMutation = useMutation({
+    mutationFn: (a: ModelAlias & { new_alias_name: string }) =>
+      api('/api/aliases', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          protocol: a.protocol,
+          alias_name: a.alias_name,
+          new_alias_name: a.new_alias_name,
+          provider_id: a.provider_id,
+          model_id: a.model_id,
+        }),
+      }),
+    onSuccess: () => {
+      setRenaming(null)
+      qc.invalidateQueries({ queryKey: ['aliases'] })
+      addToast(true, '映射名已更新')
+    },
+    onError: (err) => addToast(false, err instanceof Error ? err.message : '重命名失败'),
   })
 
   async function copyName(name: string) {
@@ -177,22 +281,64 @@ export default function ModelAliases() {
                 {filtered.map((a) => (
                   <TableRow key={`${a.protocol}/${a.alias_name}`}>
                     <TableCell className="pl-6">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs">{a.alias_name}</span>
-                        <button
-                          onClick={() => copyName(a.alias_name)}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                          title="复制映射名"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
+                      {renaming?.protocol === a.protocol && renaming.alias_name === a.alias_name ? (
+                        <div className="flex items-center gap-1">
+                          <Input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveRename()
+                              if (e.key === 'Escape') setRenaming(null)
+                            }}
+                            className="h-7 w-44 font-mono text-xs"
+                            placeholder="新映射名"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={!renameValue.trim() || renameTaken}
+                            onClick={saveRename}
+                            title="保存"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setRenaming(null)} title="取消">
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs">{a.alias_name}</span>
+                          <button
+                            onClick={() => copyName(a.alias_name)}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            title="复制映射名"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRenaming(a)
+                              setRenameValue(a.alias_name)
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            title="重命名映射名"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell><Badge variant={a.protocol === 'openai' ? 'outline' : 'secondary'}>{a.protocol}</Badge></TableCell>
-                    <TableCell className="max-w-[240px] truncate text-xs">
-                      <span className="text-muted-foreground">{a.provider_name}</span>
-                      <span className="mx-1 text-muted-foreground">/</span>
-                      <span className="font-mono">{a.model_id}</span>
+                    <TableCell>
+                      <TargetSelects
+                        a={a}
+                        protocolProviders={providers.data?.filter((p) => p.protocol === a.protocol) ?? []}
+                        allModels={models.data ?? []}
+                        onRetarget={retargetMutation.mutate}
+                      />
                     </TableCell>
                     <TableCell>
                       {!a.provider_enabled ? (
