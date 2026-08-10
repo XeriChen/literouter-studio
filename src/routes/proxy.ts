@@ -135,13 +135,13 @@ proxyRoutes.all('*', async (c) => {
     }
 
     const bodyBytes = new Uint8Array(raw)
-    let model: string | null = null
+    let bodyJson: Record<string, unknown> | null = null
     try {
-      const json = JSON.parse(new TextDecoder().decode(bodyBytes)) as { model?: string }
-      model = typeof json.model === 'string' ? json.model : null
+      bodyJson = JSON.parse(new TextDecoder().decode(bodyBytes)) as Record<string, unknown>
     } catch {
-      model = null
+      bodyJson = null
     }
+    const model = bodyJson && typeof bodyJson.model === 'string' ? bodyJson.model : null
     if (!model) {
       return proxyError(c, 400, 'invalid request body: missing model', 'invalid_request_body')
     }
@@ -152,8 +152,12 @@ proxyRoutes.all('*', async (c) => {
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
+    // 映射名 -> 真实模型名：仅替换 body.model 字段，其余字段原样透传
+    bodyJson!.model = route.model.model_id
+    const outBody = new TextEncoder().encode(JSON.stringify(bodyJson))
+
     c.set('proxyLog', { ...(c.get('proxyLog') ?? EMPTY_LOG), model })
-    return await forward(c, route.provider, upstreamPath, 'POST', bodyBytes, startedAt)
+    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err
