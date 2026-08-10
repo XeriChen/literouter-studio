@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-08（v3 映射层已落地）
+> 更新时间：2026-08-09（v4 配置操作日志已落地）
 
 ---
 
@@ -36,22 +36,22 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  db/index.ts      SQLite 初始化 + 版本化迁移（当前 schema v3）
-  middlewares/     认证（Bearer > x-api-key > api-key）、日志
+  db/index.ts      SQLite 初始化 + 版本化迁移（当前 schema v4）
+  middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求：按 (proxy_url, timeout) 缓存 dispatcher
-  routes/api.ts    管理 API（含 aliases CRUD、备份导入导出）
+  routes/api.ts    管理 API（含 aliases CRUD、备份导入导出、配置操作日志）
   routes/proxy.ts  代理入口流水线（路由、透传、日志）
-  services/        providers / models（含映射层）/ logs / settings / backup / liveness / auth
+  services/        providers / models（含映射层）/ logs / audit / settings / backup / liveness / auth
   types/           行类型
 web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
-  pages/           Login / Providers / Models（两 tab：模型映射 + 真实模型）/ Logs / Settings / Playground
+  pages/           Login / Providers / Models（两 tab：模型映射 + 真实模型）/ Logs（两 tab）/ Settings / Playground
   components/      ChatUI（SSE 双协议解析）等
 data/gateway.db    运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v3）
+## 4. 数据模型（schema v4）
 
 | 表 | 说明 |
 | :--- | :--- |
@@ -59,9 +59,10 @@ data/gateway.db    运行时自动创建（不入库）
 | `provider_models` | 真实模型：PK(provider_id, model_id)，enabled、source(fetched/manual) |
 | `model_aliases` | **映射层**：PK(protocol, alias_name)，指向 (provider_id, model_id)；外键级联删除 |
 | `settings` | key/value：admin_token、host、port、global_timeout_ms |
-| `logs` | 代理/管理操作日志，latency_ms 为首包耗时 |
+| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时 |
+| `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-迁移方式：`schema_version` 表记录版本，`db.ts` 里按 `if (currentVersion < N)` 逐段升级。
+迁移方式：`schema_version` 表记录版本，`db/index.ts` 里按 `if (currentVersion < N)` 逐段升级。
 
 ## 5. 核心概念：模型映射（路由键）
 
@@ -88,7 +89,8 @@ data/gateway.db    运行时自动创建（不入库）
 | `POST /models/test` | 测活：body `{provider_id, model_id, prompt}` |
 | `GET/PUT /settings`、`GET /me`、`POST /token/reset` | 配置、Token 查看/重置 |
 | `GET/POST /backup` | 导出/导入（含明文 Token 与 Key，强警示，导入后前端强制登出） |
-| `GET /logs`、`DELETE /logs` | 日志分页/清空 |
+| `GET /logs`、`DELETE /logs` | 代理访问日志分页/清空 |
+| `GET /audit-logs`、`DELETE /audit-logs` | 配置操作日志分页（可按 resource 筛）/清空 |
 
 ### 错误码（管理 API 返回 `{ok:false, error:{code}}`；代理返回裸 JSON）
 
@@ -131,6 +133,7 @@ data/gateway.db    运行时自动创建（不入库）
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
 - Models 页两个 tab：**模型映射**（复制映射名、新建/删除，新建时校验目标已启用）与**真实模型**（拉取/手动添加/启用/测活/批量）。
+- Logs 页两个 tab：**代理访问**（模型请求，原筛选/清空）与**配置操作**（审计日志：按资源类型筛，操作/详情/状态，独立清空）。
 - Playground：选协议 → 选映射 → ChatUI 发送时 `model` 字段 = 映射名。
 - shadcn 组件新增用 `pnpm dlx shadcn@latest add ...`；`@/*` 别名指向 `web/src/*`。
 
@@ -138,5 +141,6 @@ data/gateway.db    运行时自动创建（不入库）
 
 1. **x-api-key 冲突**：网关 Token 提取含 `x-api-key`，而 Anthropic 客户端默认用它发上游 Key → Anthropic 客户端须用 `Authorization: Bearer <网关 Token>`。
 2. **单进程约束**：better-sqlite3 不支持多实例共享，只能单进程运行。
-3. **日志增长**：启动时按 `log_retention_days`（默认 30，settings 可配）清理过期日志；运行期无自动裁剪，条数上限策略未实施。
-4. 停止网关时日志 `status` 会记录网关进程退出码（非代理错误）。
+3. **日志增长**：启动时按 `log_retention_days`（默认 30，settings 可配）清理过期日志（代理日志与配置操作日志同步清理）；运行期无自动裁剪，条数上限策略未实施。
+4. 停止网关时代理日志 `status` 会记录网关进程退出码（非代理错误）。
+5. **配置操作日志（audit_logs）**：管理 API 各写操作端点显式写入（`src/routes/api.ts` 调用 `writeAuditLog`），无请求体记录（detail 只含变更字段名与可见值，不含 API Key/Token 明文）；登录成败、Token 重置、备份导入导出、日志清空亦有记录；代理入口与管理 API 之间无隐式日志中间件。

@@ -40,11 +40,11 @@
 | `src/server.ts` | 入口，读 env 启动 |
 | `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
 | `src/db/index.ts` | SQLite 初始化：WAL + 外键，schema v1 全量建表建索引，settings 读写助手 |
-| `src/middlewares/` | 认证（token 提取校验）/ 日志 / 错误处理 |
+| `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
 | `src/proxy/` | undici 上游请求，bodyTimeout=0，ProxyAgent 按 proxy_url 缓存，客户端断开 abort |
 | `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
 | `src/routes/` | 管理 API 路由、代理路由 |
-| `src/services/` | 业务层：providers / models / logs / settings / backup / liveness |
+| `src/services/` | 业务层：providers / models / logs（代理访问日志）/ audit（配置操作日志）/ settings / backup / liveness |
 | `src/types/` | 行类型：Provider / ProviderModel / Log / Env |
 | `web/src/api/` | 前端 API client，Token 存 `localStorage['llm_gateway_token']`，401 自动登出回 `/login` |
 | `web/src/pages/` | Login / Providers / Models / Logs / Settings / Playground |

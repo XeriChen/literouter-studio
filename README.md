@@ -17,7 +17,7 @@
 - OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/*`）统一代理入口，SSE 流式透传
 - Provider 管理：增删改查、网络连通性测试、模型拉取、代理与自定义请求头
 - 模型管理：手动添加/导入模型自动生成同名映射；模型映射按协议隔离，客户端仅通过映射名调用；模型测活（30s 硬超时）
-- 请求日志：分页/筛选/一键清空
+- 日志：模型访问日志与网站配置操作日志双 tab，分页/筛选/一键清空
 - 配置备份导出/导入（含 Token 与明文 API Key，请妥善保管）
 - Playground：直接调用网关代理入口的简单 Chat UI，支持两种协议 SSE 解析
 
@@ -54,11 +54,11 @@ pnpm start          # 由 Hono 同时托管 API 与前端静态文件
 │   ├── server.ts         # 入口，启动 HTTP 服务
 │   ├── app.ts            # Hono 应用与路由挂载
 │   ├── db/               # SQLite 初始化与 schema（WAL + 外键）
-│   ├── middlewares/      # 认证 / 日志 / 错误处理
+│   ├── middlewares/      # 认证 / 错误处理
 │   ├── proxy/            # 核心代理（undici 上游请求）
 │   ├── providers/        # OpenAI / Anthropic 协议构造
 │   ├── routes/           # /api 管理路由 与 代理路由
-│   ├── services/         # providers / models / logs / settings / backup / liveness
+│   ├── services/         # providers / models / logs / audit / settings / backup / liveness
 │   └── types/            # 类型定义
 ├── web/                  # 前端源码（构建产物 web/dist 由 Hono 托管）
 │   ├── src/api/          # API Client（localStorage 存 Token，401 自动登出）

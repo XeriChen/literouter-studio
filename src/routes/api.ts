@@ -2,8 +2,8 @@ import { Hono, type Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { z } from 'zod'
 import { authMiddleware } from '../middlewares/auth'
-import { logMiddleware } from '../middlewares/log'
 import { verifyToken, resetAdminToken, getAdminToken } from '../services/auth'
+import { writeAuditLog, listAuditLogs, clearAuditLogs } from '../services/audit'
 import { createProvider, deleteProvider, listUpstreamModels, importModels, getProvider, listProviders, testProviderConnection, updateProvider } from '../services/providers'
 import { addAlias, addModel, deleteAlias, deleteModel, getAlias, getModel, listAliases, listModels, setModelEnabled, updateAlias } from '../services/models'
 import { clearLogs, listLogs } from '../services/logs'
@@ -36,17 +36,22 @@ api.post('/login', async (c) => {
   const body = await c.req.json().catch(() => null)
   const token = (body as { token?: string } | null)?.token
   if (!token || !verifyToken(token)) {
+    writeAuditLog({ resource: 'auth', action: 'login_failed', detail: '令牌验证失败', status: 401 })
     return fail(c, 401, 'invalid token', 'invalid_api_key')
   }
+  writeAuditLog({ resource: 'auth', action: 'login', detail: '登录成功', status: 200 })
   return ok(c, { token })
 })
 
-api.use('*', logMiddleware)
 api.use('*', authMiddleware)
 
 api.get('/me', (c) => ok(c, { token: getAdminToken() }))
 
-api.post('/token/reset', (c) => ok(c, { token: resetAdminToken() }))
+api.post('/token/reset', (c) => {
+  resetAdminToken()
+  writeAuditLog({ resource: 'token', action: 'reset', detail: '重置管理令牌' })
+  return ok(c, { token: getAdminToken() })
+})
 
 // ---------- Settings ----------
 
@@ -61,7 +66,18 @@ const settingsSchema = z.object({
 api.put('/settings', async (c) => {
   const parsed = settingsSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid settings', 'invalid_request_body')
-  return ok(c, updateSettings(parsed.data))
+  const before = getSettings()
+  const after = updateSettings(parsed.data)
+  const changed = Object.keys(parsed.data).filter((k) => before[k] !== after[k])
+  if (changed.length) {
+    writeAuditLog({
+      resource: 'settings',
+      action: 'update',
+      detail: `更新设置: ${changed.map((k) => `${k}: ${before[k]} → ${after[k]}`).join('; ')}`,
+      status: 200,
+    })
+  }
+  return ok(c, after)
 })
 
 // ---------- Providers ----------
@@ -110,6 +126,7 @@ api.post('/providers', async (c) => {
     timeout_ms: p.timeout_ms ?? null,
     model_filter: p.model_filter ?? null,
   })
+  writeAuditLog({ resource: 'provider', action: 'create', target: row.name, detail: `新建 Provider: ${row.name}`, status: 200 })
   return ok(c, providerOut(row))
 })
 
@@ -125,7 +142,8 @@ api.put('/providers/:id', async (c) => {
   const parsed = providerPatchSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid provider config', 'invalid_request_body')
   const p = parsed.data
-  if (!getProvider(c.req.param('id'))) return fail(c, 404, 'provider not found', 'provider_not_found')
+  const existing = getProvider(c.req.param('id'))
+  if (!existing) return fail(c, 404, 'provider not found', 'provider_not_found')
   const row = updateProvider(c.req.param('id'), {
     name: p.name,
     base_url: p.base_url,
@@ -135,12 +153,22 @@ api.put('/providers/:id', async (c) => {
     timeout_ms: p.timeout_ms === undefined ? undefined : p.timeout_ms,
     model_filter: p.model_filter === undefined ? undefined : p.model_filter,
   })
+  const changed = Object.entries(p).filter(([, v]) => v !== undefined)
+  writeAuditLog({
+    resource: 'provider',
+    action: 'update',
+    target: row.name,
+    detail: `更新 Provider ${existing.name}: ${changed.map(([k]) => k).join(', ')}`,
+    status: 200,
+  })
   return ok(c, providerOut(row))
 })
 
 api.delete('/providers/:id', (c) => {
-  if (!getProvider(c.req.param('id'))) return fail(c, 404, 'provider not found', 'provider_not_found')
+  const existing = getProvider(c.req.param('id'))
+  if (!existing) return fail(c, 404, 'provider not found', 'provider_not_found')
   deleteProvider(c.req.param('id'))
+  writeAuditLog({ resource: 'provider', action: 'delete', target: existing.name, detail: `删除 Provider ${existing.name}`, status: 200 })
   return ok(c, {})
 })
 
@@ -148,6 +176,13 @@ api.post('/providers/:id/test', async (c) => {
   const p = getProvider(c.req.param('id'))
   if (!p) return fail(c, 404, 'provider not found', 'provider_not_found')
   const result = await testProviderConnection(p.id)
+  writeAuditLog({
+    resource: 'provider',
+    action: 'test',
+    target: p.name,
+    detail: `测活 Provider ${p.name}${result.ok ? `: 网络可达 (HTTP ${result.status})` : `: ${result.message}`}`,
+    status: result.ok ? 200 : 502,
+  })
   return ok(c, result)
 })
 
@@ -156,8 +191,10 @@ api.post('/providers/:id/upstream-models', async (c) => {
   if (!p) return fail(c, 404, 'provider not found', 'provider_not_found')
   try {
     const modelIds = await listUpstreamModels(p.id)
+    writeAuditLog({ resource: 'model', action: 'fetch', target: p.name, detail: `拉取上游模型 ${p.name}: ${modelIds.length} 个`, status: 200 })
     return ok(c, { model_ids: modelIds })
   } catch (err) {
+    writeAuditLog({ resource: 'model', action: 'fetch', target: p.name, detail: `拉取上游模型 ${p.name} 失败: ${err instanceof Error ? err.message : 'unknown'}`, status: 502 })
     return fail(c, 502, err instanceof Error ? err.message : 'fetch models failed', 'upstream_error')
   }
 })
@@ -172,6 +209,7 @@ api.post('/providers/:id/import-models', async (c) => {
   const ids = body.model_ids.filter((x: unknown): x is string => typeof x === 'string')
   if (!ids.length) return fail(c, 400, 'no valid model ids', 'invalid_request_body')
   const result = importModels(p.id, ids)
+  writeAuditLog({ resource: 'model', action: 'import', target: p.name, detail: `导入模型到 ${p.name}: 新增 ${result.added}, 更新 ${result.updated}`, status: 200 })
   return ok(c, result)
 })
 
@@ -189,8 +227,10 @@ api.post('/models', async (c) => {
     .extend({ display_name: z.string().nullable().optional() })
     .safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid model', 'invalid_request_body')
-  if (!getProvider(parsed.data.provider_id)) return fail(c, 404, 'provider not found', 'provider_not_found')
+  const provider = getProvider(parsed.data.provider_id)
+  if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
   const row = addModel({ ...parsed.data, display_name: parsed.data.display_name ?? null })
+  writeAuditLog({ resource: 'model', action: 'create', target: row.model_id, detail: `新增模型 ${row.model_id} (${provider.name})`, status: 200 })
   return ok(c, row)
 })
 
@@ -199,18 +239,28 @@ api.patch('/models', async (c) => {
     .extend({ enabled: z.union([z.literal(0), z.literal(1)]) })
     .safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid model', 'invalid_request_body')
-  if (!getProvider(parsed.data.provider_id)) return fail(c, 404, 'provider not found', 'provider_not_found')
+  const provider = getProvider(parsed.data.provider_id)
+  if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
   if (!getModel(parsed.data.provider_id, parsed.data.model_id)) {
     return fail(c, 404, 'model not found', 'model_not_found')
   }
   const row = setModelEnabled(parsed.data)
+  writeAuditLog({
+    resource: 'model',
+    action: 'update',
+    target: row.model_id,
+    detail: `${parsed.data.enabled ? '启用' : '禁用'}模型 ${row.model_id} (${provider.name})`,
+    status: 200,
+  })
   return ok(c, row)
 })
 
 api.delete('/models', async (c) => {
   const parsed = modelRefSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid model', 'invalid_request_body')
+  const provider = getProvider(parsed.data.provider_id)
   deleteModel(parsed.data)
+  writeAuditLog({ resource: 'model', action: 'delete', target: parsed.data.model_id, detail: `删除模型 ${parsed.data.model_id} (${provider?.name ?? ''})`, status: 200 })
   return ok(c, {})
 })
 
@@ -251,6 +301,7 @@ api.post('/aliases', async (c) => {
   const err = aliasTargetError(c, parsed.data)
   if (err) return err
   const row = addAlias(parsed.data)
+  writeAuditLog({ resource: 'alias', action: 'create', target: row.alias_name, detail: `新建映射 ${row.alias_name} → ${row.provider_id}/${row.model_id}`, status: 200 })
   return ok(c, row)
 })
 
@@ -268,6 +319,12 @@ api.patch('/aliases', async (c) => {
   const err = aliasTargetError(c, parsed.data)
   if (err) return err
   const row = updateAlias(parsed.data)
+  const parts: string[] = []
+  if (parsed.data.new_alias_name && parsed.data.new_alias_name !== parsed.data.alias_name) {
+    parts.push(`映射名 ${parsed.data.alias_name} → ${parsed.data.new_alias_name}`)
+  }
+  parts.push(`指向 ${row.provider_id}/${row.model_id}`)
+  writeAuditLog({ resource: 'alias', action: 'update', target: row.alias_name, detail: `更新映射 ${row.alias_name}: ${parts.join(', ')}`, status: 200 })
   return ok(c, row)
 })
 
@@ -275,6 +332,7 @@ api.delete('/aliases', async (c) => {
   const parsed = aliasRefSchema.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
   deleteAlias(parsed.data)
+  writeAuditLog({ resource: 'alias', action: 'delete', target: parsed.data.alias_name, detail: `删除映射 ${parsed.data.alias_name}`, status: 200 })
   return ok(c, {})
 })
 
@@ -295,9 +353,23 @@ api.post('/models/test', async (c) => {
 
   try {
     const result = await testModelLiveness({ provider_id: parsed.data.provider_id, model_id: parsed.data.model_id, prompt })
+    writeAuditLog({
+      resource: 'model',
+      action: 'test',
+      target: parsed.data.model_id,
+      detail: `测活模型 ${parsed.data.model_id} (${provider.name}): ${result.latency_ms}ms`,
+      status: 200,
+    })
     return ok(c, result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'liveness test failed'
+    writeAuditLog({
+      resource: 'model',
+      action: 'test',
+      target: parsed.data.model_id,
+      detail: `测活模型 ${parsed.data.model_id} (${provider.name}) 失败: ${message}`,
+      status: message === 'upstream_timeout' ? 504 : 502,
+    })
     if (message === 'upstream_timeout') return fail(c, 504, '模型测活超时', 'upstream_timeout')
     return fail(c, 502, message, 'upstream_error')
   }
@@ -325,12 +397,43 @@ api.get('/logs', (c) => {
 
 api.delete('/logs', (c) => {
   clearLogs()
+  writeAuditLog({ resource: 'logs', action: 'clear', detail: '清空代理访问日志', status: 200 })
+  return ok(c, {})
+})
+
+// ---------- Audit logs（配置操作日志） ----------
+
+api.get('/audit-logs', (c) => {
+  const q = c.req.query()
+  const page = Number(q.page ?? 1)
+  const pageSize = Number(q.page_size ?? 50)
+  return ok(
+    c,
+    listAuditLogs({
+      page: Number.isFinite(page) ? page : 1,
+      pageSize: Number.isFinite(pageSize) ? pageSize : 50,
+      resource: q.resource || undefined,
+    }),
+  )
+})
+
+api.delete('/audit-logs', (c) => {
+  clearAuditLogs()
   return ok(c, {})
 })
 
 // ---------- Backup ----------
 
-api.get('/backup', (c) => ok(c, exportBackup()))
+api.get('/backup', (c) => {
+  const backup = exportBackup()
+  writeAuditLog({
+    resource: 'backup',
+    action: 'export',
+    detail: `导出备份: ${backup.providers.length} 个 Provider, ${backup.models.length} 个模型, ${backup.aliases.length} 个映射`,
+    status: 200,
+  })
+  return ok(c, backup)
+})
 
 const backupSchema = z.object({
   token: z.string().min(1),
@@ -381,8 +484,10 @@ api.post('/backup', async (c) => {
       aliases: data.aliases.map((a) => ({ ...a })),
     })
     // 导入后 token 已被备份内容覆盖，重新读取返回
+    writeAuditLog({ resource: 'backup', action: 'import', detail: `导入备份: ${data.providers.length} 个 Provider, ${data.models.length} 个模型, ${data.aliases.length} 个映射`, status: 200 })
     return ok(c, { token: getAdminToken() })
   } catch (err) {
+    writeAuditLog({ resource: 'backup', action: 'import', detail: `导入备份失败: ${err instanceof Error ? err.message : 'unknown'}`, status: 400 })
     return fail(c, 400, err instanceof Error ? err.message : 'import failed', 'invalid_backup')
   }
 })

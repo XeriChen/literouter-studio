@@ -93,6 +93,23 @@ if (currentVersion < 3) {
   db.prepare('INSERT INTO schema_version (version) VALUES (3)').run()
 }
 
+// v4: audit_logs 网站配置操作日志（管理 API 增删改/测活/备份等），与代理访问日志 logs 分离
+if (currentVersion < 4) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      resource TEXT NOT NULL,
+      target TEXT,
+      action TEXT NOT NULL,
+      detail TEXT,
+      status INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+  `)
+  db.prepare('INSERT INTO schema_version (version) VALUES (4)').run()
+}
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }

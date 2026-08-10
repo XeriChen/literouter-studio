@@ -66,3 +66,13 @@ export interface LogRow {
   latency_ms: number | null
   error_code: string | null
 }
+
+export interface AuditRow {
+  id: number
+  created_at: string
+  resource: string
+  target: string | null
+  action: string
+  detail: string | null
+  status: number | null
+}
