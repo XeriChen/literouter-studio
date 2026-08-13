@@ -51,7 +51,6 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // ——— 持久化：按 protocol+alias 存取对话 ———
-  const aliasKey = alias ? alias.alias_name : ''
   const persistKey = alias ? storageKey(protocol, alias.alias_name) : ''
 
   useEffect(() => {
@@ -241,11 +240,11 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
             </Button>
           )}
           {streaming ? (
-            <Button variant="outline" size="icon" onClick={() => abortRef.current?.abort()}>
+            <Button variant="outline" size="icon" aria-label="停止生成" title="停止生成" onClick={() => abortRef.current?.abort()}>
               <Loader2 className="h-4 w-4 animate-spin" />
             </Button>
           ) : (
-            <Button size="icon" onClick={send} disabled={!input.trim() || !alias}>
+            <Button size="icon" aria-label="发送消息" title="发送消息" onClick={send} disabled={!input.trim() || !alias}>
               <SendHorizontal className="h-4 w-4" />
             </Button>
           )}

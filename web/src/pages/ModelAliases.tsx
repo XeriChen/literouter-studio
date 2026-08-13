@@ -248,14 +248,9 @@ export default function ModelAliases() {
         </div>
       )}
 
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold">模型映射</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              客户端可见的模型名，按协议隔离；映射指向已启用的真实模型
-            </p>
-          </div>
+      <div className="page-shell space-y-6">
+        <div className="page-heading">
+          <div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">客户端可见的模型名，按协议隔离；映射指向已启用的真实模型。</p></div>
           <div className="flex items-center gap-2">
             <Select value={protocol} onValueChange={(v) => setProtocol(v as typeof protocol)}>
               <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
@@ -269,15 +264,15 @@ export default function ModelAliases() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader className="py-4">
+        <Card className="console-surface shadow-none">
+          <CardHeader className="border-b border-foreground/10 px-5 py-4">
             <CardTitle className="text-sm font-medium">
               映射列表
               {filtered.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">（{filtered.length} 个）</span>}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
+            <Table className="data-table">
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-6">映射名</TableHead>

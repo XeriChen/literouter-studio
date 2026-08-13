@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, RefreshCw, Search, Trash2, Unlock, Wifi, X, ServerOff } from 'lucide-react'
+import { Loader2, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Unlock, Wifi, X, ServerOff } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -194,32 +194,29 @@ export default function Providers() {
   }, [upstreamModels, modelSearch])
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-lg font-semibold">Providers</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">管理 LLM 服务接入点</p>
-        </div>
+    <div className="page-shell space-y-6">
+      <div className="page-heading">
+        <div><div className="eyebrow mb-2 flex items-center gap-2"><Wifi className="h-3.5 w-3.5" /> 上游连接</div><h1 className="page-title">Providers</h1><p className="page-description">管理 LLM 服务接入点、连通性与模型发现。</p></div>
         <Button onClick={openCreate} size="sm">
           <Plus className="h-4 w-4" /> 新增 Provider
         </Button>
       </div>
 
       {result && (
-        <div className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${result.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300'}`}>
+        <div className={`notice ${result.ok ? 'notice-success' : 'notice-error'}`}>
           <span>{result.message}</span>
-          <button onClick={() => setResult(null)} className="ml-2 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+          <button aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button ml-auto h-6 w-6">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
 
-      <Card>
-        <CardHeader className="py-4">
-          <CardTitle className="text-sm font-medium">Provider 列表</CardTitle>
+      <Card className="console-surface shadow-none">
+        <CardHeader className="border-b border-foreground/10 px-5 py-4">
+          <CardTitle className="text-sm font-semibold">Provider 列表 <span className="ml-2 font-mono text-[10px] font-normal text-muted-foreground">{providers.data?.length ?? 0} NODES</span></CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <Table className="data-table">
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-6">名称</TableHead>
@@ -242,16 +239,16 @@ export default function Providers() {
                   </TableCell>
                   <TableCell className="pr-6">
                     <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => testMutation.mutate(p.id)} disabled={testMutation.isPending}>
+                      <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${p.name}`} title="测试连通性" onClick={() => testMutation.mutate(p.id)} disabled={testMutation.isPending}>
                         <Wifi className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openFetchDialog(p.id, p.name)}>
+                      <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${p.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(p.id, p.name)}>
                         <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                        编辑
+                      <Button variant="ghost" size="icon" className="icon-button" aria-label={`编辑 ${p.name}`} title="编辑" onClick={() => openEdit(p)}>
+                        <MoreHorizontal className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除 Provider「${p.name}」？关联的模型也会一并删除。`)) delMutation.mutate(p.id) }}>
+                      <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除 ${p.name}`} title="删除" onClick={() => { if (window.confirm(`确定删除 Provider「${p.name}」？关联的模型也会一并删除。`)) delMutation.mutate(p.id) }}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>

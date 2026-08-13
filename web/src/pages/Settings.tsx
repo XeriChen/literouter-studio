@@ -97,16 +97,13 @@ export default function Settings() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold">Settings</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">网关运行配置与数据管理</p>
-      </div>
+    <div className="page-shell max-w-4xl space-y-6">
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><KeyRound className="h-3.5 w-3.5" /> 系统配置</div><h1 className="page-title">Settings</h1><p className="page-description">网关运行配置、访问 Token 与备份管理。</p></div></div>
 
       {notice && (
         <div className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${notice.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300'}`}>
           <span>{notice.message}</span>
-          <button onClick={() => setNotice(null)} className="ml-2 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+          <button aria-label="关闭提示" onClick={() => setNotice(null)} className="icon-button ml-auto h-6 w-6">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>

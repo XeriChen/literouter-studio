@@ -147,9 +147,9 @@ function AccessLogsTab() {
         />
       </div>
 
-      <Card>
+      <Card className="console-surface shadow-none">
         <CardContent className="p-0">
-          <Table>
+          <Table className="data-table">
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-6">时间</TableHead>
@@ -243,9 +243,9 @@ function AuditLogsTab() {
         </SelectContent>
       </Select>
 
-      <Card>
+      <Card className="console-surface shadow-none">
         <CardContent className="p-0">
-          <Table>
+          <Table className="data-table">
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-6">时间</TableHead>
@@ -294,11 +294,8 @@ function AuditLogsTab() {
 
 export default function Logs() {
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Logs</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">访问与配置操作记录</p>
-      </div>
+    <div className="page-shell space-y-5">
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><ScrollText className="h-3.5 w-3.5" /> 请求审计</div><h1 className="page-title">Logs</h1><p className="page-description">访问与配置操作记录。</p></div></div>
       <Tabs defaultValue="access">
         <TabsList>
           <TabsTrigger value="access">代理访问</TabsTrigger>

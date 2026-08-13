@@ -250,12 +250,9 @@ function RealModelsList() {
       </div>
     )}
 
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">真实模型</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">按 Provider 管理真实模型，客户端仅可通过模型映射调用</p>
-        </div>
+    <div className="page-shell space-y-6">
+      <div className="page-heading">
+        <div><div className="eyebrow mb-2 flex items-center gap-2"><Box className="h-3.5 w-3.5" /> 模型目录</div><h1 className="page-title">真实模型</h1><p className="page-description">按 Provider 管理真实模型，客户端仅可通过模型映射调用。</p></div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -300,15 +297,15 @@ function RealModelsList() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="py-4">
+      <Card className="console-surface shadow-none">
+        <CardHeader className="border-b border-foreground/10 px-5 py-4">
           <CardTitle className="text-sm font-medium">
             模型列表
             {filtered.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">（{filtered.length} 个）</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <Table className="data-table">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10 pl-4">
