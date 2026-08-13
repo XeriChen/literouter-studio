@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Check, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Copy, Check, Activity, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { ModelAlias, Provider, ProviderModel } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -80,12 +80,13 @@ export default function ModelAliases() {
   const [addForm, setAddForm] = useState({ protocol: 'openai', alias_name: '', provider_id: '', model_id: '' })
   const [renaming, setRenaming] = useState<ModelAlias | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
+  const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string; latency_ms: number }>>([])
+  const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const toastIdRef = useRef(0)
 
-  function addToast(ok: boolean, message: string) {
+  function addToast(ok: boolean, message: string, latency_ms = 0) {
     const id = ++toastIdRef.current
-    setToasts((prev) => [...prev, { id, ok, message }])
+    setToasts((prev) => [...prev, { id, ok, message, latency_ms }])
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000)
   }
 
@@ -196,6 +197,14 @@ export default function ModelAliases() {
     onError: (err) => addToast(false, err instanceof Error ? err.message : '重命名失败'),
   })
 
+  const runTest = useMutation({
+    mutationFn: (a: ModelAlias) =>
+      api<{ reply: string; latency_ms: number }>('/api/models/test', {
+        method: 'POST',
+        body: JSON.stringify({ provider_id: a.provider_id, model_id: a.model_id }),
+      }),
+  })
+
   async function copyName(name: string) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -230,6 +239,7 @@ export default function ModelAliases() {
               }`}
             >
               <span className="max-w-md line-clamp-2">{t.message}</span>
+              {t.latency_ms > 0 && <span className="shrink-0 text-xs opacity-70">{t.latency_ms}ms</span>}
               <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -327,6 +337,26 @@ export default function ModelAliases() {
                             title="重命名映射名"
                           >
                             <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            disabled={quickTestId !== null}
+                            onClick={() => {
+                              const key = `${a.protocol}/${a.alias_name}`
+                              setQuickTestId(key)
+                              runTest.mutate(a, {
+                                onSuccess: (data) => addToast(true, `${a.alias_name}: ${data.reply}`, data.latency_ms),
+                                onError: (err) => addToast(false, `${a.alias_name}: ${err instanceof Error ? err.message : '测活失败'}`),
+                                onSettled: () => setQuickTestId(null),
+                              })
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                            title="快速测活"
+                          >
+                            {quickTestId === `${a.protocol}/${a.alias_name}` ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Activity className="h-3.5 w-3.5" />
+                            )}
                           </button>
                         </div>
                       )}
