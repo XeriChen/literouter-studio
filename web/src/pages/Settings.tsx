@@ -101,7 +101,7 @@ export default function Settings() {
       <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><KeyRound className="h-3.5 w-3.5" /> 系统配置</div><h1 className="page-title">Settings</h1><p className="page-description">网关运行配置、访问 Token 与备份管理。</p></div></div>
 
       {notice && (
-        <div className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${notice.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300'}`}>
+        <div className={`notice ${notice.ok ? 'notice-success' : 'notice-error'}`}>
           <span>{notice.message}</span>
           <button aria-label="关闭提示" onClick={() => setNotice(null)} className="icon-button ml-auto h-6 w-6">
             <X className="h-3.5 w-3.5" />
@@ -109,7 +109,7 @@ export default function Settings() {
         </div>
       )}
 
-      <Card>
+      <Card className="console-surface shadow-none">
         <CardHeader>
           <CardTitle className="text-base">网关设置</CardTitle>
           <CardDescription>监听地址与端口修改后需重启后端生效；全局超时设为 0 表示不超时</CardDescription>
@@ -148,7 +148,7 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="console-surface shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Token</CardTitle>
           <CardDescription>网关管理 API 与代理入口的统一校验 Token</CardDescription>
@@ -176,7 +176,7 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="console-surface shadow-none">
         <CardHeader>
           <CardTitle className="text-base">备份</CardTitle>
           <CardDescription>导出或导入全部 Provider、模型、设置与 Token</CardDescription>

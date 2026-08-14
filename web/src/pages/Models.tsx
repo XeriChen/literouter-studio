@@ -382,7 +382,7 @@ function RealModelsList() {
               })}
               {!filtered.length && !models.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-32 text-center">
+                  <TableCell colSpan={8} className="h-32 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Box className="h-8 w-8" />
                       <p className="text-sm">{(models.data ?? []).length === 0 ? '还没有模型' : '当前筛选条件下无模型'}</p>
@@ -397,7 +397,7 @@ function RealModelsList() {
               )}
               {models.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
                 </TableRow>
               )}
             </TableBody>
