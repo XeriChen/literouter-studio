@@ -136,7 +136,9 @@ api.get('/providers/:id', (c) => {
   return ok(c, providerOut(p))
 })
 
-const providerPatchSchema = providerSchema.partial()
+const providerPatchSchema = providerSchema.partial().extend({
+  enabled: z.union([z.literal(0), z.literal(1)]).optional(),
+})
 
 api.put('/providers/:id', async (c) => {
   const parsed = providerPatchSchema.safeParse(await c.req.json().catch(() => null))
@@ -152,15 +154,27 @@ api.put('/providers/:id', async (c) => {
     proxy_url: p.proxy_url === undefined ? undefined : p.proxy_url,
     timeout_ms: p.timeout_ms === undefined ? undefined : p.timeout_ms,
     model_filter: p.model_filter === undefined ? undefined : p.model_filter,
+    enabled: p.enabled === undefined ? undefined : p.enabled,
   })
-  const changed = Object.entries(p).filter(([, v]) => v !== undefined)
-  writeAuditLog({
-    resource: 'provider',
-    action: 'update',
-    target: row.name,
-    detail: `更新 Provider ${existing.name}: ${changed.map(([k]) => k).join(', ')}`,
-    status: 200,
-  })
+  const otherKeys = Object.entries(p).filter(([k, v]) => k !== 'enabled' && v !== undefined)
+  if (!otherKeys.length && p.enabled !== undefined && p.enabled !== existing.enabled) {
+    writeAuditLog({
+      resource: 'provider',
+      action: 'update',
+      target: row.name,
+      detail: `${p.enabled ? '启用' : '禁用'} Provider ${row.name}`,
+      status: 200,
+    })
+  } else {
+    const changed = Object.entries(p).filter(([, v]) => v !== undefined)
+    writeAuditLog({
+      resource: 'provider',
+      action: 'update',
+      target: row.name,
+      detail: `更新 Provider ${existing.name}: ${changed.map(([k]) => k).join(', ')}`,
+      status: 200,
+    })
+  }
   return ok(c, providerOut(row))
 })
 

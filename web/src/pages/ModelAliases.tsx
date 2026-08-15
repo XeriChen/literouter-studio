@@ -50,7 +50,7 @@ function TargetSelects({
         <SelectTrigger className="h-7 w-32 text-xs"><SelectValue placeholder="选择 Provider" /></SelectTrigger>
         <SelectContent>
           {protocolProviders.map((p) => (
-            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            <SelectItem key={p.id} value={p.id} disabled={!p.enabled}>{p.name}{p.enabled ? '' : '（已禁用）'}</SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -448,7 +448,7 @@ export default function ModelAliases() {
                 <SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger>
                 <SelectContent>
                   {providersOfProtocol.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    <SelectItem key={p.id} value={p.id} disabled={!p.enabled}>{p.name}{p.enabled ? '' : '（已禁用）'}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

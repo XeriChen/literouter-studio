@@ -87,6 +87,8 @@ function RealModelsList() {
 
   const filtered = useMemo(() => {
     let rows = models.data ?? []
+    // Provider 禁用后其模型不可见（调用侧 503/列表侧隐藏一致）
+    rows = rows.filter((m) => m.provider_enabled === 1)
     if (protocol !== 'all') rows = rows.filter((m) => m.protocol === protocol)
     if (providerId !== 'all') rows = rows.filter((m) => m.provider_id === providerId)
     if (onlyEnabled) rows = rows.filter((m) => m.enabled)
@@ -279,7 +281,7 @@ function RealModelsList() {
             <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部 Provider</SelectItem>
-              {(providers.data ?? []).map((p) => (
+              {(providers.data ?? []).filter((p) => p.enabled === 1).map((p) => (
                 <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
               ))}
             </SelectContent>
@@ -417,7 +419,7 @@ function RealModelsList() {
               <Select value={addForm.provider_id} onValueChange={(v) => setAddForm({ ...addForm, provider_id: v })}>
                 <SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger>
                 <SelectContent>
-                  {(providers.data ?? []).map((p) => (
+                  {(providers.data ?? []).filter((p) => p.enabled === 1).map((p) => (
                     <SelectItem key={p.id} value={p.id}>{p.name} ({p.protocol})</SelectItem>
                   ))}
                 </SelectContent>

@@ -25,10 +25,17 @@ export function listModels(): ModelWithProvider[] {
     .all() as ModelWithProvider[]
 }
 
-/** 代理 GET /v1/models 只暴露映射名（未建映射的模型不可见、不可调用） */
+/** 代理 GET /v1/models 只暴露可用映射名（未建映射不可见；Provider 或目标模型禁用的也不可见、不可调用） */
 export function listAliasNames(protocol: 'openai' | 'anthropic'): string[] {
   return (db
-    .prepare('SELECT alias_name FROM model_aliases WHERE protocol = ? ORDER BY alias_name ASC')
+    .prepare(
+      `SELECT a.alias_name
+       FROM model_aliases a
+       JOIN providers p ON p.id = a.provider_id
+       JOIN provider_models pm ON pm.provider_id = a.provider_id AND pm.model_id = a.model_id
+       WHERE a.protocol = ? AND p.enabled = 1 AND pm.enabled = 1
+       ORDER BY a.alias_name ASC`,
+    )
     .all(protocol) as { alias_name: string }[]).map((r) => r.alias_name)
 }
 

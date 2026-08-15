@@ -41,7 +41,7 @@ export function createProvider(input: {
 }
 
 export function updateProvider(id: string, patch: Partial<ProviderRow>): ProviderRow {
-  const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter'] as const
+  const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled'] as const
   const sets = allowed.filter((k) => patch[k] !== undefined)
   if (sets.length > 0) {
     db.prepare(
