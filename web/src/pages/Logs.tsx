@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Trash2, ScrollText, Settings2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCw, Trash2, ScrollText, Settings2 } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AuditRow, LogRow, Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -102,7 +102,12 @@ function AccessLogsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">模型访问请求记录，共 {total} 条</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm text-muted-foreground">模型访问请求记录，共 {total} 条</p>
+          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="刷新代理访问日志" title="刷新" onClick={() => logs.refetch()} disabled={logs.isFetching}>
+            <RotateCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
         <Button variant="outline" size="sm" onClick={() => { if (window.confirm('确定清空所有代理访问日志？此操作不可撤销。')) clearMutation.mutate() }} disabled={clearMutation.isPending}>
           <Trash2 className="h-4 w-4" /> 清空
         </Button>
@@ -158,7 +163,6 @@ function AccessLogsTab() {
                 <TableHead>模型</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>耗时</TableHead>
-                <TableHead className="pr-6">错误码</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -169,13 +173,12 @@ function AccessLogsTab() {
                   <TableCell className="max-w-[180px] truncate font-mono text-xs">{r.path}</TableCell>
                   <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.model ?? '-'}</TableCell>
                   <TableCell>{statusBadge(r.status)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</TableCell>
-                  <TableCell className="pr-6 font-mono text-xs text-muted-foreground">{r.error_code ?? '-'}</TableCell>
+                  <TableCell className="pr-6 text-xs text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</TableCell>
                 </TableRow>
               ))}
               {!logs.data?.rows.length && !logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-32 text-center">
+                  <TableCell colSpan={6} className="h-32 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <ScrollText className="h-8 w-8" />
                       <p className="text-sm">暂无代理访问日志</p>
@@ -185,7 +188,7 @@ function AccessLogsTab() {
               )}
               {logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -227,7 +230,12 @@ function AuditLogsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">网站配置操作记录，共 {total} 条</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm text-muted-foreground">网站配置操作记录，共 {total} 条</p>
+          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="刷新配置操作日志" title="刷新" onClick={() => auditLogs.refetch()} disabled={auditLogs.isFetching}>
+            <RotateCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
         <Button variant="outline" size="sm" onClick={() => { if (window.confirm('确定清空所有配置操作日志？此操作不可撤销。')) clearMutation.mutate() }} disabled={clearMutation.isPending}>
           <Trash2 className="h-4 w-4" /> 清空
         </Button>

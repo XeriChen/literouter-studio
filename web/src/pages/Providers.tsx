@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Unlock, Wifi, X, ServerOff } from 'lucide-react'
+import { Loader2, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Unlock, Wifi, X, ServerOff, ExternalLink } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
@@ -143,6 +144,17 @@ export default function Providers() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['providers'] }),
   })
 
+  const toggleMutation = useMutation({
+    mutationFn: (p: Provider) =>
+      api(`/api/providers/${p.id}`, { method: 'PUT', body: JSON.stringify({ enabled: p.enabled ? 0 : 1 }) }),
+    onSuccess: () => {
+      // models / aliases 内嵌 provider_enabled，需一并失效
+      qc.invalidateQueries({ queryKey: ['providers'] })
+      qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['aliases'] })
+    },
+  })
+
   const testMutation = useMutation({
     mutationFn: (id: string) => api<{ ok: boolean; status?: number; message: string }>(`/api/providers/${id}/test`, { method: 'POST' }),
     onSuccess: (data) => {
@@ -233,9 +245,25 @@ export default function Providers() {
                   <TableCell>
                     <Badge variant={p.protocol === 'openai' ? 'outline' : 'secondary'}>{p.protocol}</Badge>
                   </TableCell>
-                  <TableCell className="max-w-[240px] truncate font-mono text-xs">{p.base_url}</TableCell>
+                  <TableCell className="max-w-[240px]">
+                    <a
+                      href={p.base_url.startsWith('http://') || p.base_url.startsWith('https://') ? p.base_url : `https://${p.base_url}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline"
+                      title={p.base_url}
+                    >
+                      <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{p.base_url}</span>
+                    </a>
+                  </TableCell>
                   <TableCell>
-                    <Badge variant={p.enabled ? 'success' : 'warning'}>{p.enabled ? '启用' : '禁用'}</Badge>
+                    <Switch
+                      checked={!!p.enabled}
+                      disabled={toggleMutation.isPending}
+                      onCheckedChange={() => toggleMutation.mutate(p)}
+                      aria-label={`切换 ${p.name} 启用状态`}
+                    />
                   </TableCell>
                   <TableCell className="pr-6">
                     <div className="flex items-center justify-end gap-1">

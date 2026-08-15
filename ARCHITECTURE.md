@@ -69,7 +69,7 @@ data/gateway.db    运行时自动创建（不入库）
 客户端请求到网关时，`model` 字段的值是**映射名**，不是真实模型名。
 
 - 映射名按 `(protocol, alias_name)` 唯一，两协议各自独立命名空间。
-- `GET /openai/v1/models`（及 anthropic 对应入口）只返回当前协议的映射名列表。
+- `GET /openai/v1/models`（及 anthropic 对应入口）只返回当前协议中可用的映射名：需 Provider 已启用且目标模型已启用才可见；不可用的对客户端隐藏（调用时仍按现有 503/404 处理）。
 - 未建立映射的模型（或直接写真实模型名）→ `404 model_not_found`。
 - 映射指向的 Provider 被禁用 → `503 provider_disabled`；目标模型被禁用 → `404`。
 - 自动建映射：导入模型（`import-models`）与手动添加模型时自动生成同名映射；已存在同名映射则不覆盖（保留用户自定义映射）—— `INSERT OR IGNORE`。
