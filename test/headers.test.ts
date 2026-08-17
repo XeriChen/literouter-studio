@@ -7,6 +7,7 @@ const provider: ProviderRow = {
   id: 'provider-id',
   name: 'Test Provider',
   protocol: 'openai',
+  group_id: null,
   base_url: 'https://upstream.example/',
   auth_json: JSON.stringify({ api_key: 'upstream-key' }),
   custom_headers_json: JSON.stringify({

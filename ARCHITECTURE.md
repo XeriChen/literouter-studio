@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-17（已与 schema v5、映射分组/多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 更新时间：2026-08-17（已与 schema v6、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -39,7 +39,7 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  db/index.ts      SQLite 初始化 + 当前 schema v5 基线（开发期允许删库重建）
+  db/index.ts      SQLite 初始化 + 当前 schema v6 基线（开发期允许删库重建）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher
@@ -50,7 +50,7 @@ src/
   types/           行类型
 web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
-  pages/           Login / Home / Providers / Models（映射 + 真实模型）/ Logs / Settings / Playground
+  pages/           Login / Home / Providers（分组管理）/ Models（映射 + 真实模型）/ Logs / Settings / Playground
   pages/ModelAliases.tsx  分组列表、映射开关、候选优先级/当前目标与快速测活
   components/      ChatUI（SSE 双协议解析）等
   lib/sse.ts       跨网络 chunk 的 OpenAI / Anthropic SSE 增量解析器
@@ -58,11 +58,12 @@ test/              Node 单元测试与 test/e2e/ Playwright 冒烟测试
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v5）
+## 4. 数据模型（schema v6）
 
 | 表 | 说明 |
 | :--- | :--- |
-| `providers` | 上游 Provider：protocol(openai/anthropic)、base_url、auth_json、custom_headers_json、proxy_url、timeout_ms、model_filter、enabled |
+| `provider_groups` | Provider 管理分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
+| `providers` | 上游 Provider：可选归组，protocol(openai/anthropic)、base_url、auth_json、custom_headers_json、proxy_url、timeout_ms、model_filter、enabled |
 | `provider_models` | 真实模型：PK(provider_id, model_id)，display_name、enabled、source(fetched/manual)、fetched_at |
 | `model_alias_groups` | 映射分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
 | `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关 |
@@ -71,9 +72,11 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时 |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-当前处于无正式用户的开发阶段，schema v5 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v4 运行时迁移路径。正式部署前需重新确认迁移与兼容策略。
+当前处于无正式用户的开发阶段，schema v6 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径。正式部署前需重新确认迁移与兼容策略。
 
 ## 5. 核心概念：模型映射（路由键）
+
+Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组不参与代理查询和请求转发；删除分组只把成员移到“未分组”。批量启用会启用组内当前禁用的 Provider，批量删除会删除组内 Provider 及其模型/候选目标并保留空组，随后按既有规则修复映射 active 目标。
 
 客户端请求到网关时，`model` 字段的值是**映射名**，不是真实模型名。
 
@@ -93,7 +96,9 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 
 | 端点 | 用途 |
 | :--- | :--- |
-| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（PUT 为部分更新，protocol 不可修改） |
+| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改） |
+| `GET/POST/PATCH/DELETE /provider-groups` | Provider 分组 CRUD；删除组只解除成员归属 |
+| `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-delete` | 原子批量启用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
 | `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库 |
 | `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
@@ -121,9 +126,9 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | 400 | `invalid_test_prompt` | 测活提示词过短或命中黑名单 |
 | 400 | `invalid_backup` | 备份结构通过请求校验，但内部引用、协议或候选关系不合法 |
 | 401 | `invalid_api_key` | Token 校验失败 |
-| 404 | `model_not_found` / `provider_not_found` / `alias_not_found` | 不存在（含模型未启用） |
+| 404 | `model_not_found` / `provider_not_found` / `provider_group_not_found` / `alias_not_found` | 不存在（含模型未启用） |
 | 404 | `alias_group_not_found` / `alias_target_not_found` | 映射分组或候选目标不存在 |
-| 400 | `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议映射名/分组名或候选目标重复 |
+| 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议 Provider 分组名、映射名/分组名或候选目标重复 |
 | 404 | `not_found` | `/api` 未匹配或 OpenAI 代理路径不在 `/openai/v1/*` |
 | 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
@@ -176,6 +181,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 ## 7. 前端要点
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
+- Providers 页按协议和自定义分组折叠展示，支持组内批量启用/删除；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。
 - Models 页两个 tab：**模型映射**（按协议折叠分组、映射启用开关、候选展开管理/拖拽优先级、当前目标切换与快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
 - Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
@@ -193,4 +199,4 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 6. **请求体原样保留的边界**：只有合法 JSON object 且顶层存在非空字符串 `model` 的代理请求可以路由；网关不会尝试修复或重写其他 JSON 结构，超过 50 MiB 的请求在读取阶段拒绝。
 7. **dispatcher 生命周期**：Provider 的 `proxy_url` 或 `timeout_ms` 变化、Provider 删除及进程关闭都会清空 dispatcher 缓存；缓存键为 `(proxy_url, timeout_ms)`，`bodyTimeout` 永远为 0。
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
-9. **备份恢复是配置全量替换**：导入前先校验 Provider、真实模型、分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再重建分组、Provider、模型、映射与候选。备份不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
+9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
