@@ -19,14 +19,25 @@ const backupSchema = z.object({
       source: z.enum(['fetched', 'manual']).default('manual'),
     }),
   ).default([]),
-  aliases: z.array(
+  groups: z.array(
     z.object({
       protocol: z.enum(['openai', 'anthropic']),
-      alias_name: nonEmptyText,
-      provider_id: nonEmptyText,
-      model_id: nonEmptyText,
+      id: nonEmptyText,
+      name: nonEmptyText,
     }),
   ).default([]),
+  aliases: z.array(z.object({
+    protocol: z.enum(['openai', 'anthropic']),
+    alias_name: nonEmptyText,
+    group_id: nonEmptyText.nullable().default(null),
+    enabled: z.union([z.literal(0), z.literal(1)]).default(1),
+    targets: z.array(z.object({
+      provider_id: nonEmptyText,
+      model_id: nonEmptyText,
+      priority: z.number().int().min(0).default(0),
+      active: z.union([z.literal(0), z.literal(1)]).default(0),
+    })),
+  })).default([]),
 })
 
 export function registerBackupRoutes(api: Hono<Env>): void {
@@ -35,7 +46,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
     writeAuditLog({
       resource: 'backup',
       action: 'export',
-      detail: `导出备份: ${backup.providers.length} 个 Provider, ${backup.models.length} 个模型, ${backup.aliases.length} 个映射`,
+        detail: `导出备份: ${backup.providers.length} 个 Provider, ${backup.models.length} 个模型, ${backup.aliases.length} 个映射, ${backup.groups.length} 个分组`,
       status: 200,
     })
     return ok(c, backup)
@@ -66,12 +77,13 @@ export function registerBackupRoutes(api: Hono<Env>): void {
           updated_at: now,
         })),
         models: data.models.map((model) => ({ ...model, display_name: model.display_name ?? null })),
+        groups: data.groups,
         aliases: data.aliases,
       })
       writeAuditLog({
         resource: 'backup',
         action: 'import',
-        detail: `导入备份: ${data.providers.length} 个 Provider, ${data.models.length} 个模型, ${data.aliases.length} 个映射`,
+        detail: `导入备份: ${data.providers.length} 个 Provider, ${data.models.length} 个模型, ${data.aliases.length} 个映射, ${data.groups.length} 个分组`,
         status: 200,
       })
       return ok(c, { token: getAdminToken() })

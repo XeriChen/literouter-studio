@@ -5,6 +5,7 @@ import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
+import { importModels as importModelsForProvider, repairAliasTargetsInTransaction } from './models'
 import type { ProviderProtocol, ProviderRow } from '../types'
 
 export function listProviders(): ProviderRow[] {
@@ -37,11 +38,14 @@ export function createProvider(input: {
 export function updateProvider(id: string, patch: Partial<ProviderRow>): ProviderRow {
   const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled'] as const
   const sets = allowed.filter((k) => patch[k] !== undefined)
-  if (sets.length > 0) {
-    db.prepare(
-      `UPDATE providers SET ${sets.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
-    ).run(...sets.map((k) => patch[k]), new Date().toISOString(), id)
-  }
+  db.transaction(() => {
+    if (sets.length > 0) {
+      db.prepare(
+        `UPDATE providers SET ${sets.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
+      ).run(...sets.map((k) => patch[k]), new Date().toISOString(), id)
+    }
+    if (sets.includes('enabled')) repairAliasTargetsInTransaction()
+  })()
   // proxy_url / timeout_ms 变更后旧 dispatcher 不再匹配，清空缓存让下次请求重建
   if (sets.includes('proxy_url') || sets.includes('timeout_ms')) {
     invalidateAllDispatchers()
@@ -50,7 +54,10 @@ export function updateProvider(id: string, patch: Partial<ProviderRow>): Provide
 }
 
 export function deleteProvider(id: string): void {
-  db.prepare('DELETE FROM providers WHERE id = ?').run(id)
+  db.transaction(() => {
+    db.prepare('DELETE FROM providers WHERE id = ?').run(id)
+    repairAliasTargetsInTransaction()
+  })()
   invalidateAllDispatchers()
 }
 
@@ -104,34 +111,9 @@ export async function listUpstreamModels(providerId: string): Promise<string[]> 
   }
 }
 
-/** 将选中的模型 ID 写入数据库。新增 enabled=1；已存在的仅刷新 fetched_at；同时自动建立同名映射（已有不覆盖） */
+/** 将选中的模型 ID 写入数据库并维护同名映射候选。 */
 export function importModels(providerId: string, modelIds: string[]): { added: number; updated: number } {
-  const now = new Date().toISOString()
-  const provider = getProvider(providerId)
-  if (!provider) throw new Error('provider not found')
-  const upsert = db.prepare(
-    `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, fetched_at, created_at, updated_at)
-     VALUES (?, ?, NULL, 1, 'fetched', ?, ?, ?)
-     ON CONFLICT(provider_id, model_id) DO UPDATE SET enabled = 1, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
-  )
-  const insertAlias = db.prepare(
-    `INSERT OR IGNORE INTO model_aliases (protocol, alias_name, provider_id, model_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-  const tx = db.transaction((ids: string[]) => {
-    let added = 0
-    let updated = 0
-    const existsStmt = db.prepare('SELECT 1 FROM provider_models WHERE provider_id = ? AND model_id = ?')
-    for (const id of ids) {
-      const existed = existsStmt.get(providerId, id) !== undefined
-      upsert.run(providerId, id, now, now, now)
-      insertAlias.run(provider.protocol, id, providerId, id, now, now)
-      if (existed) updated++
-      else added++
-    }
-    return { added, updated }
-  })
-  return tx([...new Set(modelIds)])
+  return importModelsForProvider(providerId, modelIds)
 }
 
 /** 网络连通性测试：401/403 视为认证失败；其余 HTTP 响应表示网络可达，网络异常/超时为失败。 */

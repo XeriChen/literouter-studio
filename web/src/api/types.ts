@@ -45,17 +45,47 @@ export interface ProviderModel {
   provider_enabled: number
 }
 
-export interface ModelAlias {
+export interface AliasGroup {
+  protocol: 'openai' | 'anthropic'
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+  alias_count: number
+  enabled_count: number
+}
+
+export interface AliasTarget {
+  id: number
   protocol: 'openai' | 'anthropic'
   alias_name: string
   provider_id: string
   model_id: string
+  priority: number
+  active: number
   created_at: string
   updated_at: string
   provider_name: string
   provider_protocol: 'openai' | 'anthropic'
   provider_enabled: number
   target_enabled: number
+}
+
+export interface ModelAlias {
+  protocol: 'openai' | 'anthropic'
+  alias_name: string
+  group_id: string | null
+  group_name: string | null
+  enabled: number
+  provider_id: string | null
+  model_id: string | null
+  created_at: string
+  updated_at: string
+  provider_name: string | null
+  provider_protocol: 'openai' | 'anthropic' | null
+  provider_enabled: number
+  target_enabled: number
+  targets: AliasTarget[]
 }
 
 export interface LogRow {
@@ -106,10 +136,21 @@ export interface BackupData {
     enabled: number
     source: 'fetched' | 'manual'
   }>
+  groups: Array<{
+    protocol: 'openai' | 'anthropic'
+    id: string
+    name: string
+  }>
   aliases: Array<{
     protocol: 'openai' | 'anthropic'
     alias_name: string
-    provider_id: string
-    model_id: string
+    group_id: string | null
+    enabled: number
+    targets: Array<{
+      provider_id: string
+      model_id: string
+      priority: number
+      active: number
+    }>
   }>
 }

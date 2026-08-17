@@ -109,7 +109,7 @@ function RealModelsList() {
         method: 'PATCH',
         body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id, enabled: m.enabled ? 0 : 1 }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); qc.invalidateQueries({ queryKey: ['aliases'] }) },
   })
 
   const addMutation = useMutation({
@@ -122,6 +122,7 @@ function RealModelsList() {
       setAddOpen(false)
       setAddForm({ provider_id: '', model_id: '', display_name: '' })
       qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['aliases'] })
     },
   })
 
@@ -161,6 +162,7 @@ function RealModelsList() {
     onSuccess: () => {
       setSelected(new Set())
       qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['aliases'] })
       addToast(true, '批量删除完成', 0)
     },
   })
@@ -177,6 +179,7 @@ function RealModelsList() {
     onSuccess: (_data, { enabled }) => {
       setSelected(new Set())
       qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['aliases'] })
       addToast(true, enabled ? '批量启用完成' : '批量禁用完成', 0)
     },
   })

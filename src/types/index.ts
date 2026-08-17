@@ -34,11 +34,31 @@ export interface ProviderModelRow {
   updated_at: string
 }
 
+export interface ModelAliasGroupRow {
+  protocol: ProviderProtocol
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
 export interface ModelAliasRow {
+  protocol: ProviderProtocol
+  alias_name: string
+  group_id: string | null
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ModelAliasTargetRow {
+  id: number
   protocol: ProviderProtocol
   alias_name: string
   provider_id: string
   model_id: string
+  priority: number
+  active: number
   created_at: string
   updated_at: string
 }

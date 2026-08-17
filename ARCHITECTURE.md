@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-17（已与 schema v4、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 更新时间：2026-08-17（已与 schema v5、映射分组/多候选目标、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -39,7 +39,7 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  db/index.ts      SQLite 初始化 + 版本化迁移（当前 schema v4）
+  db/index.ts      SQLite 初始化 + 当前 schema v5 基线（开发期允许删库重建）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher
@@ -51,36 +51,40 @@ src/
 web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
   pages/           Login / Home / Providers / Models（映射 + 真实模型）/ Logs / Settings / Playground
-  pages/ModelAliases.tsx  映射列表、重命名、目标热切换与快速测活
+  pages/ModelAliases.tsx  分组列表、映射开关、候选优先级/当前目标与快速测活
   components/      ChatUI（SSE 双协议解析）等
   lib/sse.ts       跨网络 chunk 的 OpenAI / Anthropic SSE 增量解析器
 test/              Node 单元测试与 test/e2e/ Playwright 冒烟测试
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v4）
+## 4. 数据模型（schema v5）
 
 | 表 | 说明 |
 | :--- | :--- |
 | `providers` | 上游 Provider：protocol(openai/anthropic)、base_url、auth_json、custom_headers_json、proxy_url、timeout_ms、model_filter、enabled |
 | `provider_models` | 真实模型：PK(provider_id, model_id)，display_name、enabled、source(fetched/manual)、fetched_at |
-| `model_aliases` | **映射层**：PK(protocol, alias_name)，指向 (provider_id, model_id)；外键级联删除 |
+| `model_alias_groups` | 映射分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
+| `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关 |
+| `model_alias_targets` | 映射候选：指向真实模型，带 priority/active；每个映射最多一个 active |
 | `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days |
 | `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时 |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-迁移方式：启动时先执行 schema v1 基线，再以 `schema_version` 的最大版本号为准依次执行 v2（`model_filter`）、v3（`model_aliases`）、v4（`audit_logs`）；每段迁移在独立事务内完成。
+当前处于无正式用户的开发阶段，schema v5 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v4 运行时迁移路径。正式部署前需重新确认迁移与兼容策略。
 
 ## 5. 核心概念：模型映射（路由键）
 
 客户端请求到网关时，`model` 字段的值是**映射名**，不是真实模型名。
 
-- 映射名按 `(protocol, alias_name)` 唯一，两协议各自独立命名空间。
-- `GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回当前协议中可用的映射名：需 Provider 已启用且目标模型已启用才可见；不可用的对客户端隐藏（调用时仍按现有 503/404 处理）。
+- 映射名按 `(protocol, alias_name)` 唯一，两协议各自独立命名空间；分组也按协议隔离，创建/归组本身不改变调用。
+- 映射可绑定多个真实模型候选，`priority` 越小越优先，但请求只读取唯一 `active=1` 目标；严禁按请求轮询、随机或故障转移。
+- 映射有独立 `enabled` 开关；`GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名。
 - 未建立映射的模型（或直接写真实模型名）→ `404 model_not_found`。
 - 映射指向的 Provider 被禁用 → `503 provider_disabled`；目标模型被禁用 → `404`。
-- 自动建映射：导入模型（`import-models`）与手动添加模型时自动生成同名映射；已存在同名映射则不覆盖（保留用户自定义映射）—— `INSERT OR IGNORE`。导入会启用新模型，也会重新启用已存在的目标模型。
-- 删除真实模型/Provider 时映射随外键级联删除。
+- 自动建映射：启用的 Provider 新增/导入模型时自动生成同名映射；已有同名映射时只追加 inactive 候选，不切换 active。导入会启用新模型，也会重新启用已存在的目标模型。
+- 删除/禁用 active 真实模型或 Provider 时，在配置事务内按 priority 选择首个可用候选；重新启用旧目标不回切。没有可用候选则映射保留但不可调用。
+- 删除分组会级联删除组内映射；“清空组内映射”批量操作可保留空分组。
 - 手动添加模型默认 enabled=1（开箱即用）。
 
 ### 管理 API（前缀 `/api`，请求体传参，不用路径参数 —— model_id 可能含 `/`）
@@ -94,7 +98,10 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库 |
 | `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
 | `GET/POST/PATCH/DELETE /models` | 真实模型 CRUD（body：provider_id+model_id） |
-| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；写操作参数均在 body，新增/更新校验协议与已启用目标 |
+| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名及当前目标兼容字段 |
+| `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
+| `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
+| `POST/PATCH/DELETE /alias-targets`、`POST /alias-targets/reorder` | 候选新增、设为 active、删除与 priority 重排 |
 | `POST /models/test` | 测活：body `{provider_id, model_id, prompt}` |
 | `GET/PUT /settings`、`GET /me`、`POST /token/reset` | 配置、Token 查看/重置 |
 | `GET/POST /backup` | 导出/导入（含明文 Token 与 Key，强警示，导入后前端强制登出） |
@@ -126,7 +133,7 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 
 ```text
 POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 model
-     → model 查映射(model_aliases) → 找到 → 校验 provider.enabled
+     → model 查已启用映射 + 唯一 active 候选 → 找到 → 校验 provider.enabled
      → 构造上游 URL(保留 query string, base_url 去尾部 '/')
      → undici 请求(dispatcher 按 proxy_url+timeout 缓存)
      → 收到响应头 → 立即写日志(latency = 收请求→响应头)
@@ -165,9 +172,9 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 ## 7. 前端要点
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
-- Models 页两个 tab：**模型映射**（复制、新建、删除、重命名、目标热切换、快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；映射写入时目标必须启用且协议一致。
+- Models 页两个 tab：**模型映射**（按协议折叠分组、映射启用开关、候选展开管理/拖拽优先级、当前目标切换与快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
-- Playground：选协议 → 选映射 → ChatUI 发送时 `model` 字段 = 映射名。
+- Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
 - `ChatUI` 使用 `SseDeltaParser` 处理任意网络 chunk 边界、CRLF、多个 `data:` 行和没有尾部分隔符的最终事件；按 `protocol + alias` 将对话持久化到 `localStorage`。
 - Settings 页可查看/复制/重置 Token；重置后当前前端会用新 Token 续期，备份导入则清除本地 Token 并强制回登录页。
 - shadcn 组件新增用 `pnpm dlx shadcn@latest add ...`；`@/*` 别名指向 `web/src/*`。

@@ -6,6 +6,8 @@ export type AuditResource =
   | 'provider'
   | 'model'
   | 'alias'
+  | 'alias_group'
+  | 'alias_target'
   | 'settings'
   | 'token'
   | 'backup'
@@ -23,6 +25,10 @@ export type AuditAction =
   | 'export'
   | 'reset'
   | 'clear'
+  | 'batch_enable'
+  | 'batch_delete'
+  | 'activate'
+  | 'reorder'
 
 export interface AuditInput {
   resource: AuditResource

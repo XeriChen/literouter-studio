@@ -42,20 +42,20 @@
 | :--- | :--- |
 | `src/server.ts` | 入口；监听配置按数据库 settings > env > 默认值解析，启动时清日志并处理优雅关闭 |
 | `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
-| `src/db/index.ts` | SQLite 初始化：WAL + 外键，schema v1 基线 + v2–v4 版本化迁移，settings 读写助手 |
+| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v5 基线（开发期可删库重建），settings 读写助手 |
 | `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
 | `src/proxy/` | 请求体限流/定点 model 替换、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存 |
 | `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
 | `src/routes/` | 管理 API 装配与领域路由、代理入口流水线 |
 | `src/services/` | 业务层：providers / models / logs（代理访问日志）/ audit（配置操作日志）/ settings / backup / liveness |
-| `src/types/` | 行类型：Provider / ProviderModel / ModelAlias / Log / Audit / Env |
+| `src/types/` | 行类型：Provider / ProviderModel / ModelAliasGroup / ModelAlias / ModelAliasTarget / Log / Audit / Env |
 | `web/src/api/` | 前端 API client，Token 存 `localStorage['llm_gateway_token']`，401 自动登出回 `/login` |
 | `web/src/pages/` | Login / Home / Providers / Models（映射 + 真实模型）/ Logs / Settings / Playground |
 
 ## 6. 硬性约定
 
 - **模型管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）。
-- **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；新增真实模型/导入时自动建同名映射（`INSERT OR IGNORE`，已有同名映射不覆盖）；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
+- **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - OpenAI 代理入口严格限定为 `/openai/v1/*`；Anthropic 使用 `/anthropic/v1/*`。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
 - 新增 shadcn/ui 组件时用 `pnpm dlx shadcn@latest add ...`，配置见 `components.json`。
@@ -72,7 +72,7 @@
 ## 8. 代理实现陷阱（提交前逐项核对）
 
 - [ ] undici `bodyTimeout` 显式设为 `0`（防流式长连接被掐断）；`connectTimeout`/`headersTimeout` = timeout；timeout 为 0 时三者都为 0
-- [ ] 映射路由走 `model_aliases`（协议隔离），模型未启用 404 / Provider 禁用 503；未建映射 404
+- [ ] 映射路由走 `model_aliases.enabled + model_alias_targets.active`（协议隔离），请求期绝不尝试其他候选；模型未启用 404 / Provider 禁用 503；未建映射 404
 - [ ] `custom_headers` 禁止覆盖 `authorization` / `x-api-key` / `api-key` / `accept-encoding`
 - [ ] 透传保留了客户端 Query String；`base_url` 拼接前去除尾部 `/`
 - [ ] 客户端断连（`c.req.raw.signal`）立即 abort 上游请求
@@ -81,7 +81,7 @@
 - [ ] `accept-encoding: identity` 防止上游压缩破坏 SSE
 - [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
 - [ ] 代理请求须用 undici v8 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
-- [ ] `GET */v1/models` 只返回当前协议中 Provider 与目标模型均启用的映射名；其他非 POST 代理请求返回 405
+- [ ] `GET */v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名；其他非 POST 代理请求返回 405
 - [ ] 模型测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时
 - [ ] Provider 连通性测试：401/403 判认证失败，其他 HTTP 响应判网络可达；配置超时为 0 时仍有 30s AbortSignal 兜底
 
@@ -105,3 +105,9 @@
 - `pnpm check` 通过；涉及浏览器行为或生产托管时再运行 `pnpm test:e2e`
 - 第 8 节代理陷阱清单逐项核对通过
 - 行为与 `ARCHITECTURE.md` 中 API、错误码、边界行为一致
+
+## 11. 开发阶段数据策略（当前有效）
+
+- 当前仍处于开发阶段、没有正式用户数据；允许破坏性 schema 变更、删除 `data/gateway.db` 后重建。
+- 不为历史 v1–v4 数据库保留运行时迁移兼容路径；当前 schema 直接作为全新基线维护。
+- 备份格式也以当前开发版为准，不需要兼容正式部署前的旧备份；若未来进入正式部署，由用户另行确认迁移与兼容策略。

@@ -9,7 +9,11 @@ export const db = new Database(path.join(dataDir, 'gateway.db'))
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
-const SCHEMA_V1 = `
+/**
+ * 开发阶段当前 schema 基线（v5）。旧数据库允许直接删除 data/gateway.db 后重建，
+ * 因此这里不保留历史 v1-v4 迁移分支。
+ */
+db.exec(`
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
@@ -23,6 +27,7 @@ CREATE TABLE IF NOT EXISTS providers (
   custom_headers_json TEXT NOT NULL DEFAULT '{}',
   proxy_url TEXT,
   timeout_ms INTEGER,
+  model_filter TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -60,62 +65,62 @@ CREATE TABLE IF NOT EXISTS logs (
   error_code TEXT
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  target TEXT,
+  action TEXT NOT NULL,
+  detail TEXT,
+  status INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS model_alias_groups (
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (protocol, id),
+  UNIQUE (protocol, name)
+);
+
+CREATE TABLE IF NOT EXISTS model_aliases (
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  alias_name TEXT NOT NULL,
+  group_id TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (protocol, alias_name),
+  FOREIGN KEY (protocol, group_id) REFERENCES model_alias_groups(protocol, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS model_alias_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  alias_name TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0),
+  active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (protocol, alias_name, provider_id, model_id),
+  FOREIGN KEY (protocol, alias_name) REFERENCES model_aliases(protocol, alias_name) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (provider_id, model_id) REFERENCES provider_models(provider_id, model_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_models_model_id_protocol ON provider_models(model_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
-`
-
-db.exec(SCHEMA_V1)
-db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (1)').run()
-
-function migrate(version: number, sql: string): void {
-  const currentVersion = (
-    db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  ).version
-  if (currentVersion >= version) return
-
-  db.transaction(() => {
-    db.exec(sql)
-    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version)
-  })()
-}
-
-// v2: model_filter column for provider-level model prefix filtering
-migrate(2, 'ALTER TABLE providers ADD COLUMN model_filter TEXT')
-
-// v3: model_aliases 客户端可见的模型名映射层（映射名 -> 真实模型），按协议隔离
-migrate(3, `
-  CREATE TABLE IF NOT EXISTS model_aliases (
-    protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
-    alias_name TEXT NOT NULL,
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (protocol, alias_name),
-    FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE,
-    FOREIGN KEY (provider_id, model_id) REFERENCES provider_models(provider_id, model_id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_aliases_target ON model_aliases(provider_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alias_targets_priority ON model_alias_targets(protocol, alias_name, priority, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_active_target ON model_alias_targets(protocol, alias_name) WHERE active = 1;
 `)
-
-// v4: audit_logs 网站配置操作日志（管理 API 增删改/测活/备份等），与代理访问日志 logs 分离
-migrate(4, `
-  CREATE TABLE IF NOT EXISTS audit_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    resource TEXT NOT NULL,
-    target TEXT,
-    action TEXT NOT NULL,
-    detail TEXT,
-    status INTEGER
-  );
-  CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
-`)
+db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (5)').run()
 
 export function getSetting(key: string): string | null {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
   return row?.value ?? null
 }
 

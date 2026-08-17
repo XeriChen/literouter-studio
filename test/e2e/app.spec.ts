@@ -45,3 +45,18 @@ test('authenticates and renders the dashboard', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Providers' })).toBeVisible()
   expect(browserErrors).toEqual([])
 })
+
+test('renders grouped aliases and candidate controls', async ({ page }) => {
+  test.skip(!process.env.E2E_GATEWAY_TOKEN, 'set E2E_GATEWAY_TOKEN to run the authenticated smoke test')
+
+  await page.goto('/login')
+  await page.getByPlaceholder('输入 gateway token').fill(process.env.E2E_GATEWAY_TOKEN!)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+  await page.goto('/models')
+
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /新建分组/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /新建映射/ })).toBeVisible()
+  await expect(page.getByText('未分组').first()).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '候选' }).first()).toBeVisible()
+})

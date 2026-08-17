@@ -16,6 +16,8 @@ const RESOURCE_LABELS: Record<string, string> = {
   provider: 'Provider',
   model: '模型',
   alias: '映射',
+  alias_group: '映射分组',
+  alias_target: '映射候选',
   settings: '设置',
   token: '令牌',
   backup: '备份',
@@ -34,6 +36,10 @@ const ACTION_LABELS: Record<string, string> = {
   export: '导出',
   reset: '重置',
   clear: '清空',
+  batch_enable: '批量启用',
+  batch_delete: '批量删除',
+  activate: '设为当前',
+  reorder: '重排优先级',
 }
 
 function statusBadge(status: number | null) {

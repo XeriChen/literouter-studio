@@ -91,7 +91,33 @@ export const aliasRefSchema = z.object({
 export const aliasSchema = aliasRefSchema.extend({
   provider_id: nonEmptyText,
   model_id: nonEmptyText,
+  group_id: nonEmptyText.nullable().optional(),
+  enabled: z.union([z.literal(0), z.literal(1)]).optional(),
+})
+
+export const aliasPatchSchema = aliasRefSchema.extend({
   new_alias_name: nonEmptyText.optional(),
+  group_id: nonEmptyText.nullable().optional(),
+  enabled: z.union([z.literal(0), z.literal(1)]).optional(),
+  provider_id: nonEmptyText.optional(),
+  model_id: nonEmptyText.optional(),
+}).refine(
+  (value) => value.new_alias_name !== undefined || value.group_id !== undefined || value.enabled !== undefined
+    || (value.provider_id !== undefined && value.model_id !== undefined),
+  'alias patch cannot be empty',
+).refine(
+  (value) => (value.provider_id === undefined) === (value.model_id === undefined),
+  'provider_id and model_id must be provided together',
+)
+
+export const aliasGroupRefSchema = z.object({
+  protocol: z.enum(['openai', 'anthropic']),
+  group_id: nonEmptyText,
+})
+
+export const aliasTargetRefSchema = aliasRefSchema.extend({
+  provider_id: nonEmptyText,
+  model_id: nonEmptyText,
 })
 
 export function providerOut(provider: ProviderRow) {
