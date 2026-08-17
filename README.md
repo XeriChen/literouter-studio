@@ -17,7 +17,7 @@
 - 模型管理：手动添加或批量导入、启用/禁用、模型测活、批量操作
 - 模型映射：按协议分组、独立启用开关、多个候选目标与手动优先级；每次请求只使用唯一 active 目标
 - 双轨日志：代理访问日志与配置操作审计日志，支持分页、筛选、刷新和清空
-- 配置与备份：监听地址、超时、日志保留、Token 管理，以及全量导出/导入
+- 配置与备份：监听地址、超时、日志保留、Token 管理，以及配置数据的全量导出/导入
 - Playground：直接调用真实网关入口，解析两种协议的 SSE，并按协议与映射名保存本地会话
 
 ## 技术栈
@@ -86,7 +86,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 
 - `data/gateway.db` 使用 SQLite WAL 与外键约束，运行时自动创建且已被 Git 忽略。
 - 代理日志的 `latency_ms` 是收到上游响应头的首包耗时，不是完整流式响应耗时。
-- 备份包含 Provider、真实模型、映射分组、候选目标/优先级、设置、网关 Token 和明文上游 API Key。导入会全量覆盖这些数据，并使前端退出登录；之后须使用备份中的 Token 登录。
+- 备份包含 Provider、真实模型、映射分组、全部映射（含未分组映射）、候选目标/优先级、设置、网关 Token 和明文上游 API Key，不包含代理访问日志或配置操作日志。导入会先校验引用与协议关系，再在单个事务内全量替换这些配置数据；既有日志会保留，前端会退出登录，之后须使用备份中的 Token 登录。
 
 ## 目录结构
 
@@ -121,15 +121,15 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 | `pnpm dev:web` | 仅前端（Vite，默认 5173） |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test` | Node 单元测试 |
-| `pnpm test:e2e` | Playwright 浏览器测试；先构建 `web/dist`，认证用例需 `E2E_GATEWAY_TOKEN` |
+| `pnpm test:e2e` | Playwright 浏览器测试；先构建 `web/dist`，命令会启动 `pnpm start`，认证用例需 `E2E_GATEWAY_TOKEN`（未提供时跳过） |
 | `pnpm check` | 类型检查、单元测试与前端生产构建 |
 | `pnpm build:web` | 构建前端到 `web/dist` |
 | `pnpm start` | 生产模式运行 API、代理与前端静态站点 |
 
 ## 设计文档
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md)：唯一权威设计指南，包含数据模型、API、代理边界和已知权衡。
-- [`AGENTS.md`](AGENTS.md)：实现约定、红线、提交前检查清单和错误码速查。
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)：唯一权威设计指南，包含数据模型、API、代理与备份边界和已知权衡。
+- [`AGENTS.md`](AGENTS.md)：面向 AI 助手的实现约定、红线、提交前检查清单和错误码速查。
 
 ## License
 

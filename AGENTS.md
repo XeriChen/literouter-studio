@@ -5,6 +5,7 @@
 ## 1. 权威设计文档
 
 - `ARCHITECTURE.md` 是**唯一权威设计指南**，实现必须以其为准（架构、数据模型、代理管线、红线、已知陷阱）。
+- `README.md` 面向部署与使用者，`AGENTS.md` 面向参与开发的 AI 助手；实现行为变化时先更新 `ARCHITECTURE.md`，再同步另外两份文档中受影响的说明。
 - 遇到文档未覆盖的细节时，遵循核心原则推断：**最小可用、原生透传、不修改请求体**。
 
 ## 2. 红线（绝对不可违背）
@@ -54,7 +55,7 @@
 
 ## 6. 硬性约定
 
-- **模型管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）。
+- **凡需指定真实模型的管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）；`GET /api/models` 仅列出模型，不需要 body。
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - OpenAI 代理入口严格限定为 `/openai/v1/*`；Anthropic 使用 `/anthropic/v1/*`。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
@@ -65,7 +66,7 @@
 - `data/gateway.db` 不入库（.gitignore），按进程当前工作目录解析并在运行时自动创建。
 - `admin_token` 存在 `settings.admin_token`，首次启动自动生成 UUID；管理 API 与代理入口统一校验。
 - Token 提取优先级：`Authorization: Bearer` > `x-api-key` > `api-key`。
-- 备份文件含明文 API Key 与网关 Token；导出/导入均要警示用户。导入成功后前端强制登出并提示用备份内 Token 重新登录。
+- 备份文件含明文 API Key 与网关 Token，但不含代理访问日志和配置操作日志；导出/导入均要警示用户。导入会先校验数据图，再在事务内全量替换 Provider、真实模型、分组、全部映射（含未分组映射）和候选目标，应用备份设置与 Token；成功后前端强制登出并提示用备份内 Token 重新登录。
 - `host`/`port` 保存后需重启；`global_timeout_ms` 对后续代理请求生效；`log_retention_days` 在下次启动清理时生效。
 - 严禁把泄漏密钥/Token 的代码或常量提交进仓库。
 
@@ -92,13 +93,17 @@
 | 400 | `invalid_request_body` | body 非 JSON、参数非法或代理请求缺少有效 model |
 | 413 | `invalid_request_body` | 请求体超过 50 MiB |
 | 400 | `invalid_test_prompt` | 测活提示词命中黑名单或过短 |
+| 400 | `invalid_backup` | 备份内部引用、协议或候选关系不合法 |
 | 401 | `invalid_api_key` | 网关 Token 校验失败 |
 | 404 | `model_not_found` | 模型不存在、未启用或未建映射 |
-| 404 | `provider_not_found` / `alias_not_found` | 管理 API 目标不存在 |
-| 400 | `alias_exists` | 同协议映射名重复 |
+| 404 | `provider_not_found` / `alias_not_found` / `alias_group_not_found` / `alias_target_not_found` | 管理 API 目标不存在 |
+| 400 | `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议映射名/分组名或映射候选重复 |
+| 404 | `not_found` | `/api` 未匹配或 OpenAI 代理路径不在 `/openai/v1/*` |
+| 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
-| 502 | `upstream_error` | 上游不可达 / 拒绝连接 / 5xx |
-| 504 | `upstream_timeout` | 连接或头阶段超时 |
+| 502 | `upstream_error` | 代理上游不可达/拒绝连接/5xx，或管理侧上游调用失败 |
+| 504 | `upstream_timeout` | 代理连接/响应头阶段或管理侧上游调用超时 |
+| 500 | `internal_error` | 未处理的网关内部异常 |
 
 ## 10. 完成定义
 
@@ -110,4 +115,4 @@
 
 - 当前仍处于开发阶段、没有正式用户数据；允许破坏性 schema 变更、删除 `data/gateway.db` 后重建。
 - 不为历史 v1–v4 数据库保留运行时迁移兼容路径；当前 schema 直接作为全新基线维护。
-- 备份格式也以当前开发版为准，不需要兼容正式部署前的旧备份；若未来进入正式部署，由用户另行确认迁移与兼容策略。
+- 备份格式也以当前开发版为准，不需要兼容正式部署前的旧备份；恢复必须保持“配置全量替换”语义，不能因未分组映射不受分组级联删除而残留旧配置。若未来进入正式部署，由用户另行确认迁移与兼容策略。

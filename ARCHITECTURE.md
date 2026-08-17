@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-17（已与 schema v5、映射分组/多候选目标、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 更新时间：2026-08-17（已与 schema v5、映射分组/多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -97,14 +97,14 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
 | `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库 |
 | `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
-| `GET/POST/PATCH/DELETE /models` | 真实模型 CRUD（body：provider_id+model_id） |
+| `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
 | `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名及当前目标兼容字段 |
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
 | `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
 | `POST/PATCH/DELETE /alias-targets`、`POST /alias-targets/reorder` | 候选新增、设为 active、删除与 priority 重排 |
 | `POST /models/test` | 测活：body `{provider_id, model_id, prompt}` |
 | `GET/PUT /settings`、`GET /me`、`POST /token/reset` | 配置、Token 查看/重置 |
-| `GET/POST /backup` | 导出/导入（含明文 Token 与 Key，强警示，导入后前端强制登出） |
+| `GET/POST /backup` | 导出/导入配置（含明文 Token 与 Key，不含两类日志）；导入校验后在事务内全量替换配置，成功后前端强制登出 |
 | `GET /logs`、`DELETE /logs` | 代理访问日志分页/清空 |
 | `GET /audit-logs`、`DELETE /audit-logs` | 配置操作日志分页（可按 resource 筛）/清空 |
 
@@ -119,13 +119,17 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | 400 | `invalid_request_body` | body 非 JSON、缺有效 model 或参数非法 |
 | 413 | `invalid_request_body` | 请求体超过 50 MiB |
 | 400 | `invalid_test_prompt` | 测活提示词过短或命中黑名单 |
-| 400 | `invalid_backup` | 备份图关系或内容不合法 |
+| 400 | `invalid_backup` | 备份结构通过请求校验，但内部引用、协议或候选关系不合法 |
 | 401 | `invalid_api_key` | Token 校验失败 |
 | 404 | `model_not_found` / `provider_not_found` / `alias_not_found` | 不存在（含模型未启用） |
-| 400 | `alias_exists` | 同协议映射名重复 |
+| 404 | `alias_group_not_found` / `alias_target_not_found` | 映射分组或候选目标不存在 |
+| 400 | `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议映射名/分组名或候选目标重复 |
+| 404 | `not_found` | `/api` 未匹配或 OpenAI 代理路径不在 `/openai/v1/*` |
+| 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
-| 502 | `upstream_error` | 上游不可达 / 拒绝连接 / 5xx |
-| 504 | `upstream_timeout` | 连接或头阶段超时 |
+| 502 | `upstream_error` | 代理上游不可达/拒绝连接/5xx，或管理侧上游调用失败 |
+| 504 | `upstream_timeout` | 代理连接/响应头阶段或管理侧上游调用超时 |
+| 500 | `internal_error` | 未处理的网关内部异常 |
 
 ## 6. 代理管线（routing/proxy + proxy/）
 
@@ -189,3 +193,4 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 6. **请求体原样保留的边界**：只有合法 JSON object 且顶层存在非空字符串 `model` 的代理请求可以路由；网关不会尝试修复或重写其他 JSON 结构，超过 50 MiB 的请求在读取阶段拒绝。
 7. **dispatcher 生命周期**：Provider 的 `proxy_url` 或 `timeout_ms` 变化、Provider 删除及进程关闭都会清空 dispatcher 缓存；缓存键为 `(proxy_url, timeout_ms)`，`bodyTimeout` 永远为 0。
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
+9. **备份恢复是配置全量替换**：导入前先校验 Provider、真实模型、分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再重建分组、Provider、模型、映射与候选。备份不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
