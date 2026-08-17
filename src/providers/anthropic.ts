@@ -17,6 +17,14 @@ export function buildAnthropicModelsUrl(baseUrl: string): string {
 }
 
 export function extractAnthropicReply(body: unknown): string {
-  const content = (body as { content?: { text?: string }[] })?.content
-  return (content ?? []).map((b) => b.text ?? '').join('')
+  if (!body || typeof body !== 'object') return ''
+  const content = (body as { content?: unknown }).content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return ''
+      const text = (block as { text?: unknown }).text
+      return typeof text === 'string' ? text : ''
+    })
+    .join('')
 }

@@ -2,6 +2,11 @@ import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { z } from 'zod'
 import { parseAuth, parseCustomHeaders } from '../../providers/headers'
+import {
+  MAX_REQUEST_BODY_BYTES,
+  readRequestBody,
+  RequestBodyTooLargeError,
+} from '../../proxy/body'
 import type { ApiResponse, Env, ProviderRow } from '../../types'
 
 export type ApiContext = Context<Env>
@@ -18,7 +23,14 @@ export function fail(c: ApiContext, status: number, message: string, code: strin
 }
 
 export async function readJson(c: ApiContext): Promise<unknown | null> {
-  return c.req.json().catch(() => null)
+  try {
+    const bytes = await readRequestBody(c.req.raw, MAX_REQUEST_BODY_BYTES)
+    if (bytes.byteLength === 0) return null
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError || c.req.raw.signal.aborted) throw error
+    return null
+  }
 }
 
 export const nonEmptyText = z.string().trim().min(1)
@@ -37,11 +49,16 @@ const httpUrl = z.string().trim().refine(
 
 export const authSchema = z.record(z.string().min(1), z.string())
 
+const nonNegativeIntegerText = z
+  .string()
+  .regex(/^\d+$/)
+  .refine((value) => Number.isSafeInteger(Number(value)), 'must be a safe integer')
+
 export const settingsSchema = z.object({
   host: nonEmptyText.optional(),
   port: z.string().regex(/^\d{1,5}$/).refine((value) => Number(value) >= 1 && Number(value) <= 65535, 'port 无效').optional(),
-  global_timeout_ms: z.string().regex(/^\d+$/).optional(),
-  log_retention_days: z.string().regex(/^\d+$/).optional(),
+  global_timeout_ms: nonNegativeIntegerText.optional(),
+  log_retention_days: nonNegativeIntegerText.optional(),
 })
 
 export const providerSchema = z.object({

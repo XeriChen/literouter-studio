@@ -7,6 +7,7 @@ import {
   parseProxyBody,
   readRequestBody,
   replaceProxyModel,
+  MAX_REQUEST_BODY_BYTES,
   RequestBodyTooLargeError,
 } from '../proxy/body'
 import { findRoute, listAliasNames } from '../services/models'
@@ -15,8 +16,6 @@ import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
 
 export const proxyRoutes = new Hono<Env>()
-
-const MAX_BODY_BYTES = 50 * 1024 * 1024
 
 function proxyError(c: Context, status: number, message: string, code: string) {
   return c.json({ error: { message, type: code, code } }, status as ContentfulStatusCode)
@@ -129,7 +128,7 @@ proxyRoutes.all('*', async (c) => {
       )
     }
 
-    const body = parseProxyBody(await readRequestBody(c.req.raw, MAX_BODY_BYTES))
+    const body = parseProxyBody(await readRequestBody(c.req.raw, MAX_REQUEST_BODY_BYTES))
     if (!body) {
       return logAndFail(c, protocol, path, 'POST', null, startedAt, 400, 'invalid_request_body', 'invalid request body: missing model')
     }

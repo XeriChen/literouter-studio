@@ -1,4 +1,4 @@
-import { getDispatcher, sendToUpstream, isTimeoutError } from '../proxy'
+import { drainBody, getDispatcher, sendToUpstream, isTimeoutError } from '../proxy'
 import { buildAnthropicChatBody, extractAnthropicReply } from '../providers/anthropic'
 import { buildOpenAIChatBody, extractOpenAIReply } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
@@ -43,7 +43,11 @@ export async function testModelLiveness(input: {
   const res = await sendToUpstream({
     method: 'POST',
     url,
-    headers: { ...buildProviderHeaders(provider), 'content-type': 'application/json' },
+    headers: {
+      ...buildProviderHeaders(provider),
+      'accept-encoding': 'identity',
+      'content-type': 'application/json',
+    },
     body: new TextEncoder().encode(JSON.stringify(buildChatBody(provider, input.model_id, input.prompt))),
     dispatcher: getDispatcher(provider.proxy_url, LIVENESS_TIMEOUT_MS),
     signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS),
@@ -52,12 +56,13 @@ export async function testModelLiveness(input: {
     throw err
   })
 
-  const json = await new Response(res.body as unknown as BodyInit).json().catch(() => null)
-  const latencyMs = Date.now() - startedAt
-
-  if (res.status >= 400) {
-    throw new Error(`upstream returned HTTP ${res.status}`)
+  try {
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`upstream returned HTTP ${res.status}`)
+    }
+    const json = await new Response(res.body as unknown as BodyInit).json()
+    return { reply: extractReply(provider, json), latency_ms: Date.now() - startedAt }
+  } finally {
+    await drainBody(res.body)
   }
-
-  return { reply: extractReply(provider, json), latency_ms: latencyMs }
 }

@@ -17,6 +17,13 @@ export function buildOpenAIModelsUrl(baseUrl: string): string {
 }
 
 export function extractOpenAIReply(body: unknown): string {
-  const choices = (body as { choices?: { message?: { content?: string } }[] })?.choices
-  return choices?.[0]?.message?.content ?? ''
+  if (!body || typeof body !== 'object') return ''
+  const choices = (body as { choices?: unknown }).choices
+  if (!Array.isArray(choices)) return ''
+  const first = choices[0]
+  if (!first || typeof first !== 'object') return ''
+  const message = (first as { message?: unknown }).message
+  if (!message || typeof message !== 'object') return ''
+  const content = (message as { content?: unknown }).content
+  return typeof content === 'string' ? content : ''
 }

@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { api } from './routes/api'
 import { proxyRoutes } from './routes/proxy'
 import { isAbortError } from './proxy'
+import { RequestBodyTooLargeError } from './proxy/body'
 import type { Env } from './types'
 
 export const app = new Hono<Env>()
@@ -14,6 +15,19 @@ export const app = new Hono<Env>()
 app.onError((err, c) => {
   if (isAbortError(err) || c.req.raw.signal.aborted) {
     return new Response(null, { status: 499 })
+  }
+  if (err instanceof RequestBodyTooLargeError) {
+    return c.json(
+      {
+        ok: false,
+        error: {
+          message: 'request body too large (max 50MB)',
+          type: 'invalid_request_body',
+          code: 'invalid_request_body',
+        },
+      },
+      413,
+    )
   }
   console.error('[gateway] unhandled error:', err)
   return c.json(

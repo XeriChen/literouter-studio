@@ -1,10 +1,11 @@
 import { serve } from '@hono/node-server'
 import { app } from './app'
 import './db'
-import { db } from './db'
+import { db, getSetting } from './db'
 import { getAdminToken } from './services/auth'
 import { getSettings, getLogRetentionDays } from './services/settings'
 import { cleanOldLogs } from './services/logs'
+import { invalidateAllDispatchers } from './proxy'
 
 // 首次启动初始化数据库并自动生成 admin_token
 getAdminToken()
@@ -18,8 +19,12 @@ if (retentionDays > 0) {
 
 // 监听配置：settings 优先（修改需重启生效），其次环境变量，最后默认值
 const settings = getSettings()
-const HOST = settings.host || process.env.HOST || '0.0.0.0'
-const PORT = Number(settings.port || process.env.PORT || 3000)
+// Explicit database settings win; environment variables remain useful for first boot
+// and container deployments where the settings table has not been configured yet.
+const HOST = getSetting('host') ?? process.env.HOST ?? settings.host
+const configuredPort = getSetting('port') ?? process.env.PORT ?? settings.port
+const parsedPort = Number(configuredPort)
+const PORT = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65_535 ? parsedPort : 3000
 
 const server = serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
   console.log(`[gateway] listening on http://${info.address}:${info.port}`)
@@ -30,6 +35,7 @@ function shutdown(signal: string) {
   console.log(`[gateway] received ${signal}, shutting down...`)
   server.close(() => {
     try {
+      invalidateAllDispatchers()
       db.close()
     } catch {
       // db may already be closed

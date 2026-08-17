@@ -67,48 +67,50 @@ CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
 db.exec(SCHEMA_V1)
 db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (1)').run()
 
-// v2: model_filter column for provider-level model prefix filtering
-const currentVersion = (db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number }).v
-if (currentVersion < 2) {
-  db.exec(`ALTER TABLE providers ADD COLUMN model_filter TEXT`)
-  db.prepare('INSERT INTO schema_version (version) VALUES (2)').run()
+function migrate(version: number, sql: string): void {
+  const currentVersion = (
+    db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
+  ).version
+  if (currentVersion >= version) return
+
+  db.transaction(() => {
+    db.exec(sql)
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version)
+  })()
 }
+
+// v2: model_filter column for provider-level model prefix filtering
+migrate(2, 'ALTER TABLE providers ADD COLUMN model_filter TEXT')
 
 // v3: model_aliases 客户端可见的模型名映射层（映射名 -> 真实模型），按协议隔离
-if (currentVersion < 3) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS model_aliases (
-      protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
-      alias_name TEXT NOT NULL,
-      provider_id TEXT NOT NULL,
-      model_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (protocol, alias_name),
-      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE,
-      FOREIGN KEY (provider_id, model_id) REFERENCES provider_models(provider_id, model_id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_aliases_target ON model_aliases(provider_id, model_id);
-  `)
-  db.prepare('INSERT INTO schema_version (version) VALUES (3)').run()
-}
+migrate(3, `
+  CREATE TABLE IF NOT EXISTS model_aliases (
+    protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+    alias_name TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (protocol, alias_name),
+    FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE,
+    FOREIGN KEY (provider_id, model_id) REFERENCES provider_models(provider_id, model_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_aliases_target ON model_aliases(provider_id, model_id);
+`)
 
 // v4: audit_logs 网站配置操作日志（管理 API 增删改/测活/备份等），与代理访问日志 logs 分离
-if (currentVersion < 4) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at TEXT NOT NULL,
-      resource TEXT NOT NULL,
-      target TEXT,
-      action TEXT NOT NULL,
-      detail TEXT,
-      status INTEGER
-    );
-    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
-  `)
-  db.prepare('INSERT INTO schema_version (version) VALUES (4)').run()
-}
+migrate(4, `
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    target TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    status INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+`)
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as

@@ -1,6 +1,9 @@
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const encoder = new TextEncoder()
 
+/** Maximum request size accepted by both proxy and management endpoints. */
+export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
+
 export class RequestBodyTooLargeError extends Error {
   constructor(maxBytes: number) {
     super(`request body too large (max ${maxBytes} bytes)`)

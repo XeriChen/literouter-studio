@@ -32,6 +32,9 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
   const persistKey = alias ? storageKey(protocol, alias.alias_name) : ''
 
   useEffect(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setStreaming(false)
     if (!persistKey) {
       setMessages([])
       return
