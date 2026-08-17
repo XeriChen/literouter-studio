@@ -93,11 +93,19 @@ test('initializes schema v5 and keeps exactly one priority-routed active target'
   assert.equal(models.findRoute('openai', 'managed-alias').kind, 'not_found')
   assert.equal(models.findRoute('openai', 'renamed-alias').kind, 'ok')
 
+  models.addAlias({
+    protocol: 'openai',
+    alias_name: 'ungrouped-alias',
+    provider_id: 'p1',
+    model_id: 'model-a',
+  })
+
   const exported = backup.exportBackup()
   assert.equal(exported.groups.length, 1)
-  assert.equal(exported.aliases[0]?.targets.length, 1)
+  assert.equal(exported.aliases.length, 2)
   backup.importBackup(exported)
   assert.equal(models.findRoute('openai', 'renamed-alias').kind, 'ok')
+  assert.equal(models.findRoute('openai', 'ungrouped-alias').kind, 'ok')
 
   assert.equal(models.deleteAliasGroup({ protocol: 'openai', id: group.id }), 1)
   assert.equal(models.getAlias('openai', 'renamed-alias'), undefined)

@@ -146,6 +146,9 @@ export function exportBackup(): BackupData {
 export function importBackup(data: BackupData): void {
   validateBackupGraph(data)
   const tx = db.transaction(() => {
+    // model_aliases can exist without a group, so deleting groups alone would
+    // leave ungrouped aliases behind and make a full backup restore incomplete.
+    db.prepare('DELETE FROM model_aliases').run()
     db.prepare('DELETE FROM model_alias_groups').run()
     db.prepare('DELETE FROM providers').run()
     const insertProvider = db.prepare(
