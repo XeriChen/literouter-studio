@@ -182,6 +182,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
 - Providers 页按协议和自定义分组折叠展示，支持组内批量启用/删除；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。
+- Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
 - Models 页两个 tab：**模型映射**（按协议折叠分组、映射启用开关、候选展开管理/拖拽优先级、当前目标切换与快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
 - Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。

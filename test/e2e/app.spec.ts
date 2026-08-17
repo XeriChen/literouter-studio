@@ -140,5 +140,26 @@ test('renders provider groups and supports copy and API Key visibility', async (
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByText('Production').first()).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('provider-groups-mobile.png'), fullPage: true })
+
+  await page.getByRole('button', { name: '新增 Provider' }).click()
+  const mobileDialog = page.getByRole('dialog')
+  const formRegion = mobileDialog.getByRole('region', { name: 'Provider 配置' })
+  await expect(mobileDialog.getByRole('heading', { name: '新增 Provider' })).toBeVisible()
+  await expect(mobileDialog.getByRole('button', { name: '创建', exact: true })).toBeVisible()
+
+  const dialogBox = await mobileDialog.boundingBox()
+  expect(dialogBox).not.toBeNull()
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(0)
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(844)
+
+  const scrollMetrics = await formRegion.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight)
+  await formRegion.evaluate((element) => element.scrollTo({ top: element.scrollHeight }))
+  await expect(mobileDialog.getByText(/逗号分隔的前缀匹配规则/)).toBeVisible()
+  await expect(mobileDialog.getByRole('button', { name: '创建', exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('provider-create-dialog-mobile.png') })
   expect(browserErrors).toEqual([])
 })
