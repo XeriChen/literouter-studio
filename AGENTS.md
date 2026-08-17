@@ -29,8 +29,8 @@
 
 ## 4. 技术栈
 
-- 后端：TypeScript（strict）、Hono、better-sqlite3、undici、zod
-- 前端：React 19、Vite 6、Tailwind CSS 3、shadcn/ui、TanStack Query、react-markdown、react-router 7
+- 后端：TypeScript（strict）、Hono、better-sqlite3、undici v8、zod
+- 前端：React 19、Vite 8、Tailwind CSS 4、shadcn/ui、TanStack Query、react-markdown、react-router 7
 - 单包结构，`web/dist` 由 Hono 托管
 
 ## 5. 目录职责
@@ -75,7 +75,7 @@
 - [ ] 上游 4xx（400/401/429 等）原样透传不重新包装；5xx 才包 `upstream_error`（502）；超时 `upstream_timeout`（504）
 - [ ] `accept-encoding: identity` 防止上游压缩破坏 SSE
 - [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
-- [ ] 代理请求须用 undici v7 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
+- [ ] 代理请求须用 undici v8 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
 - [ ] 测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时
 
 ## 8. 错误码速查

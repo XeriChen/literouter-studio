@@ -3,6 +3,12 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
+import {
+  parseProxyBody,
+  readRequestBody,
+  replaceProxyModel,
+  RequestBodyTooLargeError,
+} from '../proxy/body'
 import { findRoute, listAliasNames } from '../services/models'
 import { writeLog } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
@@ -11,8 +17,6 @@ import type { Env, ProviderRow } from '../types'
 export const proxyRoutes = new Hono<Env>()
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024
-
-const EMPTY_LOG = { model: null, providerId: null, headerAt: null, errorCode: null, status: null }
 
 function proxyError(c: Context, status: number, message: string, code: string) {
   return c.json({ error: { message, type: code, code } }, status as ContentfulStatusCode)
@@ -25,6 +29,8 @@ async function forward(
   method: string,
   body: Uint8Array | null,
   startedAt: number,
+  protocol: 'openai' | 'anthropic',
+  requestedModel: string,
 ) {
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -42,14 +48,12 @@ async function forward(
 
   // 收到上游响应头，立即写日志（latency = 首包耗时）
   const headerAt = Date.now()
-  const proxyLog = c.get('proxyLog') ?? EMPTY_LOG
-  c.set('proxyLog', { ...proxyLog, headerAt, status: res.status })
   writeLog({
     client_ip: c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || null,
-    protocol: c.get('_protocol'),
+    protocol,
     method,
     path: c.req.path,
-    model: proxyLog.model ?? null,
+    model: requestedModel,
     provider_id: provider.id,
     status: res.status,
     latency_ms: headerAt - startedAt,
@@ -103,8 +107,7 @@ proxyRoutes.all('*', async (c) => {
   const path = c.req.path
   const protocol: 'openai' | 'anthropic' = path.startsWith('/openai') ? 'openai' : 'anthropic'
   const upstreamPath = path.replace(/^\/(openai|anthropic)/, '')
-  c.set('proxyLog', EMPTY_LOG)
-  c.set('_protocol', protocol)
+  let requestedModel: string | null = null
 
   // OpenAI 入口严格限定 /openai/v1/*：不带 /v1 的路径一律 404
   if (protocol === 'openai' && !upstreamPath.startsWith('/v1/')) {
@@ -115,9 +118,6 @@ proxyRoutes.all('*', async (c) => {
     // GET /v1/models：只返回已建立映射的模型名（未建映射不可见、不可调用）
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
       const aliases = listAliasNames(protocol)
-      if (!aliases.length) {
-        return logAndFail(c, protocol, path, 'GET', null, startedAt, 404, 'model_not_found', 'no model aliases')
-      }
       const data = aliases.map((name) => ({ id: name, object: 'model', owned_by: 'gateway' }))
       return c.json({ object: 'list', data })
     }
@@ -129,22 +129,12 @@ proxyRoutes.all('*', async (c) => {
       )
     }
 
-    const raw = await c.req.arrayBuffer()
-    if (raw.byteLength > MAX_BODY_BYTES) {
-      return proxyError(c, 413, 'request body too large (max 50MB)', 'invalid_request_body')
+    const body = parseProxyBody(await readRequestBody(c.req.raw, MAX_BODY_BYTES))
+    if (!body) {
+      return logAndFail(c, protocol, path, 'POST', null, startedAt, 400, 'invalid_request_body', 'invalid request body: missing model')
     }
-
-    const bodyBytes = new Uint8Array(raw)
-    let bodyJson: Record<string, unknown> | null = null
-    try {
-      bodyJson = JSON.parse(new TextDecoder().decode(bodyBytes)) as Record<string, unknown>
-    } catch {
-      bodyJson = null
-    }
-    const model = bodyJson && typeof bodyJson.model === 'string' ? bodyJson.model : null
-    if (!model) {
-      return proxyError(c, 400, 'invalid request body: missing model', 'invalid_request_body')
-    }
+    const model = body.model
+    requestedModel = model
 
     const route = findRoute(protocol, model)
     if (route.kind !== 'ok') {
@@ -152,15 +142,16 @@ proxyRoutes.all('*', async (c) => {
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
-    // 映射名 -> 真实模型名：仅替换 body.model 字段，其余字段原样透传
-    bodyJson!.model = route.model.model_id
-    const outBody = new TextEncoder().encode(JSON.stringify(bodyJson))
+    // 映射名 -> 真实模型名：定点替换 body.model 的字符串值，其余字节原样保留
+    const outBody = replaceProxyModel(body, route.model.model_id)
 
-    c.set('proxyLog', { ...(c.get('proxyLog') ?? EMPTY_LOG), model })
-    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt)
+    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err
+    }
+    if (err instanceof RequestBodyTooLargeError) {
+      return logAndFail(c, protocol, path, c.req.method, requestedModel, startedAt, 413, 'invalid_request_body', 'request body too large (max 50MB)')
     }
     const timeout = isTimeoutError(err)
     return logAndFail(
@@ -168,7 +159,7 @@ proxyRoutes.all('*', async (c) => {
       protocol,
       path,
       c.req.method,
-      c.get('proxyLog')?.model ?? null,
+      requestedModel,
       startedAt,
       timeout ? 504 : 502,
       timeout ? 'upstream_timeout' : 'upstream_error',

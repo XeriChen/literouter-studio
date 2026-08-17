@@ -1,12 +1,13 @@
 import { db } from '../db'
 import { getAdminToken, setAdminToken } from './auth'
-import { getSettings, updateSettings } from './settings'
+import { getSettings, updateSettings, type SettingsKey } from './settings'
 import { parseAuth, parseCustomHeaders } from '../providers/headers'
+import { invalidateAllDispatchers } from '../proxy'
 import type { ProviderRow } from '../types'
 
 export interface BackupData {
   token: string
-  settings: Record<string, string>
+  settings: Partial<Record<SettingsKey, string>>
   providers: Array<{
     id: string
     name: string
@@ -34,6 +35,41 @@ export interface BackupData {
     provider_id: string
     model_id: string
   }>
+}
+
+function validateBackupGraph(data: BackupData): void {
+  const providers = new Map<string, BackupData['providers'][number]>()
+  for (const provider of data.providers) {
+    if (providers.has(provider.id)) throw new Error(`duplicate provider id: ${provider.id}`)
+    providers.set(provider.id, provider)
+  }
+
+  const models = new Map<string, Set<string>>()
+  for (const model of data.models) {
+    if (!providers.has(model.provider_id)) throw new Error(`model provider not found: ${model.provider_id}`)
+    const providerModels = models.get(model.provider_id) ?? new Set<string>()
+    if (providerModels.has(model.model_id)) {
+      throw new Error(`duplicate model: ${model.provider_id}/${model.model_id}`)
+    }
+    providerModels.add(model.model_id)
+    models.set(model.provider_id, providerModels)
+  }
+
+  const aliases = new Set<string>()
+  for (const alias of data.aliases) {
+    const key = JSON.stringify([alias.protocol, alias.alias_name])
+    if (aliases.has(key)) throw new Error(`duplicate alias: ${alias.protocol}/${alias.alias_name}`)
+    aliases.add(key)
+
+    const provider = providers.get(alias.provider_id)
+    if (!provider) throw new Error(`alias provider not found: ${alias.provider_id}`)
+    if (provider.protocol !== alias.protocol) {
+      throw new Error(`alias protocol mismatch: ${alias.protocol}/${alias.alias_name}`)
+    }
+    if (!models.get(alias.provider_id)?.has(alias.model_id)) {
+      throw new Error(`alias model not found: ${alias.provider_id}/${alias.model_id}`)
+    }
+  }
 }
 
 export function exportBackup(): BackupData {
@@ -67,6 +103,7 @@ export function exportBackup(): BackupData {
 }
 
 export function importBackup(data: BackupData): void {
+  validateBackupGraph(data)
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM providers').run()
     const insertProvider = db.prepare(
@@ -108,4 +145,5 @@ export function importBackup(data: BackupData): void {
     updateSettings(data.settings)
   })
   tx()
+  invalidateAllDispatchers()
 }

@@ -37,13 +37,25 @@ const CONTENT_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.ttf': 'font/ttf',
+  '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.map': 'application/json',
 }
 
+const GATEWAY_PREFIXES = ['/api', '/openai', '/anthropic']
+
+function isGatewayPath(requestPath: string): boolean {
+  return GATEWAY_PREFIXES.some((prefix) => requestPath === prefix || requestPath.startsWith(`${prefix}/`))
+}
+
+function isStaticAssetPath(requestPath: string): boolean {
+  return path.posix.extname(requestPath) !== ''
+}
+
 if (existsSync(distDir)) {
   app.get('*', async (c) => {
-    if (c.req.path.startsWith('/api') || c.req.path.startsWith('/openai') || c.req.path.startsWith('/anthropic')) {
+    if (isGatewayPath(c.req.path)) {
       return c.notFound()
     }
     const urlPath = c.req.path === '/' ? '/index.html' : c.req.path
@@ -64,8 +76,9 @@ if (existsSync(distDir)) {
         })
       }
     } catch {
-      // file not found, fall through to SPA fallback
+      // Only client-side routes fall back to the SPA. Missing assets remain 404s.
     }
+    if (isStaticAssetPath(urlPath)) return c.notFound()
     // SPA fallback：统一回 index.html
     const html = await readFile(path.join(distDir, 'index.html'))
     return new Response(html, {
@@ -73,3 +86,13 @@ if (existsSync(distDir)) {
     })
   })
 }
+
+app.notFound((c) => {
+  if (isGatewayPath(c.req.path) && (c.req.path === '/api' || c.req.path.startsWith('/api/'))) {
+    return c.json(
+      { ok: false, error: { message: 'not found', type: 'not_found', code: 'not_found' } },
+      404,
+    )
+  }
+  return c.text('Not Found', 404)
+})

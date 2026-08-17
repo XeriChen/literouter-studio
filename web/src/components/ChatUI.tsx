@@ -5,6 +5,7 @@ import type { ModelAlias } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { Textarea } from '@/components/ui/textarea'
+import { SseDeltaParser } from '@/lib/sse'
 
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -14,29 +15,6 @@ export interface ChatMessage {
 interface ChatUIProps {
   protocol: 'openai' | 'anthropic'
   alias: ModelAlias | null
-}
-
-const decoder = new TextDecoder()
-
-function parseSSELine(buf: string, protocol: 'openai' | 'anthropic', onDelta: (text: string) => void): void {
-  for (const line of buf.split('\n')) {
-    if (!line.startsWith('data:')) continue
-    const data = line.slice(5).trim()
-    if (!data || data === '[DONE]') continue
-    try {
-      const json = JSON.parse(data)
-      if (protocol === 'openai') {
-        const delta = json?.choices?.[0]?.delta?.content
-        if (delta) onDelta(delta)
-      } else {
-        if (json?.type === 'content_block_delta' && json?.delta?.text) {
-          onDelta(json.delta.text)
-        }
-      }
-    } catch {
-      // ignore malformed JSON
-    }
-  }
 }
 
 function storageKey(protocol: string, aliasName: string): string {
@@ -60,7 +38,18 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     }
     try {
       const saved = localStorage.getItem(persistKey)
-      setMessages(saved ? JSON.parse(saved) : [])
+      const parsed: unknown = saved ? JSON.parse(saved) : []
+      setMessages(
+        Array.isArray(parsed)
+          ? parsed.filter(
+            (message): message is ChatMessage =>
+              typeof message === 'object'
+              && message !== null
+              && (message.role === 'user' || message.role === 'assistant')
+              && typeof message.content === 'string',
+          )
+          : [],
+      )
     } catch {
       setMessages([])
     }
@@ -142,21 +131,22 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
       const reader = res.body?.getReader()
       if (!reader) throw new Error('no response body')
 
-      let buf = ''
+      const decoder = new TextDecoder()
+      const parser = new SseDeltaParser(protocol)
+      const appendDeltas = (deltas: string[]) => {
+        for (const text of deltas) {
+          pendingReply = (pendingReply || reply) + text
+          if (rafId === null) rafId = requestAnimationFrame(flush)
+        }
+      }
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const newlineIdx = buf.lastIndexOf('\n')
-        if (newlineIdx >= 0) {
-          const complete = buf.slice(0, newlineIdx + 1)
-          buf = buf.slice(newlineIdx + 1)
-          parseSSELine(complete, protocol, (t) => {
-            pendingReply = (pendingReply || reply) + t
-            if (rafId === null) rafId = requestAnimationFrame(flush)
-          })
-        }
+        appendDeltas(parser.push(decoder.decode(value, { stream: true })))
       }
+      appendDeltas(parser.push(decoder.decode()))
+      appendDeltas(parser.finish())
       // flush 残留
       if (rafId !== null) cancelAnimationFrame(rafId)
       if (pendingReply) reply = pendingReply
@@ -174,7 +164,12 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
           persist(partial)
         }
       } else {
-        const errorMsg: ChatMessage = { role: 'assistant', content: `请求失败：${err instanceof Error ? err.message : String(err)}` }
+        const reason = err instanceof Error ? err.message : String(err)
+        const partialReply = pendingReply || reply
+        const errorMsg: ChatMessage = {
+          role: 'assistant',
+          content: partialReply ? `${partialReply}\n\n[请求失败：${reason}]` : `请求失败：${reason}`,
+        }
         const updated = [...history, errorMsg]
         setMessages(updated)
         persist(updated)

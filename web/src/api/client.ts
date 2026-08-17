@@ -17,7 +17,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   const res = await fetch(path, { ...init, headers })
-  if (res.status === 401) {
+  if (res.status === 401 && path !== '/api/login') {
     clearToken()
     window.location.href = '/login'
     throw new Error('unauthorized')
@@ -25,7 +25,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T
   const body = (await res.json().catch(() => null)) as { ok?: boolean; data?: T; error?: { message?: string } } | null
-  if (!res.ok || !body) {
+  if (!res.ok || body?.ok !== true) {
     throw new Error(body?.error?.message ?? `HTTP ${res.status}`)
   }
   return body.data as T

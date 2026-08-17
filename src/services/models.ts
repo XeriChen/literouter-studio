@@ -152,49 +152,85 @@ export type RouteResult =
   | { kind: 'not_found' }
   | { kind: 'provider_disabled' }
 
+interface RouteRow {
+  model_provider_id: string
+  model_id: string
+  display_name: string | null
+  model_enabled: number
+  source: 'fetched' | 'manual'
+  fetched_at: string | null
+  model_created_at: string
+  model_updated_at: string
+  provider_id: string
+  provider_name: string
+  provider_protocol: ProviderProtocol
+  base_url: string
+  auth_json: string
+  custom_headers_json: string
+  proxy_url: string | null
+  timeout_ms: number | null
+  model_filter: string | null
+  provider_enabled: number
+  provider_created_at: string
+  provider_updated_at: string
+}
+
+const findRouteStatement = db.prepare(
+  `SELECT
+     pm.provider_id AS model_provider_id,
+     pm.model_id,
+     pm.display_name,
+     pm.enabled AS model_enabled,
+     pm.source,
+     pm.fetched_at,
+     pm.created_at AS model_created_at,
+     pm.updated_at AS model_updated_at,
+     p.id AS provider_id,
+     p.name AS provider_name,
+     p.protocol AS provider_protocol,
+     p.base_url,
+     p.auth_json,
+     p.custom_headers_json,
+     p.proxy_url,
+     p.timeout_ms,
+     p.model_filter,
+     p.enabled AS provider_enabled,
+     p.created_at AS provider_created_at,
+     p.updated_at AS provider_updated_at
+   FROM model_aliases a
+   JOIN provider_models pm ON pm.provider_id = a.provider_id AND pm.model_id = a.model_id
+   JOIN providers p ON p.id = a.provider_id AND p.protocol = a.protocol
+   WHERE a.protocol = ? AND a.alias_name = ?`,
+)
+
 /** 按 (protocol, alias) 查映射 -> 目标真实模型，校验目标已启用且 Provider 已启用 */
 export function findRoute(protocol: 'openai' | 'anthropic', aliasName: string): RouteResult {
-  const alias = db
-    .prepare('SELECT provider_id, model_id FROM model_aliases WHERE protocol = ? AND alias_name = ?')
-    .get(protocol, aliasName) as { provider_id: string; model_id: string } | undefined
-  if (!alias) return { kind: 'not_found' }
-
-  const row = db
-    .prepare(
-      `SELECT pm.*, p.id AS p_id, p.name AS p_name, p.protocol AS p_protocol, p.base_url AS p_base_url,
-              p.auth_json AS p_auth_json, p.custom_headers_json AS p_custom_headers_json, p.proxy_url AS p_proxy_url,
-              p.timeout_ms AS p_timeout_ms, p.model_filter AS p_model_filter, p.enabled AS p_enabled,
-              p.created_at AS p_created_at, p.updated_at AS p_updated_at
-       FROM provider_models pm
-       JOIN providers p ON p.id = pm.provider_id
-       WHERE pm.provider_id = ? AND pm.model_id = ?`,
-    )
-    .get(alias.provider_id, alias.model_id) as (ProviderModelRow & Record<string, unknown>) | undefined
+  const row = findRouteStatement.get(protocol, aliasName) as RouteRow | undefined
   if (!row) return { kind: 'not_found' }
 
   const provider: ProviderRow = {
-    id: row.p_id as string,
-    name: row.p_name as string,
-    protocol: row.p_protocol as ProviderProtocol,
-    base_url: row.p_base_url as string,
-    auth_json: row.p_auth_json as string,
-    custom_headers_json: row.p_custom_headers_json as string,
-    proxy_url: row.p_proxy_url as string | null,
-    timeout_ms: row.p_timeout_ms as number | null,
-    model_filter: row.p_model_filter as string | null,
-    enabled: row.p_enabled as number,
-    created_at: row.p_created_at as string,
-    updated_at: row.p_updated_at as string,
+    id: row.provider_id,
+    name: row.provider_name,
+    protocol: row.provider_protocol,
+    base_url: row.base_url,
+    auth_json: row.auth_json,
+    custom_headers_json: row.custom_headers_json,
+    proxy_url: row.proxy_url,
+    timeout_ms: row.timeout_ms,
+    model_filter: row.model_filter,
+    enabled: row.provider_enabled,
+    created_at: row.provider_created_at,
+    updated_at: row.provider_updated_at,
   }
   const model: ProviderModelRow = {
-    provider_id: row.provider_id,
+    provider_id: row.model_provider_id,
     model_id: row.model_id,
     display_name: row.display_name,
-    enabled: row.enabled,
+    enabled: row.model_enabled,
     source: row.source,
     fetched_at: row.fetched_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created_at: row.model_created_at,
+    updated_at: row.model_updated_at,
   }
   if (!model.enabled) return { kind: 'not_found' }
   if (!provider.enabled) return { kind: 'provider_disabled' }

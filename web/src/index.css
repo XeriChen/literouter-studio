@@ -1,3 +1,7 @@
+@import "tailwindcss/theme.css";
+@import "tailwindcss/preflight.css";
+@import "tailwindcss/utilities.css";
+
 /* DM Mono */
 @font-face {
   font-family: 'DM Mono';
@@ -51,9 +55,36 @@
   src: url('/fonts/manrope-800.ttf') format('truetype');
 }
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --spacing: 0.25rem;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --animate-rise-in: rise-in .55s cubic-bezier(.2,.8,.2,1) both;
+}
 
 @layer base {
   :root {
@@ -130,24 +161,32 @@
   .eyebrow { @apply font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground; }
   .page-shell { @apply mx-auto w-full max-w-[1480px] animate-rise-in; }
   .page-heading { @apply flex flex-wrap items-end justify-between gap-5 border-b border-foreground/10 pb-7; }
-  .page-title { @apply text-3xl font-extrabold tracking-[-0.06em] sm:text-4xl; }
+  .page-title { @apply text-3xl font-extrabold tracking-[-0.06em]; }
   .page-description { @apply mt-2 max-w-2xl text-sm leading-6 text-muted-foreground; }
   .console-surface { @apply overflow-hidden border border-foreground/10 bg-card/70; }
-  .console-toolbar { @apply flex flex-wrap items-center justify-between gap-3 border-b border-foreground/10 px-4 py-3 sm:px-5; }
+  .console-toolbar { @apply flex flex-wrap items-center justify-between gap-3 border-b border-foreground/10 px-4 py-3; }
   .data-table { @apply min-w-[720px] text-sm; }
   .data-table thead { @apply bg-foreground/[.025]; }
   .data-table th { @apply h-10 whitespace-nowrap px-3 text-left font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground; }
   .data-table td { @apply px-3 py-3 align-middle; }
-  .data-table tbody tr { @apply border-b border-foreground/[.08] transition-colors hover:bg-muted/45; }
+  .data-table tbody tr { @apply border-b border-foreground/[.08] transition-colors; }
+  .data-table tbody tr:hover { @apply bg-muted/45; }
   .signal-line { @apply relative overflow-hidden; }
   .signal-line::after { content: ''; @apply absolute inset-y-0 -left-1/2 w-1/2 bg-gradient-to-r from-transparent via-accent/20 to-transparent; animation: signal-sweep 4s ease-in-out infinite; }
   .status-dot { @apply inline-block h-1.5 w-1.5 rounded-full bg-[hsl(var(--success))] shadow-[0_0_12px_hsl(var(--success)/.8)]; }
   .status-dot.idle { @apply bg-muted-foreground shadow-none; }
   .status-dot.warn { @apply bg-[hsl(var(--warning))] shadow-[0_0_12px_hsl(var(--warning)/.6)]; }
-  .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40; }
+  .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors; }
+  .icon-button:hover { @apply bg-muted text-foreground; }
+  .icon-button:disabled { @apply pointer-events-none opacity-40; }
   .notice { @apply flex items-start gap-3 border px-3 py-2.5 text-sm; }
   .notice-success { @apply border-[hsl(var(--success)/.25)] bg-[hsl(var(--success)/.08)] text-[hsl(var(--success))]; }
   .notice-error { @apply border-destructive/25 bg-destructive/10 text-destructive; }
+}
+
+@media (min-width: 640px) {
+  .page-title { @apply text-4xl; }
+  .console-toolbar { @apply px-5; }
 }
 
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }

@@ -6,7 +6,8 @@ const TOKEN_KEYS = ['x-api-key', 'api-key'] as const
 
 export function extractToken(c: Parameters<MiddlewareHandler<Env>>[0]): string | null {
   const authz = c.req.header('authorization')
-  if (authz?.startsWith('Bearer ')) return authz.slice(7).trim()
+  const bearer = authz?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (bearer) return bearer
   for (const key of TOKEN_KEYS) {
     const value = c.req.header(key)
     if (value) return value.trim()

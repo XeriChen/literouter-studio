@@ -13,9 +13,13 @@ export interface LogFilters {
 
 const MAX_PAGE_SIZE = 10_000
 
+function normalizePage(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(Math.trunc(value), fallback) : fallback
+}
+
 export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] } {
-  const pageSize = Math.min(Math.max(filters.pageSize, 1), MAX_PAGE_SIZE)
-  const page = Math.max(filters.page, 1)
+  const pageSize = Math.min(normalizePage(filters.pageSize, 1), MAX_PAGE_SIZE)
+  const page = normalizePage(filters.page, 1)
   const where: string[] = []
   const params: Array<string | number> = []
   if (filters.protocol) {

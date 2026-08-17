@@ -1,6 +1,3 @@
-import type { ProviderRow } from '../types'
-import { parseAuth } from './headers'
-
 export interface ChatRequestInput {
   model: string
   prompt: string
@@ -22,14 +19,4 @@ export function buildAnthropicModelsUrl(baseUrl: string): string {
 export function extractAnthropicReply(body: unknown): string {
   const content = (body as { content?: { text?: string }[] })?.content
   return (content ?? []).map((b) => b.text ?? '').join('')
-}
-
-export function anthropicAuthHeaders(auth: Record<string, string>): Record<string, string> {
-  const h: Record<string, string> = { 'anthropic-version': auth.version || '2023-06-01' }
-  if (auth.api_key) h['x-api-key'] = auth.api_key
-  return h
-}
-
-export function getAnthropicAuth(provider: ProviderRow): Record<string, string> {
-  return anthropicAuthHeaders(parseAuth(provider))
 }

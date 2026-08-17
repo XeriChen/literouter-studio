@@ -1,15 +1,5 @@
 export interface Env {
-  Variables: {
-    adminToken?: string
-    _protocol?: 'openai' | 'anthropic'
-    proxyLog?: {
-      model: string | null
-      providerId: string | null
-      headerAt: number | null
-      errorCode: string | null
-      status: number | null
-    }
-  }
+  Variables: { adminToken?: string }
 }
 
 export type ApiResponse<T> =

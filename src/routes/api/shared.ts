@@ -1,0 +1,95 @@
+import type { Context } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import { z } from 'zod'
+import { parseAuth, parseCustomHeaders } from '../../providers/headers'
+import type { ApiResponse, Env, ProviderRow } from '../../types'
+
+export type ApiContext = Context<Env>
+
+export function ok<T>(c: ApiContext, data: T) {
+  return c.json({ ok: true, data } as ApiResponse<T>)
+}
+
+export function fail(c: ApiContext, status: number, message: string, code: string) {
+  return c.json(
+    { ok: false, error: { message, type: code, code } } as ApiResponse<never>,
+    status as ContentfulStatusCode,
+  )
+}
+
+export async function readJson(c: ApiContext): Promise<unknown | null> {
+  return c.req.json().catch(() => null)
+}
+
+export const nonEmptyText = z.string().trim().min(1)
+
+const httpUrl = z.string().trim().refine(
+  (value) => {
+    try {
+      const { protocol } = new URL(value)
+      return protocol === 'http:' || protocol === 'https:'
+    } catch {
+      return false
+    }
+  },
+  'must be an HTTP(S) URL',
+)
+
+export const authSchema = z.record(z.string().min(1), z.string())
+
+export const settingsSchema = z.object({
+  host: nonEmptyText.optional(),
+  port: z.string().regex(/^\d{1,5}$/).refine((value) => Number(value) >= 1 && Number(value) <= 65535, 'port 无效').optional(),
+  global_timeout_ms: z.string().regex(/^\d+$/).optional(),
+  log_retention_days: z.string().regex(/^\d+$/).optional(),
+})
+
+export const providerSchema = z.object({
+  name: nonEmptyText,
+  protocol: z.enum(['openai', 'anthropic']),
+  base_url: httpUrl,
+  auth: authSchema.default({}),
+  custom_headers: authSchema.default({}),
+  proxy_url: httpUrl.nullable().optional(),
+  timeout_ms: z.number().int().min(0).nullable().optional(),
+  model_filter: z.string().nullable().optional(),
+})
+
+export const providerPatchSchema = providerSchema
+  .omit({ protocol: true })
+  .partial()
+  .extend({ enabled: z.union([z.literal(0), z.literal(1)]).optional() })
+  .refine((value) => Object.keys(value).length > 0, 'provider patch cannot be empty')
+
+export const modelRefSchema = z.object({
+  provider_id: nonEmptyText,
+  model_id: nonEmptyText,
+})
+
+export const aliasRefSchema = z.object({
+  protocol: z.enum(['openai', 'anthropic']),
+  alias_name: nonEmptyText,
+})
+
+export const aliasSchema = aliasRefSchema.extend({
+  provider_id: nonEmptyText,
+  model_id: nonEmptyText,
+  new_alias_name: nonEmptyText.optional(),
+})
+
+export function providerOut(provider: ProviderRow) {
+  return {
+    id: provider.id,
+    name: provider.name,
+    protocol: provider.protocol,
+    base_url: provider.base_url,
+    auth: parseAuth(provider),
+    custom_headers: parseCustomHeaders(provider),
+    proxy_url: provider.proxy_url,
+    timeout_ms: provider.timeout_ms,
+    model_filter: provider.model_filter,
+    enabled: provider.enabled,
+    created_at: provider.created_at,
+    updated_at: provider.updated_at,
+  }
+}

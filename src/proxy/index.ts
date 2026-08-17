@@ -25,11 +25,7 @@ export function getDispatcher(proxyUrl: string | null | undefined, timeoutMs: nu
 /** 关闭并移除所有缓存的 dispatcher（用于 Provider 更新/删除时释放旧连接池） */
 export function invalidateAllDispatchers(): void {
   for (const dispatcher of dispatcherCache.values()) {
-    try {
-      ;(dispatcher as Agent & { close?: () => Promise<void> }).close?.()
-    } catch {
-      // ignore
-    }
+    void dispatcher.close().catch(() => undefined)
   }
   dispatcherCache.clear()
 }
@@ -72,7 +68,11 @@ export async function sendToUpstream(req: UpstreamRequest): Promise<UpstreamResp
   const h = new Headers()
   for (const [k, v] of Object.entries(res.headers)) {
     if (v === undefined) continue
-    h.set(k, Array.isArray(v) ? v.join(', ') : String(v))
+    if (Array.isArray(v)) {
+      for (const value of v) h.append(k, value)
+    } else {
+      h.set(k, String(v))
+    }
   }
   return {
     status: res.statusCode,

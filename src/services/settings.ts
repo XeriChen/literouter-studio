@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS = {
 }
 
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS
+type NumericSettingKey = 'global_timeout_ms' | 'log_retention_days'
 
 export function getSettings(): Record<string, string> {
   const out: Record<string, string> = { ...DEFAULT_SETTINGS }
@@ -26,9 +27,14 @@ export function updateSettings(patch: Partial<Record<SettingsKey, string>>): Rec
 }
 
 export function getGlobalTimeoutMs(): number {
-  return Number(getSetting('global_timeout_ms') ?? DEFAULT_SETTINGS.global_timeout_ms)
+  return getNonNegativeInteger('global_timeout_ms')
 }
 
 export function getLogRetentionDays(): number {
-  return Number(getSetting('log_retention_days') ?? DEFAULT_SETTINGS.log_retention_days)
+  return getNonNegativeInteger('log_retention_days')
+}
+
+function getNonNegativeInteger(key: NumericSettingKey): number {
+  const value = Number(getSetting(key) ?? DEFAULT_SETTINGS[key])
+  return Number.isSafeInteger(value) && value >= 0 ? value : Number(DEFAULT_SETTINGS[key])
 }

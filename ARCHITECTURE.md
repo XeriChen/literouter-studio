@@ -22,8 +22,8 @@
 
 | 层 | 技术 |
 | :--- | :--- |
-| 后端 | Node ≥ 24、TypeScript strict、Hono、better-sqlite3、undici v7、zod |
-| 前端 | React 19、Vite 6、Tailwind 3、shadcn/ui、TanStack Query、react-router 7 |
+| 后端 | Node ≥ 24、TypeScript strict、Hono、better-sqlite3、undici v8、zod |
+| 前端 | React 19、Vite 8、Tailwind 4、shadcn/ui、TanStack Query、react-router 7 |
 
 - 单包仓库，`web/dist` 由 Hono 托管（生产 `pnpm start`）。
 - 开发：`pnpm dev` = 后端 3000（tsx watch）+ 前端 5173（Vite，`/api`、`/openai`、`/anthropic` 已代理到 3000）。
@@ -40,7 +40,7 @@ src/
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求：按 (proxy_url, timeout) 缓存 dispatcher
-  routes/api.ts    管理 API（含 aliases CRUD、备份导入导出、配置操作日志）
+  routes/api.ts    管理 API 装配入口（领域路由位于 routes/api/*）
   routes/proxy.ts  代理入口流水线（路由、透传、日志）
   services/        providers / models（含映射层）/ logs / audit / settings / backup / liveness / auth
   types/           行类型
@@ -117,7 +117,7 @@ data/gateway.db    运行时自动创建（不入库）
 
 **陷阱清单（改代理代码必逐条核对）：**
 
-1. undici v7：超时配置在 **Agent 构造参数**（`connectTimeout`/`headersTimeout`/`bodyTimeout:0` 恒设，timeout=0 时全 0），`request()` 层不接收这些参数。
+1. undici v8：超时配置在 **Agent 构造参数**（`connectTimeout`/`headersTimeout`/`bodyTimeout:0` 恒设，timeout=0 时全 0），`request()` 层不接收这些参数。
 2. 响应 body 是 Node Readable：排空用 `.dump()`，透传 `new Response(readable)`。
 3. `accept-encoding: identity` 防上游压缩破坏 SSE。
 4. 客户端断连（`c.req.raw.signal`）立即 abort 上游；AbortError 静默，不写日志。
@@ -143,4 +143,4 @@ data/gateway.db    运行时自动创建（不入库）
 2. **单进程约束**：better-sqlite3 不支持多实例共享，只能单进程运行。
 3. **日志增长**：启动时按 `log_retention_days`（默认 30，settings 可配）清理过期日志（代理日志与配置操作日志同步清理）；运行期无自动裁剪，条数上限策略未实施。
 4. 停止网关时代理日志 `status` 会记录网关进程退出码（非代理错误）。
-5. **配置操作日志（audit_logs）**：管理 API 各写操作端点显式写入（`src/routes/api.ts` 调用 `writeAuditLog`），无请求体记录（detail 只含变更字段名与可见值，不含 API Key/Token 明文）；登录成败、Token 重置、备份导入导出、日志清空亦有记录；代理入口与管理 API 之间无隐式日志中间件。
+5. **配置操作日志（audit_logs）**：管理 API 各写操作端点显式写入（`src/routes/api/*` 调用 `writeAuditLog`），无请求体记录（detail 只含变更字段名与可见值，不含 API Key/Token 明文）；登录成败、Token 重置、备份导入导出、日志清空亦有记录；代理入口与管理 API 之间无隐式日志中间件。

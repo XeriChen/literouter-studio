@@ -40,6 +40,10 @@ export interface AuditFilters {
 
 const MAX_PAGE_SIZE = 10_000
 
+function normalizePage(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(Math.trunc(value), fallback) : fallback
+}
+
 export function writeAuditLog(input: AuditInput): void {
   db.prepare(
     `INSERT INTO audit_logs (created_at, resource, target, action, detail, status)
@@ -55,8 +59,8 @@ export function writeAuditLog(input: AuditInput): void {
 }
 
 export function listAuditLogs(filters: AuditFilters): { total: number; rows: AuditRow[] } {
-  const pageSize = Math.min(Math.max(filters.pageSize, 1), MAX_PAGE_SIZE)
-  const page = Math.max(filters.page, 1)
+  const pageSize = Math.min(normalizePage(filters.pageSize, 1), MAX_PAGE_SIZE)
+  const page = normalizePage(filters.page, 1)
   const where: string[] = []
   const params: Array<string | number> = []
   if (filters.resource) {

@@ -9,8 +9,8 @@
 ## 核心红线（不可违背）
 
 1. **不做协议转换**：严禁在 OpenAI 与 Anthropic 协议之间互转请求体。
-2. **不修改请求体**：只允许读取 body 提取 `model` 字段，严禁增删改任何字段。
-3. **原生透传**：上游状态码与响应体一律原样转发。
+2. **仅替换 `model` 字段**：映射路由成功后，只定点替换顶层 `model` 字符串值；其他请求字节保持不变。
+3. **原生透传**：上游 3xx/4xx 状态码与响应体原样转发；仅 5xx 统一包装为 502。
 
 ## 功能特性
 
@@ -26,7 +26,7 @@
 | 层 | 技术 |
 | :--- | :--- |
 | 后端 | Node.js 24 LTS · TypeScript · Hono · better-sqlite3 · undici · zod |
-| 前端 | React 19 · Vite · Tailwind CSS 3 · shadcn/ui · TanStack Query · react-markdown |
+| 前端 | React 19 · Vite · Tailwind CSS 4 · shadcn/ui · TanStack Query · react-markdown |
 | 包管理 | pnpm（registry 已配置国内镜像 `registry.npmmirror.com`） |
 
 ## 快速开始
@@ -75,6 +75,9 @@ pnpm start          # 由 Hono 同时托管 API 与前端静态文件
 | `pnpm dev:server` | 仅后端（tsx watch，默认 3000） |
 | `pnpm dev:web` | 仅前端（Vite，默认 5173） |
 | `pnpm typecheck` | TypeScript 类型检查 |
+| `pnpm test` | Node 单元测试 |
+| `pnpm test:e2e` | Playwright 浏览器端到端测试 |
+| `pnpm check` | 类型检查、单元测试与生产构建 |
 | `pnpm build:web` | 构建前端到 `web/dist` |
 | `pnpm start` | 生产模式运行（需先 build:web） |
 

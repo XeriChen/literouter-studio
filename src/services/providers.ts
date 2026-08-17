@@ -7,12 +7,6 @@ import { buildProviderHeaders } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
 import type { ProviderProtocol, ProviderRow } from '../types'
 
-export function getFirstEnabledProvider(protocol: 'openai' | 'anthropic'): ProviderRow | undefined {
-  return db
-    .prepare('SELECT * FROM providers WHERE protocol = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1')
-    .get(protocol) as ProviderRow | undefined
-}
-
 export function listProviders(): ProviderRow[] {
   return db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as ProviderRow[]
 }
@@ -93,11 +87,17 @@ export async function listUpstreamModels(providerId: string): Promise<string[]> 
     dispatcher,
   })
   try {
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`upstream returned HTTP ${res.status}`)
+    }
     const chunks: Buffer[] = []
     for await (const chunk of res.body) chunks.push(Buffer.from(chunk))
     const raw = Buffer.concat(chunks).toString('utf-8')
-    const json = JSON.parse(raw) as { data?: { id?: string }[] } | null
-    const allIds = (json?.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === 'string')
+    const json = JSON.parse(raw) as { data?: unknown } | null
+    if (!json || !Array.isArray(json.data)) throw new Error('invalid upstream model list')
+    const allIds = json.data
+      .map((model) => model && typeof model === 'object' ? (model as { id?: unknown }).id : null)
+      .filter((id): id is string => typeof id === 'string')
     return allIds.filter((id) => matchesFilter(id, provider.model_filter))
   } finally {
     await drainBody(res.body)
@@ -131,10 +131,10 @@ export function importModels(providerId: string, modelIds: string[]): { added: n
     }
     return { added, updated }
   })
-  return tx(modelIds)
+  return tx([...new Set(modelIds)])
 }
 
-/** 网络连通性测试：收到任意 HTTP 响应（含 404）即可达；401/403 为认证失败；网络异常/超时/5xx 为失败 */
+/** 网络连通性测试：401/403 视为认证失败；其余 HTTP 响应表示网络可达，网络异常/超时为失败。 */
 export async function testProviderConnection(providerId: string): Promise<{
   ok: boolean
   status?: number
