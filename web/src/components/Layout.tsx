@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router'
 import type { LucideIcon } from 'lucide-react'
 import { Activity, Box, ChevronRight, Home, LayoutDashboard, Menu, MessageSquare, Moon, ScrollText, Settings, Sun, X } from 'lucide-react'
 

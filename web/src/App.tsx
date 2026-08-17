@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { getToken } from './api/client'
 import { Layout } from './components/Layout'
 import Home from './pages/Home'

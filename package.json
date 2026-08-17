@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "轻量 LLM Provider 聚合网关（OpenAI / Anthropic 原生透传）",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": ">=24"
   },
@@ -35,7 +36,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.18.2",
+    "react-router": "^8.3.0",
     "tailwind-merge": "^3.6.0",
     "undici": "^8.10.0",
     "zod": "^4.4.3"

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { Activity, ArrowRight, KeyRound, LockKeyhole, Radio } from 'lucide-react'
 import { api, setToken } from '@/api/client'
 import { Button } from '@/components/ui/button'

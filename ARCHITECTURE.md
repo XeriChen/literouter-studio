@@ -23,7 +23,7 @@
 | 层 | 技术 |
 | :--- | :--- |
 | 后端 | Node ≥ 24、TypeScript strict、Hono 4、better-sqlite3 13、undici 8、zod 4 |
-| 前端 | React 19、Vite 8、Tailwind 4、shadcn/ui、TanStack Query、react-router 7 |
+| 前端 | React 19、Vite 8、Tailwind 4、shadcn/ui、TanStack Query、react-router 8 |
 
 - 单包仓库，`web/dist` 由 Hono 托管（生产 `pnpm start`）。
 - 开发：`pnpm dev` = 后端 3000（tsx watch）+ 前端 5173（Vite，`/api`、`/openai`、`/anthropic` 已代理到 3000）。

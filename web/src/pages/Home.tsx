@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import type { LucideIcon } from 'lucide-react'
 import { Activity, ArrowUpRight, Box, Braces, CheckCircle2, CircleDot, LayoutDashboard, MessageSquare, Radio, Route } from 'lucide-react'
 import { api } from '@/api/client'

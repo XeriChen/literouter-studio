@@ -30,7 +30,7 @@
 ## 4. 技术栈
 
 - 后端：TypeScript（strict）、Hono、better-sqlite3、undici v8、zod
-- 前端：React 19、Vite 8、Tailwind CSS 4、shadcn/ui、TanStack Query、react-markdown、react-router 7
+- 前端：React 19、Vite 8、Tailwind CSS 4、shadcn/ui、TanStack Query、react-markdown、react-router 8
 - 单包结构，`web/dist` 由 Hono 托管
 
 ## 5. 目录职责
