@@ -56,7 +56,7 @@
 ## 6. 硬性约定
 
 - **凡需指定真实模型的管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）；`GET /api/models` 仅列出模型，不需要 body。
-- **Provider 分组只用于管理展示**：按协议隔离，每个 Provider 最多归属一个组；删除分组只解除归属，批量删除成员才会删除 Provider 及其关联数据，分组本身不参与代理路由。
+- **Provider 分组只用于管理展示**：按协议隔离，每个 Provider 最多归属一个组；删除分组只解除归属，批量删除成员才会删除 Provider 及其关联数据，分组本身不参与代理路由；批量移动只能移入同协议分组或未分组，分组启用滑块以原子操作统一启用/禁用成员。
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - OpenAI 代理入口严格限定为 `/openai/v1/*`；Anthropic 使用 `/anthropic/v1/*`。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。

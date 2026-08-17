@@ -56,10 +56,14 @@ export function deleteProviderGroup(input: { protocol: ProviderProtocol; id: str
 }
 
 export function enableGroupProviders(input: { protocol: ProviderProtocol; group_id: string }): number {
+  return setGroupProvidersEnabled(input, 1)
+}
+
+export function setGroupProvidersEnabled(input: { protocol: ProviderProtocol; group_id: string }, enabled: 0 | 1): number {
   return db.transaction(() => {
     const result = db.prepare(
-      'UPDATE providers SET enabled = 1, updated_at = ? WHERE protocol = ? AND group_id = ? AND enabled = 0',
-    ).run(new Date().toISOString(), input.protocol, input.group_id)
+      'UPDATE providers SET enabled = ?, updated_at = ? WHERE protocol = ? AND group_id = ? AND enabled <> ?',
+    ).run(enabled, new Date().toISOString(), input.protocol, input.group_id, enabled)
     repairAliasTargetsInTransaction()
     return result.changes
   })()

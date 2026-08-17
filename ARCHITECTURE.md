@@ -98,7 +98,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | :--- | :--- |
 | `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改） |
 | `GET/POST/PATCH/DELETE /provider-groups` | Provider 分组 CRUD；删除组只解除成员归属 |
-| `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-delete` | 原子批量启用或清空组内 Provider，清空后保留分组 |
+| `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-toggle`、`POST /provider-groups/batch-delete` | 原子批量启用/禁用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
 | `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库 |
 | `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
@@ -181,7 +181,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 ## 7. 前端要点
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
-- Providers 页按协议和自定义分组折叠展示，支持组内批量启用/删除；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。
+- Providers 页按协议和自定义分组折叠展示，支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。
 - Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
 - Models 页两个 tab：**模型映射**（按协议折叠分组、映射启用开关、候选展开管理/拖拽优先级、当前目标切换与快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。

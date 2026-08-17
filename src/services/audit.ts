@@ -27,6 +27,7 @@ export type AuditAction =
   | 'reset'
   | 'clear'
   | 'batch_enable'
+  | 'batch_disable'
   | 'batch_delete'
   | 'activate'
   | 'reorder'

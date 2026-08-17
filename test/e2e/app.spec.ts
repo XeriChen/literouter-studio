@@ -61,29 +61,49 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await expect(page.getByRole('columnheader', { name: '候选' }).first()).toBeVisible()
 })
 
-test('renders provider groups and supports copy and API Key visibility', async ({ page }, testInfo) => {
+test('renders provider groups and supports provider bulk actions', async ({ page }, testInfo) => {
   const browserErrors: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') browserErrors.push(message.text())
   })
   page.on('pageerror', (error) => browserErrors.push(error.message))
   await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  const groups = [{
+    protocol: 'openai',
+    id: 'group-production',
+    name: 'Production',
+    created_at: '2026-08-17T00:00:00.000Z',
+    updated_at: '2026-08-17T00:00:00.000Z',
+    provider_count: 1,
+    enabled_count: 1,
+  }, {
+    protocol: 'openai',
+    id: 'group-staging',
+    name: 'Staging',
+    created_at: '2026-08-17T00:00:00.000Z',
+    updated_at: '2026-08-17T00:00:00.000Z',
+    provider_count: 0,
+    enabled_count: 0,
+  }]
+  let groupToggleEnabled: number | undefined
+  let movedGroupId: string | null | undefined
   await page.route('**/api/provider-groups', async (route) => {
+    if (route.request().method() === 'POST') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { protocol: 'openai' | 'anthropic'; name: string }
+      const created = { ...body, id: 'group-canary', created_at: '2026-08-17T00:00:00.000Z', updated_at: '2026-08-17T00:00:00.000Z', provider_count: 0, enabled_count: 0 }
+      groups.push(created)
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: created }) })
+      return
+    }
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        ok: true,
-        data: [{
-          protocol: 'openai',
-          id: 'group-production',
-          name: 'Production',
-          created_at: '2026-08-17T00:00:00.000Z',
-          updated_at: '2026-08-17T00:00:00.000Z',
-          provider_count: 1,
-          enabled_count: 1,
-        }],
-      }),
+      body: JSON.stringify({ ok: true, data: groups }),
     })
+  })
+  await page.route('**/api/provider-groups/batch-toggle', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { enabled?: number }
+    groupToggleEnabled = body.enabled
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { updated: 1 } }) })
   })
   await page.route('**/api/providers', async (route) => {
     await route.fulfill({
@@ -108,12 +128,24 @@ test('renders provider groups and supports copy and API Key visibility', async (
       }),
     })
   })
+  await page.route('**/api/providers/provider-primary', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { group_id?: string | null }
+      movedGroupId = body.group_id
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { id: 'provider-primary' } }) })
+      return
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { message: 'not found', code: 'not_found', type: 'not_found' } }) })
+  })
 
   await page.goto('/providers')
   await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible()
   await expect(page.getByText('Production').first()).toBeVisible()
-  await expect(page.getByTitle('启用组内全部 Provider')).toBeVisible()
-  await expect(page.getByTitle('删除组内全部 Provider')).toBeVisible()
+  const groupSwitch = page.getByRole('switch', { name: '切换 Production 内全部 Provider 启用状态' })
+  await expect(groupSwitch).toBeVisible()
+  await groupSwitch.click()
+  await expect.poll(() => groupToggleEnabled).toBe(0)
+  await expect(page.getByTitle('删除组内全部 Provider').first()).toBeVisible()
 
   await page.getByRole('button', { name: '复制 Primary' }).click()
   const copyDialog = page.getByRole('dialog')
@@ -161,5 +193,22 @@ test('renders provider groups and supports copy and API Key visibility', async (
   await expect(mobileDialog.getByText(/逗号分隔的前缀匹配规则/)).toBeVisible()
   await expect(mobileDialog.getByRole('button', { name: '创建', exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('provider-create-dialog-mobile.png') })
+  await formRegion.evaluate((element) => element.scrollTo({ top: 0 }))
+  await mobileDialog.getByRole('button', { name: '新建 Provider 分组' }).click()
+  const inlineGroupDialog = page.getByRole('dialog').last()
+  await expect(inlineGroupDialog.getByRole('heading', { name: '新建 Provider 分组' })).toBeVisible()
+  await inlineGroupDialog.getByRole('textbox').fill('Canary')
+  await inlineGroupDialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(mobileDialog.getByRole('combobox').nth(1)).toContainText('Canary')
+  await mobileDialog.getByRole('button', { name: '取消' }).click()
+
+  await page.getByRole('checkbox', { name: '选择 Primary' }).check()
+  await expect(page.getByText('已选 1 个 Provider')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('provider-bulk-actions-mobile.png') })
+  const moveSelect = page.getByRole('combobox', { name: '批量移动 Provider 到分组' })
+  await moveSelect.click()
+  await page.getByRole('option', { name: 'Staging' }).click()
+  await expect.poll(() => movedGroupId).toBe('group-staging')
+  await expect(page.getByText('批量移动分组完成')).toBeVisible()
   expect(browserErrors).toEqual([])
 })

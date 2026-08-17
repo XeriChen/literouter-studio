@@ -15,6 +15,7 @@ import {
   listProviderGroups,
   listProviders,
   listUpstreamModels,
+  setGroupProvidersEnabled,
   testProviderConnection,
   updateProvider,
   updateProviderGroup,
@@ -143,6 +144,26 @@ export function registerProviderRoutes(api: Hono<Env>): void {
     if (!group) return fail(c, 404, 'provider group not found', 'provider_group_not_found')
     const updated = enableGroupProviders(parsed.data)
     writeAuditLog({ resource: 'provider', action: 'batch_enable', target: group.name, detail: `批量启用 Provider 分组 ${group.name} 内 ${updated} 个 Provider`, status: 200 })
+    return ok(c, { updated })
+  })
+
+  api.post('/provider-groups/batch-toggle', async (c) => {
+    const parsed = z.object({
+      protocol: z.enum(['openai', 'anthropic']),
+      group_id: z.string().min(1),
+      enabled: z.union([z.literal(0), z.literal(1)]),
+    }).safeParse(await readJson(c))
+    if (!parsed.success) return fail(c, 400, 'invalid provider group', 'invalid_request_body')
+    const group = getProviderGroup(parsed.data.protocol, parsed.data.group_id)
+    if (!group) return fail(c, 404, 'provider group not found', 'provider_group_not_found')
+    const updated = setGroupProvidersEnabled(parsed.data, parsed.data.enabled)
+    writeAuditLog({
+      resource: 'provider',
+      action: parsed.data.enabled ? 'batch_enable' : 'batch_disable',
+      target: group.name,
+      detail: `${parsed.data.enabled ? '批量启用' : '批量禁用'} Provider 分组 ${group.name} 内 ${updated} 个 Provider`,
+      status: 200,
+    })
     return ok(c, { updated })
   })
 

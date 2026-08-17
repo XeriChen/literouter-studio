@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
@@ -83,7 +83,9 @@ export default function Providers() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
+  const [groupDialogSource, setGroupDialogSource] = useState<'page' | 'provider'>('page')
   const [renaming, setRenaming] = useState<{ protocol: Protocol; id: string; name: string } | null>(null)
+  const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(new Set())
   const [fetchDialog, setFetchDialog] = useState<{ providerId: string; providerName: string } | null>(null)
   const [upstreamModels, setUpstreamModels] = useState<string[]>([])
   const [upstreamLoading, setUpstreamLoading] = useState(false)
@@ -92,6 +94,22 @@ export default function Providers() {
 
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Provider[]>('/api/providers') })
   const providerGroups = useQuery({ queryKey: ['provider-groups'], queryFn: () => api<ProviderGroup[]>('/api/provider-groups') })
+  const selectedProviders = useMemo(
+    () => (providers.data ?? []).filter((provider) => selectedProviderIds.has(provider.id)),
+    [providers.data, selectedProviderIds],
+  )
+  const selectedProtocol = selectedProviders.length > 0 && new Set(selectedProviders.map((provider) => provider.protocol)).size === 1
+    ? selectedProviders[0]?.protocol ?? null
+    : null
+
+  useEffect(() => {
+    if (!providers.data) return
+    const existingIds = new Set(providers.data.map((provider) => provider.id))
+    setSelectedProviderIds((current) => {
+      const next = new Set([...current].filter((id) => existingIds.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [providers.data])
 
   function invalidateProviderData() {
     qc.invalidateQueries({ queryKey: ['providers'] })
@@ -121,6 +139,12 @@ export default function Providers() {
     setForm({ ...EMPTY_FORM })
     setApiKeyVisible(false)
     setDialogOpen(true)
+  }
+
+  function openGroupDialog(protocol: Protocol = 'openai', source: 'page' | 'provider' = 'page') {
+    setGroupDialogSource(source)
+    setGroupForm({ protocol, name: '' })
+    setGroupOpen(true)
   }
 
   function openEdit(provider: Provider) {
@@ -206,11 +230,48 @@ export default function Providers() {
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '更新失败', ok: false }),
   })
 
-  const createGroupMutation = useMutation({
-    mutationFn: () => api('/api/provider-groups', { method: 'POST', body: JSON.stringify({ ...groupForm, name: groupForm.name.trim() }) }),
+  const batchSetEnabledMutation = useMutation({
+    mutationFn: async ({ providerIds, enabled }: { providerIds: string[]; enabled: 0 | 1 }) => {
+      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })))
+    },
+    onSuccess: (_data, variables) => {
+      setSelectedProviderIds(new Set())
+      invalidateProviderData()
+      setResult({ message: variables.enabled ? '批量启用完成' : '批量禁用完成', ok: true })
+    },
+    onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量更新失败', ok: false }),
+  })
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: async (providerIds: string[]) => {
+      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'DELETE' })))
+    },
     onSuccess: () => {
+      setSelectedProviderIds(new Set())
+      invalidateProviderData()
+      setResult({ message: '批量删除完成', ok: true })
+    },
+    onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量删除失败', ok: false }),
+  })
+
+  const batchMoveMutation = useMutation({
+    mutationFn: async ({ providerIds, groupId }: { providerIds: string[]; groupId: string | null }) => {
+      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ group_id: groupId }) })))
+    },
+    onSuccess: () => {
+      setSelectedProviderIds(new Set())
+      invalidateProviderData()
+      setResult({ message: '批量移动分组完成', ok: true })
+    },
+    onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量移动失败', ok: false }),
+  })
+
+  const createGroupMutation = useMutation({
+    mutationFn: () => api<ProviderGroup>('/api/provider-groups', { method: 'POST', body: JSON.stringify({ ...groupForm, name: groupForm.name.trim() }) }),
+    onSuccess: (group) => {
       setGroupOpen(false)
       setGroupForm({ protocol: 'openai', name: '' })
+      if (groupDialogSource === 'provider') setForm((current) => ({ ...current, group_id: group.id }))
       qc.invalidateQueries({ queryKey: ['provider-groups'] })
       setResult({ message: 'Provider 分组创建成功', ok: true })
     },
@@ -228,18 +289,18 @@ export default function Providers() {
   })
 
   const groupActionMutation = useMutation({
-    mutationFn: ({ action, group }: { action: 'enable' | 'clear' | 'delete'; group: ProviderGroup }) => {
-      const path = action === 'enable'
-        ? '/api/provider-groups/batch-enable'
+    mutationFn: ({ action, group, enabled }: { action: 'toggle-enabled' | 'clear' | 'delete'; group: ProviderGroup; enabled?: 0 | 1 }) => {
+      const path = action === 'toggle-enabled'
+        ? '/api/provider-groups/batch-toggle'
         : action === 'clear'
           ? '/api/provider-groups/batch-delete'
           : '/api/provider-groups'
-      return api(path, { method: action === 'delete' ? 'DELETE' : 'POST', body: JSON.stringify({ protocol: group.protocol, group_id: group.id }) })
+      return api(path, { method: action === 'delete' ? 'DELETE' : 'POST', body: JSON.stringify({ protocol: group.protocol, group_id: group.id, ...(action === 'toggle-enabled' ? { enabled } : {}) }) })
     },
     onSuccess: (_data, variables) => {
       invalidateProviderData()
       setResult({
-        message: variables.action === 'enable' ? '分组内 Provider 已批量启用' : variables.action === 'clear' ? '分组内 Provider 已清空' : 'Provider 分组已删除，成员移至未分组',
+        message: variables.action === 'toggle-enabled' ? (variables.enabled ? '分组内 Provider 已全部启用' : '分组内 Provider 已全部禁用') : variables.action === 'clear' ? '分组内 Provider 已清空' : 'Provider 分组已删除，成员移至未分组',
         ok: true,
       })
     },
@@ -299,14 +360,35 @@ export default function Providers() {
     })
   }
 
+  function toggleProviderSelection(providerId: string) {
+    setSelectedProviderIds((current) => {
+      const next = new Set(current)
+      if (next.has(providerId)) next.delete(providerId)
+      else next.add(providerId)
+      return next
+    })
+  }
+
+  function toggleRowsSelection(rows: Provider[]) {
+    const ids = rows.map((provider) => provider.id)
+    setSelectedProviderIds((current) => {
+      const next = new Set(current)
+      const shouldClear = ids.length > 0 && ids.every((id) => next.has(id))
+      ids.forEach((id) => shouldClear ? next.delete(id) : next.add(id))
+      return next
+    })
+  }
+
   function renderProviderTable(rows: Provider[]) {
+    const allSelected = rows.length > 0 && rows.every((provider) => selectedProviderIds.has(provider.id))
     return (
       <Table className="data-table">
-        <TableHeader><TableRow><TableHead className="pl-6">名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead></TableRow></TableHeader>
+        <TableHeader><TableRow><TableHead className="w-10 pl-4"><input type="checkbox" checked={allSelected} onChange={() => toggleRowsSelection(rows)} aria-label="选择当前分组全部 Provider" className="h-4 w-4 rounded border-input" /></TableHead><TableHead>名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead></TableRow></TableHeader>
         <TableBody>
           {rows.map((provider) => (
-            <TableRow key={provider.id}>
-              <TableCell className="pl-6 font-medium">{provider.name}</TableCell>
+            <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
+              <TableCell className="pl-4"><input type="checkbox" checked={selectedProviderIds.has(provider.id)} onChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} className="h-4 w-4 rounded border-input" /></TableCell>
+              <TableCell className="font-medium">{provider.name}</TableCell>
               <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
               <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
               <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
@@ -319,7 +401,7 @@ export default function Providers() {
               </div></TableCell>
             </TableRow>
           ))}
-          {!rows.length && <TableRow><TableCell colSpan={5} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
+          {!rows.length && <TableRow><TableCell colSpan={6} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
         </TableBody>
       </Table>
     )
@@ -329,6 +411,8 @@ export default function Providers() {
     const rows = rowsFor(protocol, group?.id ?? null)
     const key = `${protocol}/${group?.id ?? 'ungrouped'}`
     const isOpen = !collapsed.has(key)
+    const enabledCount = rows.filter((provider) => provider.enabled).length
+    const groupSwitchChecked = rows.length > 0 && enabledCount === rows.length
     return (
       <Card key={key} className="console-surface shadow-none">
         <CardHeader className="items-stretch justify-between gap-2 space-y-0 border-b border-foreground/10 px-5 py-3 sm:flex-row sm:items-center">
@@ -339,7 +423,7 @@ export default function Providers() {
             {group && <Badge variant="outline">{rows.filter((provider) => provider.enabled).length} 已启用</Badge>}
           </button>
           {group && <div className="flex flex-wrap items-center justify-end gap-1">
-            <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} onClick={() => groupActionMutation.mutate({ action: 'enable', group })} title="启用组内全部 Provider"><Power className="h-3.5 w-3.5" /> 启用全部</Button>
+            <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground"><span>{enabledCount === rows.length && rows.length > 0 ? '全部启用' : enabledCount > 0 ? '部分启用' : '全部禁用'}</span><Switch checked={groupSwitchChecked} disabled={!rows.length || groupActionMutation.isPending} onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })} aria-label={`切换 ${group.name} 内全部 Provider 启用状态`} title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'} /></div>
             <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /> 清空 Provider</Button>
             <Button variant="ghost" size="icon" className="icon-button" aria-label={`重命名分组 ${group.name}`} title="重命名分组" onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}><Pencil className="h-3.5 w-3.5" /></Button>
             <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除分组 ${group.name}`} title="删除分组" onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -353,10 +437,31 @@ export default function Providers() {
   const hasAnyProvider = (providers.data?.length ?? 0) > 0
 
   return (
+    <>
+    {selectedProviderIds.size > 0 && <div className="fixed inset-x-3 bottom-4 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+      <span className="text-sm font-medium">已选 {selectedProviderIds.size} 个 Provider</span>
+      <div className="hidden h-4 w-px bg-border sm:block" />
+      <Select
+        onValueChange={(groupId) => batchMoveMutation.mutate({ providerIds: [...selectedProviderIds], groupId: groupId === 'none' ? null : groupId })}
+        disabled={!selectedProtocol || batchMoveMutation.isPending || batchSetEnabledMutation.isPending || batchDeleteMutation.isPending}
+      >
+        <SelectTrigger className="h-8 w-[170px] max-w-full text-xs" aria-label="批量移动 Provider 到分组">
+          <SelectValue placeholder={selectedProtocol ? '移动到分组' : '需选择同一协议'} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">未分组</SelectItem>
+          {(providerGroups.data ?? []).filter((group) => group.protocol === selectedProtocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 1 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
+      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedProviderIds.size} 个 Provider？关联的模型也会一并删除。`)) batchDeleteMutation.mutate([...selectedProviderIds]) }} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
+      <Button size="sm" variant="ghost" onClick={() => setSelectedProviderIds(new Set())} aria-label="清除 Provider 选择"><X className="h-3.5 w-3.5" /></Button>
+    </div>}
     <div className="page-shell space-y-6">
       <div className="page-heading">
         <div><div className="eyebrow mb-2 flex items-center gap-2"><Wifi className="h-3.5 w-3.5" /> 上游连接</div><h1 className="page-title">Providers</h1><p className="page-description">按协议和自定义分组管理 LLM 服务接入点、连通性与模型发现。</p></div>
-        <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={() => setGroupOpen(true)} size="sm"><FolderPlus className="h-4 w-4" /> 新建分组</Button><Button onClick={openCreate} size="sm"><Plus className="h-4 w-4" /> 新增 Provider</Button></div>
+        <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={() => openGroupDialog()} size="sm"><FolderPlus className="h-4 w-4" /> 新建分组</Button><Button onClick={openCreate} size="sm"><Plus className="h-4 w-4" /> 新增 Provider</Button></div>
       </div>
 
       {result && <div className={`notice ${result.ok ? 'notice-success' : 'notice-error'}`}><span>{result.message}</span><button aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button ml-auto h-6 w-6"><X className="h-3.5 w-3.5" /></button></div>}
@@ -372,7 +477,7 @@ export default function Providers() {
         {providers.isLoading && <Card className="console-surface shadow-none"><CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">加载中...</CardContent></Card>}
       </div>
 
-      <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>新建 Provider 分组</DialogTitle><DialogDescription>分组按协议隔离，只用于管理和列表展示，不参与代理路由。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={groupForm.protocol} onValueChange={(value) => setGroupForm({ ...groupForm, protocol: value as Protocol })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>分组名称</Label><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="生产环境" /></div></div><DialogFooter><Button variant="outline" onClick={() => setGroupOpen(false)}>取消</Button><Button disabled={!groupForm.name.trim() || createGroupMutation.isPending} onClick={() => createGroupMutation.mutate()}>{createGroupMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 创建</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={groupOpen} onOpenChange={(open) => { setGroupOpen(open); if (!open) setGroupDialogSource('page') }}><DialogContent><DialogHeader><DialogTitle>新建 Provider 分组</DialogTitle><DialogDescription>分组按协议隔离，只用于管理和列表展示，不参与代理路由。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={groupForm.protocol} onValueChange={(value) => setGroupForm({ ...groupForm, protocol: value as Protocol })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>分组名称</Label><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="生产环境" /></div></div><DialogFooter><Button variant="outline" onClick={() => setGroupOpen(false)}>取消</Button><Button disabled={!groupForm.name.trim() || createGroupMutation.isPending} onClick={() => createGroupMutation.mutate()}>{createGroupMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 创建</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>重命名 Provider 分组</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter' && renaming?.name.trim()) renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() }) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim() || renameGroupMutation.isPending} onClick={() => renaming && renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() })}>保存</Button></DialogFooter></DialogContent></Dialog>
 
@@ -389,7 +494,7 @@ export default function Providers() {
             tabIndex={0}
           >
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>名称</Label><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="如：OpenAI 官方" /></div><div className="space-y-1.5"><Label>协议</Label><Select disabled={formMode === 'edit'} value={form.protocol} onValueChange={(value) => setForm({ ...form, protocol: value as Protocol, group_id: value === form.protocol ? form.group_id : '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div></div>
-            <div className="space-y-1.5"><Label>分组（可选）</Label><Select value={form.group_id || 'none'} onValueChange={(value) => setForm({ ...form, group_id: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{(providerGroups.data ?? []).filter((group) => group.protocol === form.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>分组（可选）</Label><div className="flex gap-2"><Select value={form.group_id || 'none'} onValueChange={(value) => setForm({ ...form, group_id: value === 'none' ? '' : value })}><SelectTrigger className="flex-1"><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{(providerGroups.data ?? []).filter((group) => group.protocol === form.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" size="icon" onClick={() => openGroupDialog(form.protocol, 'provider')} aria-label="新建 Provider 分组" title="新建 Provider 分组"><FolderPlus className="h-4 w-4" /></Button></div></div>
             <div className="space-y-1.5"><Label>Base URL</Label><Input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
             <div className="space-y-1.5"><Label>API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." aria-label="API Key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
             {form.protocol === 'anthropic' && <div className="space-y-1.5"><Label>Anthropic Version（可选）</Label><Input value={form.anthropic_version} onChange={(event) => setForm({ ...form, anthropic_version: event.target.value })} placeholder="2023-06-01（留空使用默认值）" /></div>}
@@ -406,5 +511,6 @@ export default function Providers() {
         <DialogFooter><Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button><Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels] })}>{importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型</Button></DialogFooter>
       </DialogContent></Dialog>
     </div>
+    </>
   )
 }
