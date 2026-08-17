@@ -20,6 +20,7 @@ export interface Provider {
   id: string
   name: string
   protocol: 'openai' | 'anthropic'
+  group_id: string | null
   base_url: string
   auth: Record<string, string>
   custom_headers: Record<string, string>
@@ -29,6 +30,16 @@ export interface Provider {
   enabled: number
   created_at: string
   updated_at: string
+}
+
+export interface ProviderGroup {
+  protocol: 'openai' | 'anthropic'
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+  provider_count: number
+  enabled_count: number
 }
 
 export interface ProviderModel {
@@ -119,6 +130,7 @@ export interface BackupData {
     id: string
     name: string
     protocol: 'openai' | 'anthropic'
+    group_id: string | null
     base_url: string
     auth: Record<string, string>
     custom_headers: Record<string, string>
@@ -128,6 +140,11 @@ export interface BackupData {
     enabled: number
     created_at: string
     updated_at: string
+  }>
+  provider_groups: Array<{
+    protocol: 'openai' | 'anthropic'
+    id: string
+    name: string
   }>
   models: Array<{
     provider_id: string

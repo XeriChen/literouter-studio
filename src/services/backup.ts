@@ -19,6 +19,7 @@ export interface BackupData {
     id: string
     name: string
     protocol: 'openai' | 'anthropic'
+    group_id: string | null
     base_url: string
     auth: Record<string, string>
     custom_headers: Record<string, string>
@@ -28,6 +29,11 @@ export interface BackupData {
     enabled: number
     created_at: string
     updated_at: string
+  }>
+  provider_groups: Array<{
+    protocol: 'openai' | 'anthropic'
+    id: string
+    name: string
   }>
   models: Array<{
     provider_id: string
@@ -51,9 +57,23 @@ export interface BackupData {
 }
 
 function validateBackupGraph(data: BackupData): void {
+  const providerGroups = new Map<string, BackupData['provider_groups'][number]>()
+  const providerGroupNames = new Set<string>()
+  for (const group of data.provider_groups) {
+    const key = JSON.stringify([group.protocol, group.id])
+    if (providerGroups.has(key)) throw new Error(`duplicate provider group: ${group.protocol}/${group.id}`)
+    const nameKey = JSON.stringify([group.protocol, group.name])
+    if (providerGroupNames.has(nameKey)) throw new Error(`duplicate provider group name: ${group.protocol}/${group.name}`)
+    providerGroups.set(key, group)
+    providerGroupNames.add(nameKey)
+  }
+
   const providers = new Map<string, BackupData['providers'][number]>()
   for (const provider of data.providers) {
     if (providers.has(provider.id)) throw new Error(`duplicate provider id: ${provider.id}`)
+    if (provider.group_id && !providerGroups.has(JSON.stringify([provider.protocol, provider.group_id]))) {
+      throw new Error(`provider group not found: ${provider.protocol}/${provider.group_id}`)
+    }
     providers.set(provider.id, provider)
   }
 
@@ -107,6 +127,7 @@ export function exportBackup(): BackupData {
     id: p.id,
     name: p.name,
     protocol: p.protocol,
+    group_id: p.group_id,
     base_url: p.base_url,
     auth: parseAuth(p),
     custom_headers: parseCustomHeaders(p),
@@ -118,6 +139,7 @@ export function exportBackup(): BackupData {
     updated_at: p.updated_at,
   }))
   const models = db.prepare('SELECT provider_id, model_id, display_name, enabled, source FROM provider_models').all() as BackupData['models']
+  const provider_groups = db.prepare('SELECT protocol, id, name FROM provider_groups ORDER BY protocol, created_at, name').all() as BackupData['provider_groups']
   const groups = db.prepare('SELECT protocol, id, name FROM model_alias_groups ORDER BY protocol, created_at, name').all() as BackupData['groups']
   const aliases = db.prepare('SELECT protocol, alias_name, group_id, enabled FROM model_aliases ORDER BY protocol, alias_name').all() as Array<{
     protocol: 'openai' | 'anthropic'
@@ -137,6 +159,7 @@ export function exportBackup(): BackupData {
     token: getAdminToken(),
     settings: getSettings(),
     providers,
+    provider_groups,
     models,
     groups,
     aliases: aliases.map((alias) => ({ ...alias, targets: byAlias.get(`${alias.protocol}/${alias.alias_name}`) ?? [] })),
@@ -151,12 +174,16 @@ export function importBackup(data: BackupData): void {
     db.prepare('DELETE FROM model_aliases').run()
     db.prepare('DELETE FROM model_alias_groups').run()
     db.prepare('DELETE FROM providers').run()
+    db.prepare('DELETE FROM provider_groups').run()
+    const insertProviderGroup = db.prepare('INSERT INTO provider_groups (protocol, id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     const insertProvider = db.prepare(
-      `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
-       VALUES (@id, @name, @protocol, @base_url, @auth_json, @custom_headers_json, @proxy_url, @timeout_ms, @model_filter, @enabled, @created_at, @updated_at)`,
+      `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
+       VALUES (@id, @name, @protocol, @group_id, @base_url, @auth_json, @custom_headers_json, @proxy_url, @timeout_ms, @model_filter, @enabled, @created_at, @updated_at)`,
     )
+    const now = new Date().toISOString()
+    for (const group of data.provider_groups) insertProviderGroup.run(group.protocol, group.id, group.name, now, now)
     for (const p of data.providers) {
-      insertProvider.run({ ...p, auth_json: JSON.stringify(p.auth), custom_headers_json: JSON.stringify(p.custom_headers), model_filter: p.model_filter ?? null })
+      insertProvider.run({ ...p, group_id: p.group_id ?? null, auth_json: JSON.stringify(p.auth), custom_headers_json: JSON.stringify(p.custom_headers), model_filter: p.model_filter ?? null })
     }
     const insertModel = db.prepare(
       `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, created_at, updated_at)
@@ -168,7 +195,6 @@ export function importBackup(data: BackupData): void {
       `INSERT INTO model_alias_targets (protocol, alias_name, provider_id, model_id, priority, active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    const now = new Date().toISOString()
     for (const m of data.models) insertModel.run(m.provider_id, m.model_id, m.display_name, m.enabled, m.source, now, now)
     for (const g of data.groups) insertGroup.run(g.protocol, g.id, g.name, now, now)
     for (const a of data.aliases) {

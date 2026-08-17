@@ -13,7 +13,7 @@
 ## 功能特性
 
 - OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/v1/*`）代理入口，支持 SSE 流式透传
-- Provider 管理：增删改查、启用/禁用、连通性测试、模型拉取、HTTP 代理、自定义请求头与模型过滤
+- Provider 管理：按协议自定义分组、组内批量启用/删除、配置复制、API Key 显隐、连通性测试、模型拉取、HTTP 代理、自定义请求头与模型过滤
 - 模型管理：手动添加或批量导入、启用/禁用、模型测活、批量操作
 - 模型映射：按协议分组、独立启用开关、多个候选目标与手动优先级；每次请求只使用唯一 active 目标
 - 双轨日志：代理访问日志与配置操作审计日志，支持分页、筛选、刷新和清空
@@ -63,7 +63,7 @@ pnpm start
 - `global_timeout_ms` 由后续代理请求读取；Provider 自身的 `timeout_ms` 优先。值为 0 时代理连接/响应头不超时，流式响应体始终不设超时；Provider 连通性测试和模型列表拉取仍有 30 秒兜底。
 - `log_retention_days` 在后端启动时清理代理日志和审计日志；0 表示不自动清理。
 - 数据库路径是启动进程当前目录下的 `data/gateway.db`，请始终从项目根目录通过 pnpm 脚本启动。
-- 当前为无正式用户的开发阶段，schema v5 是直接基线；遇到 schema 不兼容时可删除 `data/gateway.db` 重建，不承诺兼容早期开发版数据库或备份。
+- 当前为无正式用户的开发阶段，schema v6 是直接基线；遇到 schema 不兼容时可删除 `data/gateway.db` 重建，不承诺兼容早期开发版数据库或备份。
 
 ## 客户端接入
 
@@ -86,7 +86,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 
 - `data/gateway.db` 使用 SQLite WAL 与外键约束，运行时自动创建且已被 Git 忽略。
 - 代理日志的 `latency_ms` 是收到上游响应头的首包耗时，不是完整流式响应耗时。
-- 备份包含 Provider、真实模型、映射分组、全部映射（含未分组映射）、候选目标/优先级、设置、网关 Token 和明文上游 API Key，不包含代理访问日志或配置操作日志。导入会先校验引用与协议关系，再在单个事务内全量替换这些配置数据；既有日志会保留，前端会退出登录，之后须使用备份中的 Token 登录。
+- 备份包含 Provider 分组、Provider、真实模型、映射分组、全部映射（含未分组映射）、候选目标/优先级、设置、网关 Token 和明文上游 API Key，不包含代理访问日志或配置操作日志。导入会先校验引用与协议关系，再在单个事务内全量替换这些配置数据；既有日志会保留，前端会退出登录，之后须使用备份中的 Token 登录。
 
 ## 目录结构
 
@@ -94,7 +94,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 ├── src/
 │   ├── server.ts         # 入口、监听配置、启动清理与优雅关闭
 │   ├── app.ts            # Hono 应用、路由挂载、静态文件与 SPA fallback
-│   ├── db/               # SQLite 当前 schema v5 基线
+│   ├── db/               # SQLite 当前 schema v6 基线
 │   ├── middlewares/      # Token 认证
 │   ├── proxy/            # 请求体边界、model 定点替换与 undici dispatcher
 │   ├── providers/        # OpenAI / Anthropic URL、认证与请求头构造

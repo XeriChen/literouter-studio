@@ -10,6 +10,13 @@ const backupSchema = z.object({
   token: nonEmptyText,
   settings: settingsSchema.default({}),
   providers: z.array(providerSchema.extend({ id: nonEmptyText, enabled: z.union([z.literal(0), z.literal(1)]).default(1) })).default([]),
+  provider_groups: z.array(
+    z.object({
+      protocol: z.enum(['openai', 'anthropic']),
+      id: nonEmptyText,
+      name: nonEmptyText,
+    }),
+  ).default([]),
   models: z.array(
     z.object({
       provider_id: nonEmptyText,
@@ -46,7 +53,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
     writeAuditLog({
       resource: 'backup',
       action: 'export',
-        detail: `导出备份: ${backup.providers.length} 个 Provider, ${backup.models.length} 个模型, ${backup.aliases.length} 个映射, ${backup.groups.length} 个分组`,
+        detail: `导出备份: ${backup.providers.length} 个 Provider, ${backup.models.length} 个模型, ${backup.aliases.length} 个映射, ${backup.provider_groups.length + backup.groups.length} 个分组`,
       status: 200,
     })
     return ok(c, backup)
@@ -66,6 +73,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
           id: provider.id,
           name: provider.name,
           protocol: provider.protocol,
+          group_id: provider.group_id ?? null,
           base_url: provider.base_url,
           auth: provider.auth,
           custom_headers: provider.custom_headers,
@@ -77,13 +85,14 @@ export function registerBackupRoutes(api: Hono<Env>): void {
           updated_at: now,
         })),
         models: data.models.map((model) => ({ ...model, display_name: model.display_name ?? null })),
+        provider_groups: data.provider_groups,
         groups: data.groups,
         aliases: data.aliases,
       })
       writeAuditLog({
         resource: 'backup',
         action: 'import',
-        detail: `导入备份: ${data.providers.length} 个 Provider, ${data.models.length} 个模型, ${data.aliases.length} 个映射, ${data.groups.length} 个分组`,
+        detail: `导入备份: ${data.providers.length} 个 Provider, ${data.models.length} 个模型, ${data.aliases.length} 个映射, ${data.provider_groups.length + data.groups.length} 个分组`,
         status: 200,
       })
       return ok(c, { token: getAdminToken() })

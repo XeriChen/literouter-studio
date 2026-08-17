@@ -457,6 +457,7 @@ interface RouteRow {
   provider_id: string
   provider_name: string
   provider_protocol: ProviderProtocol
+  provider_group_id: string | null
   base_url: string
   auth_json: string
   custom_headers_json: string
@@ -482,6 +483,7 @@ const findRouteStatement = db.prepare(
      p.id AS provider_id,
      p.name AS provider_name,
      p.protocol AS provider_protocol,
+     p.group_id AS provider_group_id,
      p.base_url,
      p.auth_json,
      p.custom_headers_json,
@@ -507,6 +509,7 @@ export function findRoute(protocol: ProviderProtocol, aliasName: string): RouteR
     id: row.provider_id,
     name: row.provider_name,
     protocol: row.provider_protocol,
+    group_id: row.provider_group_id,
     base_url: row.base_url,
     auth_json: row.auth_json,
     custom_headers_json: row.custom_headers_json,

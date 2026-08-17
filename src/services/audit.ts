@@ -4,6 +4,7 @@ import type { AuditRow } from '../types'
 export type AuditResource =
   | 'auth'
   | 'provider'
+  | 'provider_group'
   | 'model'
   | 'alias'
   | 'alias_group'

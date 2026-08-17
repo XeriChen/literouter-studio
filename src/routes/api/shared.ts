@@ -64,6 +64,7 @@ export const settingsSchema = z.object({
 export const providerSchema = z.object({
   name: nonEmptyText,
   protocol: z.enum(['openai', 'anthropic']),
+  group_id: nonEmptyText.nullable().optional(),
   base_url: httpUrl,
   auth: authSchema.default({}),
   custom_headers: authSchema.default({}),
@@ -115,6 +116,11 @@ export const aliasGroupRefSchema = z.object({
   group_id: nonEmptyText,
 })
 
+export const providerGroupRefSchema = z.object({
+  protocol: z.enum(['openai', 'anthropic']),
+  group_id: nonEmptyText,
+})
+
 export const aliasTargetRefSchema = aliasRefSchema.extend({
   provider_id: nonEmptyText,
   model_id: nonEmptyText,
@@ -125,6 +131,7 @@ export function providerOut(provider: ProviderRow) {
     id: provider.id,
     name: provider.name,
     protocol: provider.protocol,
+    group_id: provider.group_id,
     base_url: provider.base_url,
     auth: parseAuth(provider),
     custom_headers: parseCustomHeaders(provider),

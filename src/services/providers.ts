@@ -6,7 +6,74 @@ import { buildOpenAIModelsUrl } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
 import { importModels as importModelsForProvider, repairAliasTargetsInTransaction } from './models'
-import type { ProviderProtocol, ProviderRow } from '../types'
+import type { ProviderGroupRow, ProviderProtocol, ProviderRow } from '../types'
+
+export interface ProviderGroupWithStats extends ProviderGroupRow {
+  provider_count: number
+  enabled_count: number
+}
+
+export function listProviderGroups(): ProviderGroupWithStats[] {
+  return db.prepare(
+    `SELECT g.*,
+       COUNT(p.id) AS provider_count,
+       COALESCE(SUM(CASE WHEN p.enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_count
+     FROM provider_groups g
+     LEFT JOIN providers p ON p.protocol = g.protocol AND p.group_id = g.id
+     GROUP BY g.protocol, g.id
+     ORDER BY g.protocol ASC, g.created_at ASC, g.name ASC`,
+  ).all() as ProviderGroupWithStats[]
+}
+
+export function getProviderGroup(protocol: ProviderProtocol, id: string): ProviderGroupRow | undefined {
+  return db.prepare('SELECT * FROM provider_groups WHERE protocol = ? AND id = ?').get(protocol, id) as ProviderGroupRow | undefined
+}
+
+export function createProviderGroup(input: { protocol: ProviderProtocol; name: string }): ProviderGroupRow {
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.prepare(
+    'INSERT INTO provider_groups (protocol, id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(input.protocol, id, input.name, now, now)
+  return getProviderGroup(input.protocol, id)!
+}
+
+export function updateProviderGroup(input: { protocol: ProviderProtocol; id: string; name: string }): ProviderGroupRow {
+  db.prepare(
+    'UPDATE provider_groups SET name = ?, updated_at = ? WHERE protocol = ? AND id = ?',
+  ).run(input.name, new Date().toISOString(), input.protocol, input.id)
+  return getProviderGroup(input.protocol, input.id)!
+}
+
+export function deleteProviderGroup(input: { protocol: ProviderProtocol; id: string }): number {
+  return db.transaction(() => {
+    const result = db.prepare(
+      'UPDATE providers SET group_id = NULL, updated_at = ? WHERE protocol = ? AND group_id = ?',
+    ).run(new Date().toISOString(), input.protocol, input.id)
+    db.prepare('DELETE FROM provider_groups WHERE protocol = ? AND id = ?').run(input.protocol, input.id)
+    return result.changes
+  })()
+}
+
+export function enableGroupProviders(input: { protocol: ProviderProtocol; group_id: string }): number {
+  return db.transaction(() => {
+    const result = db.prepare(
+      'UPDATE providers SET enabled = 1, updated_at = ? WHERE protocol = ? AND group_id = ? AND enabled = 0',
+    ).run(new Date().toISOString(), input.protocol, input.group_id)
+    repairAliasTargetsInTransaction()
+    return result.changes
+  })()
+}
+
+export function deleteGroupProviders(input: { protocol: ProviderProtocol; group_id: string }): number {
+  const deleted = db.transaction(() => {
+    const result = db.prepare('DELETE FROM providers WHERE protocol = ? AND group_id = ?').run(input.protocol, input.group_id)
+    repairAliasTargetsInTransaction()
+    return result.changes
+  })()
+  invalidateAllDispatchers()
+  return deleted
+}
 
 export function listProviders(): ProviderRow[] {
   return db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as ProviderRow[]
@@ -19,6 +86,7 @@ export function getProvider(id: string): ProviderRow | undefined {
 export function createProvider(input: {
   name: string
   protocol: ProviderProtocol
+  group_id: string | null
   base_url: string
   auth_json: string
   custom_headers_json: string
@@ -29,14 +97,14 @@ export function createProvider(input: {
   const id = randomUUID()
   const now = new Date().toISOString()
   db.prepare(
-    `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.protocol, input.base_url, input.auth_json, input.custom_headers_json, input.proxy_url, input.timeout_ms, input.model_filter, now, now)
+    `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.name, input.protocol, input.group_id, input.base_url, input.auth_json, input.custom_headers_json, input.proxy_url, input.timeout_ms, input.model_filter, now, now)
   return getProvider(id)!
 }
 
 export function updateProvider(id: string, patch: Partial<ProviderRow>): ProviderRow {
-  const allowed = ['name', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled'] as const
+  const allowed = ['name', 'group_id', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled'] as const
   const sets = allowed.filter((k) => patch[k] !== undefined)
   db.transaction(() => {
     if (sets.length > 0) {

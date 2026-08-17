@@ -10,18 +10,29 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 /**
- * 开发阶段当前 schema 基线（v5）。旧数据库允许直接删除 data/gateway.db 后重建，
- * 因此这里不保留历史 v1-v4 迁移分支。
+ * 开发阶段当前 schema 基线（v6）。旧数据库允许直接删除 data/gateway.db 后重建，
+ * 因此这里不保留历史 v1-v5 迁移分支。
  */
 db.exec(`
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
+CREATE TABLE IF NOT EXISTS provider_groups (
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (protocol, id),
+  UNIQUE (protocol, name)
+);
+
 CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+  group_id TEXT,
   base_url TEXT NOT NULL,
   auth_json TEXT NOT NULL,
   custom_headers_json TEXT NOT NULL DEFAULT '{}',
@@ -30,7 +41,8 @@ CREATE TABLE IF NOT EXISTS providers (
   model_filter TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (protocol, group_id) REFERENCES provider_groups(protocol, id)
 );
 
 CREATE TABLE IF NOT EXISTS provider_models (
@@ -112,12 +124,13 @@ CREATE TABLE IF NOT EXISTS model_alias_targets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_models_model_id_protocol ON provider_models(model_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_providers_group ON providers(protocol, group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alias_targets_priority ON model_alias_targets(protocol, alias_name, priority, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_active_target ON model_alias_targets(protocol, alias_name) WHERE active = 1;
 `)
-db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (5)').run()
+db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (6)').run()
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

@@ -8,10 +8,19 @@ export type ApiResponse<T> =
 
 export type ProviderProtocol = 'openai' | 'anthropic'
 
+export interface ProviderGroupRow {
+  protocol: ProviderProtocol
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
 export interface ProviderRow {
   id: string
   name: string
   protocol: ProviderProtocol
+  group_id: string | null
   base_url: string
   auth_json: string
   custom_headers_json: string

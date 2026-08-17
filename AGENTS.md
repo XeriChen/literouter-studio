@@ -43,19 +43,20 @@
 | :--- | :--- |
 | `src/server.ts` | 入口；监听配置按数据库 settings > env > 默认值解析，启动时清日志并处理优雅关闭 |
 | `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
-| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v5 基线（开发期可删库重建），settings 读写助手 |
+| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v6 基线（开发期可删库重建），settings 读写助手 |
 | `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
 | `src/proxy/` | 请求体限流/定点 model 替换、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存 |
 | `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
 | `src/routes/` | 管理 API 装配与领域路由、代理入口流水线 |
 | `src/services/` | 业务层：providers / models / logs（代理访问日志）/ audit（配置操作日志）/ settings / backup / liveness |
-| `src/types/` | 行类型：Provider / ProviderModel / ModelAliasGroup / ModelAlias / ModelAliasTarget / Log / Audit / Env |
+| `src/types/` | 行类型：ProviderGroup / Provider / ProviderModel / ModelAliasGroup / ModelAlias / ModelAliasTarget / Log / Audit / Env |
 | `web/src/api/` | 前端 API client，Token 存 `localStorage['llm_gateway_token']`，401 自动登出回 `/login` |
 | `web/src/pages/` | Login / Home / Providers / Models（映射 + 真实模型）/ Logs / Settings / Playground |
 
 ## 6. 硬性约定
 
 - **凡需指定真实模型的管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）；`GET /api/models` 仅列出模型，不需要 body。
+- **Provider 分组只用于管理展示**：按协议隔离，每个 Provider 最多归属一个组；删除分组只解除归属，批量删除成员才会删除 Provider 及其关联数据，分组本身不参与代理路由。
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - OpenAI 代理入口严格限定为 `/openai/v1/*`；Anthropic 使用 `/anthropic/v1/*`。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
@@ -66,7 +67,7 @@
 - `data/gateway.db` 不入库（.gitignore），按进程当前工作目录解析并在运行时自动创建。
 - `admin_token` 存在 `settings.admin_token`，首次启动自动生成 UUID；管理 API 与代理入口统一校验。
 - Token 提取优先级：`Authorization: Bearer` > `x-api-key` > `api-key`。
-- 备份文件含明文 API Key 与网关 Token，但不含代理访问日志和配置操作日志；导出/导入均要警示用户。导入会先校验数据图，再在事务内全量替换 Provider、真实模型、分组、全部映射（含未分组映射）和候选目标，应用备份设置与 Token；成功后前端强制登出并提示用备份内 Token 重新登录。
+- 备份文件含明文 API Key 与网关 Token，但不含代理访问日志和配置操作日志；导出/导入均要警示用户。导入会先校验数据图，再在事务内全量替换 Provider 分组、Provider、真实模型、映射分组、全部映射（含未分组映射）和候选目标，应用备份设置与 Token；成功后前端强制登出并提示用备份内 Token 重新登录。
 - `host`/`port` 保存后需重启；`global_timeout_ms` 对后续代理请求生效；`log_retention_days` 在下次启动清理时生效。
 - 严禁把泄漏密钥/Token 的代码或常量提交进仓库。
 
@@ -96,8 +97,8 @@
 | 400 | `invalid_backup` | 备份内部引用、协议或候选关系不合法 |
 | 401 | `invalid_api_key` | 网关 Token 校验失败 |
 | 404 | `model_not_found` | 模型不存在、未启用或未建映射 |
-| 404 | `provider_not_found` / `alias_not_found` / `alias_group_not_found` / `alias_target_not_found` | 管理 API 目标不存在 |
-| 400 | `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议映射名/分组名或映射候选重复 |
+| 404 | `provider_not_found` / `provider_group_not_found` / `alias_not_found` / `alias_group_not_found` / `alias_target_not_found` | 管理 API 目标不存在 |
+| 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议 Provider 分组名、映射名/分组名或映射候选重复 |
 | 404 | `not_found` | `/api` 未匹配或 OpenAI 代理路径不在 `/openai/v1/*` |
 | 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
@@ -114,5 +115,5 @@
 ## 11. 开发阶段数据策略（当前有效）
 
 - 当前仍处于开发阶段、没有正式用户数据；允许破坏性 schema 变更、删除 `data/gateway.db` 后重建。
-- 不为历史 v1–v4 数据库保留运行时迁移兼容路径；当前 schema 直接作为全新基线维护。
+- 不为历史 v1–v5 数据库保留运行时迁移兼容路径；当前 schema 直接作为全新基线维护。
 - 备份格式也以当前开发版为准，不需要兼容正式部署前的旧备份；恢复必须保持“配置全量替换”语义，不能因未分组映射不受分组级联删除而残留旧配置。若未来进入正式部署，由用户另行确认迁移与兼容策略。

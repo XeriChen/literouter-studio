@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 const RESOURCE_LABELS: Record<string, string> = {
   auth: '认证',
   provider: 'Provider',
+  provider_group: 'Provider 分组',
   model: '模型',
   alias: '映射',
   alias_group: '映射分组',
