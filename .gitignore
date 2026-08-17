@@ -15,5 +15,6 @@ data/
 .superpowers/
 docs/superpowers/
 gui-test-screenshots/
+test-results/
 playwright-report/
 test-results/
