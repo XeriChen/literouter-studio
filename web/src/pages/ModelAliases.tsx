@@ -1,10 +1,11 @@
-import { Fragment, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Check, ChevronDown, ChevronRight, Copy, GripVertical, Loader2, Pencil, Plus, Power, Trash2, X } from 'lucide-react'
+import { Activity, Check, ChevronDown, ChevronRight, Copy, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -128,6 +129,13 @@ export default function ModelAliases() {
   const [renaming, setRenaming] = useState<{ kind: 'alias' | 'group'; protocol: Protocol; id: string; name: string } | null>(null)
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null)
+  const [dragAliasKey, setDragAliasKey] = useState<string | null>(null)
+  const [selectionMode, setSelectionMode] = useState<Set<string>>(new Set())
   const toastId = useRef(0)
 
   function toast(ok: boolean, message: string) {
@@ -144,6 +152,33 @@ export default function ModelAliases() {
   const visibleProtocols = protocol === 'all' ? (['openai', 'anthropic'] as Protocol[]) : [protocol]
   const rows = useMemo(() => aliases.data ?? [], [aliases.data])
   const visibleRows = rows.filter((row) => protocol === 'all' || row.protocol === protocol)
+  const filteredRows = useMemo(() => {
+    if (!debouncedSearch.trim()) return visibleRows
+    const q = debouncedSearch.trim().toLowerCase()
+    return visibleRows.filter((row) =>
+      row.alias_name.toLowerCase().includes(q) ||
+      (row.provider_name ?? '').toLowerCase().includes(q) ||
+      (row.model_id ?? '').toLowerCase().includes(q)
+    )
+  }, [visibleRows, debouncedSearch])
+
+  useEffect(() => {
+    if (!aliases.data) return
+    const existingKeys = new Set(aliases.data.map((a) => keyOf(a)))
+    setSelected((current) => {
+      const next = new Set([...current].filter((k) => existingKeys.has(k)))
+      return next.size === current.size ? current : next
+    })
+  }, [aliases.data])
+
+  const selectedAliases = useMemo(() => {
+    return filteredRows.filter((row) => selected.has(keyOf(row)))
+  }, [filteredRows, selected])
+
+  const selectedProtocol = selectedAliases.length > 0
+    && new Set(selectedAliases.map((a) => a.protocol)).size === 1
+    ? selectedAliases[0]?.protocol ?? null
+    : null
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['aliases'] })
@@ -184,10 +219,37 @@ export default function ModelAliases() {
     onSuccess: () => { invalidate(); toast(true, '候选目标已更新') },
     onError: (error) => toast(false, error instanceof Error ? error.message : '候选目标操作失败'),
   })
+  const batchMoveGroupMutation = useMutation({
+    mutationFn: async ({ items, groupId }: { items: ModelAlias[]; groupId: string | null }) => {
+      await Promise.all(items.map((a) =>
+        api('/api/aliases', { method: 'PATCH', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name, group_id: groupId }) })
+      ))
+    },
+    onSuccess: () => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, '批量移动分组完成') },
+    onError: (error) => toast(false, error instanceof Error ? error.message : '批量移动失败'),
+  })
+  const batchDeleteMutation = useMutation({
+    mutationFn: async (items: ModelAlias[]) => {
+      await Promise.all(items.map((a) =>
+        api('/api/aliases', { method: 'DELETE', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name }) })
+      ))
+    },
+    onSuccess: () => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, '批量删除完成') },
+    onError: (error) => toast(false, error instanceof Error ? error.message : '批量删除失败'),
+  })
+  const batchSetEnabledMutation = useMutation({
+    mutationFn: async ({ items, enabled }: { items: ModelAlias[]; enabled: number }) => {
+      await Promise.all(items.map((a) =>
+        api('/api/aliases', { method: 'PATCH', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name, enabled }) })
+      ))
+    },
+    onSuccess: (_data, { enabled }) => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, enabled ? '批量启用完成' : '批量禁用完成') },
+    onError: (error) => toast(false, error instanceof Error ? error.message : '批量更新失败'),
+  })
 
   const filteredGroups = (groups.data ?? []).filter((group) => protocol === 'all' || group.protocol === protocol)
   function rowsFor(protocolValue: Protocol, groupId: string | null) {
-    return visibleRows.filter((row) => row.protocol === protocolValue && row.group_id === groupId)
+    return filteredRows.filter((row) => row.protocol === protocolValue && row.group_id === groupId)
   }
 
   function openRename(kind: 'alias' | 'group', protocolValue: Protocol, id: string, name: string) {
@@ -209,8 +271,30 @@ export default function ModelAliases() {
     const groupStateKey = `group:${groupKey}`
     const isOpen = !expanded.has(groupStateKey)
     const toggle = () => setExpanded((previous) => { const next = new Set(previous); if (next.has(groupStateKey)) next.delete(groupStateKey); else next.add(groupStateKey); return next })
+    const isActive = selectionMode.has(groupKey)
+    const groupSelectedCount = groupRows.filter((r) => selected.has(keyOf(r))).length
+    const allGroupSelected = groupRows.length > 0 && groupSelectedCount === groupRows.length
+    const cols = isActive ? 7 : 6
+    const canDrop = dragAliasKey !== null && protocolValue === dragAliasKey.split('/')[0]
+    const isDragOver = canDrop && dragOverGroupKey === groupKey
     return (
-      <Card key={groupKey} className="console-surface shadow-none">
+      <Card
+        key={groupKey}
+        className={`console-surface shadow-none transition-shadow ${isDragOver ? 'ring-2 ring-primary/50' : ''}`}
+        onDragOver={(e) => { if (canDrop) { e.preventDefault(); setDragOverGroupKey(groupKey) } }}
+        onDragLeave={() => { if (dragOverGroupKey === groupKey) setDragOverGroupKey(null) }}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOverGroupKey(null)
+          if (!dragAliasKey) return
+          const [dragProtocol, ...nameParts] = dragAliasKey.split('/')
+          const dragAliasName = nameParts.join('/')
+          if (dragProtocol !== protocolValue) return
+          const dragAlias = rows.find((r) => r.protocol === dragProtocol && r.alias_name === dragAliasName)
+          if (!dragAlias || dragAlias.group_id === (group?.id ?? null)) return
+          patchAliasMutation.mutate({ protocol: dragProtocol, alias_name: dragAliasName, group_id: group?.id ?? null })
+        }}
+      >
         <CardHeader className="flex-row items-center justify-between border-b border-foreground/10 px-5 py-3">
           <button className="flex min-w-0 items-center gap-2 text-left" onClick={toggle}>
             {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -218,18 +302,31 @@ export default function ModelAliases() {
             <Badge variant="secondary">{groupRows.length}</Badge>
             {group && <Badge variant="outline">{group.enabled_count} 已启用</Badge>}
           </button>
-          {group && (
-            <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1">
+            <Button size="icon" variant={isActive ? 'secondary' : 'ghost'} className="h-8 w-8" aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`} onClick={() => {
+              if (selectionMode.has(groupKey)) {
+                setSelectionMode((prev) => { const next = new Set(prev); next.delete(groupKey); return next })
+                setSelected((prev) => { const next = new Set(prev); groupRows.forEach((r) => next.delete(keyOf(r))); return next })
+              } else {
+                setSelectionMode((prev) => new Set(prev).add(groupKey))
+              }
+            }}>
+              <ListChecks className="h-4 w-4" />
+            </Button>
+            {group && <>
               <Button size="sm" variant="ghost" onClick={() => groupActionMutation.mutate({ action: 'enable', group })}><Power className="h-3.5 w-3.5" /> 启用全部</Button>
               <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /> 清空映射</Button>
               <Button size="sm" variant="ghost" onClick={() => openRename('group', group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
-            </div>
-          )}
+            </>}
+          </div>
         </CardHeader>
         {isOpen && <CardContent className="p-0">
           <Table className="data-table">
-            <TableHeader><TableRow><TableHead className="w-9 pl-5" /><TableHead>映射名</TableHead><TableHead>启用</TableHead><TableHead>当前目标</TableHead><TableHead>候选</TableHead><TableHead className="pr-5 text-right">操作</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow>
+              {isActive && <TableHead className="w-9 pl-4"><Checkbox checked={allGroupSelected ? true : groupSelectedCount > 0 ? 'indeterminate' : false} onCheckedChange={() => { if (allGroupSelected) setSelected((prev) => { const next = new Set(prev); groupRows.forEach((r) => next.delete(keyOf(r))); return next }); else setSelected((prev) => { const next = new Set(prev); groupRows.forEach((r) => next.add(keyOf(r))); return next }) }} aria-label="选择当前分组全部映射" /></TableHead>}
+              <TableHead className="w-9 pl-0" /><TableHead>映射名</TableHead><TableHead>启用</TableHead><TableHead>当前目标</TableHead><TableHead>候选</TableHead><TableHead className="pr-5 text-right">操作</TableHead>
+            </TableRow></TableHeader>
             <TableBody>
               {groupRows.map((alias) => {
                 const aliasKey = keyOf(alias)
@@ -237,18 +334,24 @@ export default function ModelAliases() {
                 const open = expanded.has(aliasStateKey)
                 const activeAvailable = alias.provider_id !== null && alias.model_id !== null && alias.provider_enabled === 1 && alias.target_enabled === 1
                 return <Fragment key={aliasKey}>
-                  <TableRow key={aliasKey}>
-                    <TableCell className="pl-5"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
+                  <TableRow key={aliasKey} className={selected.has(aliasKey) ? 'bg-muted/50' : ''}>
+                    {isActive && <TableCell className="pl-4"><Checkbox checked={selected.has(aliasKey)} onCheckedChange={() => setSelected((prev) => { const next = new Set(prev); if (next.has(aliasKey)) next.delete(aliasKey); else next.add(aliasKey); return next })} aria-label={`选择 ${alias.alias_name}`} /></TableCell>}
+                    <TableCell className="pl-0"><div
+                      draggable
+                      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', aliasKey); setDragAliasKey(aliasKey) }}
+                      onDragEnd={() => { setDragAliasKey(null); setDragOverGroupKey(null) }}
+                    ><GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" /></div></TableCell>
+                    <TableCell><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
                     <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span><button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="重命名" onClick={() => openRename('alias', alias.protocol, alias.alias_name, alias.alias_name)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
-                    <TableCell><label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={alias.enabled === 1} onChange={(event) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: event.target.checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
+                    <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
                     <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
-                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={6} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
+                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
                 </Fragment>
               })}
-              {!groupRows.length && <TableRow><TableCell colSpan={6} className="h-20 text-center text-xs text-muted-foreground">暂无映射；可以先保留空分组。</TableCell></TableRow>}
+              {!groupRows.length && <TableRow><TableCell colSpan={cols} className="h-20 text-center text-xs text-muted-foreground">暂无映射；可以先保留空分组。</TableCell></TableRow>}
             </TableBody>
           </Table>
         </CardContent>}
@@ -262,13 +365,36 @@ export default function ModelAliases() {
 
   return <>
     {toasts.length > 0 && <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col gap-2">{toasts.map((item) => <div key={item.id} className={`rounded-lg border px-4 py-2 text-sm shadow-lg ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>{item.message}</div>)}</div>}
+    {selectedAliases.length > 0 && <div className="fixed inset-x-3 bottom-4 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+      <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
+      <div className="hidden h-4 w-px bg-border sm:block" />
+      <Select
+        onValueChange={(groupId) => batchMoveGroupMutation.mutate({ items: selectedAliases, groupId: groupId === 'none' ? null : groupId })}
+        disabled={!selectedProtocol || batchMoveGroupMutation.isPending || batchSetEnabledMutation.isPending || batchDeleteMutation.isPending}
+      >
+        <SelectTrigger className="h-8 w-[170px] max-w-full text-xs" aria-label="批量移动映射到分组">
+          <SelectValue placeholder={selectedProtocol ? '移动到分组' : '需选择同一协议'} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">未分组</SelectItem>
+          {(groups.data ?? []).filter((g) => g.protocol === selectedProtocol).map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 1 })} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
+      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedAliases.length} 个映射？`)) batchDeleteMutation.mutate(selectedAliases) }} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
+      <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
+    </div>}
     <div className="page-shell space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex items-center gap-2"><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
       {visibleProtocols.map((protocolValue) => {
         const protocolGroups = filteredGroups.filter((group) => group.protocol === protocolValue)
-        return <section key={protocolValue} className="space-y-3"><div className="flex items-center gap-2"><Badge variant={protocolValue === 'openai' ? 'outline' : 'secondary'}>{protocolValue}</Badge><span className="text-xs text-muted-foreground">{visibleRows.filter((row) => row.protocol === protocolValue).length} 个映射</span></div>{protocolGroups.map((group) => renderGroup(protocolValue, group))}{renderGroup(protocolValue, null)}</section>
+        const hasSearch = debouncedSearch.trim().length > 0
+        const visibleGroups = hasSearch ? protocolGroups.filter((group) => rowsFor(protocolValue, group.id).length > 0) : protocolGroups
+        const showUngrouped = !hasSearch || rowsFor(protocolValue, null).length > 0
+        return <section key={protocolValue} className="space-y-3"><div className="flex items-center gap-2"><Badge variant={protocolValue === 'openai' ? 'outline' : 'secondary'}>{protocolValue}</Badge><span className="text-xs text-muted-foreground">{filteredRows.filter((row) => row.protocol === protocolValue).length} 个映射</span></div>{visibleGroups.map((group) => renderGroup(protocolValue, group))}{showUngrouped && renderGroup(protocolValue, null)}</section>
       })}
-      {!aliases.isLoading && !visibleRows.length && <Card className="console-surface"><CardContent className="flex h-32 items-center justify-center text-sm text-muted-foreground">还没有模型映射，可以先创建分组或映射。</CardContent></Card>}
+      {!aliases.isLoading && !filteredRows.length && <Card className="console-surface"><CardContent className="flex h-32 items-center justify-center text-sm text-muted-foreground">{debouncedSearch.trim() ? '没有匹配的映射。' : '还没有模型映射，可以先创建分组或映射。'}</CardContent></Card>}
     </div>
 
     <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>新建映射分组</DialogTitle><DialogDescription>分组只用于管理和列表展示，不参与代理路由。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={groupForm.protocol} onValueChange={(value) => setGroupForm({ ...groupForm, protocol: value as Protocol })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>分组名称</Label><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="生产环境" /></div></div><DialogFooter><Button variant="outline" onClick={() => setGroupOpen(false)}>取消</Button><Button disabled={!groupForm.name.trim() || addGroupMutation.isPending} onClick={() => addGroupMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>

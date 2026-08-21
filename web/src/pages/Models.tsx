@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Loader2, Plus, Search, Trash2, X, Box } from 'lucide-react'
+import { Activity, ListChecks, Loader2, Plus, Search, Trash2, X, Box } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -66,6 +67,7 @@ function RealModelsList() {
   const toastIdRef = useRef(0)
   const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -146,11 +148,8 @@ function RealModelsList() {
   }
 
   function selectAll() {
-    if (selected.size === filtered.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(filtered.map((m) => modelKey(m))))
-    }
+    if (filtered.length > 0 && selectedModels.length === filtered.length) setSelected(new Set())
+    else setSelected(new Set(filtered.map((m) => modelKey(m))))
   }
 
   const batchDeleteMutation = useMutation({
@@ -160,7 +159,7 @@ function RealModelsList() {
       ))
     },
     onSuccess: () => {
-      setSelected(new Set())
+      setSelected(new Set()); setSelectionMode(false)
       qc.invalidateQueries({ queryKey: ['models'] })
       qc.invalidateQueries({ queryKey: ['aliases'] })
       addToast(true, '批量删除完成', 0)
@@ -177,7 +176,7 @@ function RealModelsList() {
       ))
     },
     onSuccess: (_data, { enabled }) => {
-      setSelected(new Set())
+      setSelected(new Set()); setSelectionMode(false)
       qc.invalidateQueries({ queryKey: ['models'] })
       qc.invalidateQueries({ queryKey: ['aliases'] })
       addToast(true, enabled ? '批量启用完成' : '批量禁用完成', 0)
@@ -187,6 +186,7 @@ function RealModelsList() {
   const selectedModels = useMemo(() => {
     return filtered.filter((m) => selected.has(modelKey(m)))
   }, [filtered, selected])
+  const allFilteredSelected = filtered.length > 0 && selectedModels.length === filtered.length
 
   const runTest = useMutation({
     mutationFn: ({ model, prompt }: { model: ProviderModel; prompt: string }) =>
@@ -214,9 +214,9 @@ function RealModelsList() {
   return (
     <>
     {/* Batch action bar */}
-    {selected.size > 0 && (
+    {selectedModels.length > 0 && (
       <div className="fixed bottom-6 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-3 rounded-xl border bg-card px-5 py-3 shadow-xl">
-        <span className="text-sm font-medium">已选 {selected.size} 个模型</span>
+        <span className="text-sm font-medium">已选 {selectedModels.length} 个模型</span>
         <div className="h-4 w-px bg-border" />
         <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 1 })}>
           启用
@@ -224,10 +224,10 @@ function RealModelsList() {
         <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 0 })}>
           禁用
         </Button>
-        <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selected.size} 个模型？`)) batchDeleteMutation.mutate(selectedModels) }}>
+        <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedModels.length} 个模型？`)) batchDeleteMutation.mutate(selectedModels) }}>
           <Trash2 className="h-3.5 w-3.5" /> 删除
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+        <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(false) }}>
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -289,38 +289,37 @@ function RealModelsList() {
               ))}
             </SelectContent>
           </Select>
-          <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={onlyEnabled}
-              onChange={(e) => setOnlyEnabled(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-muted-foreground"
-            />
-            仅启用
-          </label>
           <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 手动添加</Button>
         </div>
       </div>
 
       <Card className="console-surface shadow-none">
-        <CardHeader className="border-b border-foreground/10 px-5 py-4">
+        <CardHeader className="flex-row items-center justify-between border-b border-foreground/10 px-5 py-4">
           <CardTitle className="text-sm font-medium">
             模型列表
             {filtered.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">（{filtered.length} 个）</span>}
           </CardTitle>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Switch checked={onlyEnabled} onCheckedChange={setOnlyEnabled} />
+              <span>仅启用</span>
+            </div>
+            <Button size="sm" variant={selectionMode ? 'secondary' : 'ghost'} onClick={() => { if (selectionMode) setSelected(new Set()); setSelectionMode(!selectionMode) }}>
+              <ListChecks className="h-4 w-4" /> 多选
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table className="data-table">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10 pl-4">
-                  <input
-                    type="checkbox"
-                    checked={filtered.length > 0 && selected.size === filtered.length}
-                    onChange={selectAll}
-                    className="h-3.5 w-3.5"
+                {selectionMode && <TableHead className="w-10 pl-4">
+                  <Checkbox
+                    checked={allFilteredSelected ? true : selectedModels.length > 0 ? 'indeterminate' : false}
+                    onCheckedChange={selectAll}
+                    aria-label="全选当前筛选下的全部模型"
                   />
-                </TableHead>
+                </TableHead>}
                 <TableHead>Provider</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>协议</TableHead>
@@ -335,14 +334,9 @@ function RealModelsList() {
                 const rowKey = modelKey(m)
                 return (
                   <TableRow key={rowKey} className={selected.has(rowKey) ? 'bg-muted/50' : ''}>
-                    <TableCell className="pl-4">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(rowKey)}
-                        onChange={() => toggleSelect(rowKey)}
-                        className="h-3.5 w-3.5"
-                      />
-                    </TableCell>
+                    {selectionMode && <TableCell className="pl-4">
+                      <Checkbox checked={selected.has(rowKey)} onCheckedChange={() => toggleSelect(rowKey)} aria-label={`选择 ${m.model_id}`} />
+                    </TableCell>}
                     <TableCell className="pl-6">{m.provider_name}</TableCell>
                     <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
                     <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
@@ -387,7 +381,7 @@ function RealModelsList() {
               })}
               {!filtered.length && !models.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center">
+                  <TableCell colSpan={selectionMode ? 8 : 7} className="h-32 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Box className="h-8 w-8" />
                       <p className="text-sm">{(models.data ?? []).length === 0 ? '还没有模型' : '当前筛选条件下无模型'}</p>
@@ -402,7 +396,7 @@ function RealModelsList() {
               )}
               {models.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  <TableCell colSpan={selectionMode ? 8 : 7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
                 </TableRow>
               )}
             </TableBody>

@@ -8,6 +8,7 @@ import {
   Eye,
   EyeOff,
   FolderPlus,
+  ListChecks,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -25,6 +26,7 @@ import { api } from '@/api/client'
 import type { Provider, ProviderGroup } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -86,6 +88,7 @@ export default function Providers() {
   const [groupDialogSource, setGroupDialogSource] = useState<'page' | 'provider'>('page')
   const [renaming, setRenaming] = useState<{ protocol: Protocol; id: string; name: string } | null>(null)
   const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState<Set<string>>(new Set())
   const [fetchDialog, setFetchDialog] = useState<{ providerId: string; providerName: string } | null>(null)
   const [upstreamModels, setUpstreamModels] = useState<string[]>([])
   const [upstreamLoading, setUpstreamLoading] = useState(false)
@@ -235,7 +238,7 @@ export default function Providers() {
       await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })))
     },
     onSuccess: (_data, variables) => {
-      setSelectedProviderIds(new Set())
+      setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
       setResult({ message: variables.enabled ? '批量启用完成' : '批量禁用完成', ok: true })
     },
@@ -247,7 +250,7 @@ export default function Providers() {
       await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'DELETE' })))
     },
     onSuccess: () => {
-      setSelectedProviderIds(new Set())
+      setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
       setResult({ message: '批量删除完成', ok: true })
     },
@@ -259,7 +262,7 @@ export default function Providers() {
       await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ group_id: groupId }) })))
     },
     onSuccess: () => {
-      setSelectedProviderIds(new Set())
+      setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
       setResult({ message: '批量移动分组完成', ok: true })
     },
@@ -379,15 +382,21 @@ export default function Providers() {
     })
   }
 
-  function renderProviderTable(rows: Provider[]) {
+  function renderProviderTable(rows: Provider[], groupKey: string) {
+    const isActive = selectionMode.has(groupKey)
     const allSelected = rows.length > 0 && rows.every((provider) => selectedProviderIds.has(provider.id))
+    const someSelected = rows.some((provider) => selectedProviderIds.has(provider.id))
+    const cols = isActive ? 6 : 5
     return (
       <Table className="data-table">
-        <TableHeader><TableRow><TableHead className="w-10 pl-4"><input type="checkbox" checked={allSelected} onChange={() => toggleRowsSelection(rows)} aria-label="选择当前分组全部 Provider" className="h-4 w-4 rounded border-input" /></TableHead><TableHead>名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead></TableRow></TableHeader>
+        <TableHeader><TableRow>
+          {isActive && <TableHead className="w-10 pl-4"><Checkbox checked={allSelected ? true : someSelected ? 'indeterminate' : false} onCheckedChange={() => toggleRowsSelection(rows)} aria-label="选择当前分组全部 Provider" /></TableHead>}
+          <TableHead>名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead>
+        </TableRow></TableHeader>
         <TableBody>
           {rows.map((provider) => (
             <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
-              <TableCell className="pl-4"><input type="checkbox" checked={selectedProviderIds.has(provider.id)} onChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} className="h-4 w-4 rounded border-input" /></TableCell>
+              {isActive && <TableCell className="pl-4"><Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} /></TableCell>}
               <TableCell className="font-medium">{provider.name}</TableCell>
               <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
               <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
@@ -401,7 +410,7 @@ export default function Providers() {
               </div></TableCell>
             </TableRow>
           ))}
-          {!rows.length && <TableRow><TableCell colSpan={6} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
+          {!rows.length && <TableRow><TableCell colSpan={cols} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
         </TableBody>
       </Table>
     )
@@ -413,6 +422,7 @@ export default function Providers() {
     const isOpen = !collapsed.has(key)
     const enabledCount = rows.filter((provider) => provider.enabled).length
     const groupSwitchChecked = rows.length > 0 && enabledCount === rows.length
+    const isActive = selectionMode.has(key)
     return (
       <Card key={key} className="console-surface shadow-none">
         <CardHeader className="items-stretch justify-between gap-2 space-y-0 border-b border-foreground/10 px-5 py-3 sm:flex-row sm:items-center">
@@ -422,14 +432,26 @@ export default function Providers() {
             <Badge variant="outline">{protocol}</Badge><Badge variant="secondary">{rows.length}</Badge>
             {group && <Badge variant="outline">{rows.filter((provider) => provider.enabled).length} 已启用</Badge>}
           </button>
-          {group && <div className="flex flex-wrap items-center justify-end gap-1">
-            <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground"><span>{enabledCount === rows.length && rows.length > 0 ? '全部启用' : enabledCount > 0 ? '部分启用' : '全部禁用'}</span><Switch checked={groupSwitchChecked} disabled={!rows.length || groupActionMutation.isPending} onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })} aria-label={`切换 ${group.name} 内全部 Provider 启用状态`} title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'} /></div>
-            <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /> 清空 Provider</Button>
-            <Button variant="ghost" size="icon" className="icon-button" aria-label={`重命名分组 ${group.name}`} title="重命名分组" onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}><Pencil className="h-3.5 w-3.5" /></Button>
-            <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除分组 ${group.name}`} title="删除分组" onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
-          </div>}
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            <Button size="icon" variant={isActive ? 'secondary' : 'ghost'} className="h-8 w-8" aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`} onClick={() => {
+              if (selectionMode.has(key)) {
+                setSelectionMode((prev) => { const next = new Set(prev); next.delete(key); return next })
+                setSelectedProviderIds((prev) => { const next = new Set(prev); rows.forEach((provider) => next.delete(provider.id)); return next })
+              } else {
+                setSelectionMode((prev) => new Set(prev).add(key))
+              }
+            }}>
+              <ListChecks className="h-4 w-4" />
+            </Button>
+            {group && <>
+              <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground"><span>{enabledCount === rows.length && rows.length > 0 ? '全部启用' : enabledCount > 0 ? '部分启用' : '全部禁用'}</span><Switch checked={groupSwitchChecked} disabled={!rows.length || groupActionMutation.isPending} onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })} aria-label={`切换 ${group.name} 内全部 Provider 启用状态`} title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'} /></div>
+              <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /> 清空 Provider</Button>
+              <Button variant="ghost" size="icon" className="icon-button" aria-label={`重命名分组 ${group.name}`} title="重命名分组" onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}><Pencil className="h-3.5 w-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除分组 ${group.name}`} title="删除分组" onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
+            </>}
+          </div>
         </CardHeader>
-        {isOpen && <CardContent className="p-0">{renderProviderTable(rows)}</CardContent>}
+        {isOpen && <CardContent className="p-0">{renderProviderTable(rows, key)}</CardContent>}
       </Card>
     )
   }
@@ -456,7 +478,7 @@ export default function Providers() {
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 1 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
       <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedProviderIds.size} 个 Provider？关联的模型也会一并删除。`)) batchDeleteMutation.mutate([...selectedProviderIds]) }} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
-      <Button size="sm" variant="ghost" onClick={() => setSelectedProviderIds(new Set())} aria-label="清除 Provider 选择"><X className="h-3.5 w-3.5" /></Button>
+      <Button size="sm" variant="ghost" onClick={() => { setSelectedProviderIds(new Set()); setSelectionMode(new Set()) }} aria-label="清除 Provider 选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
       <div className="page-heading">
@@ -507,7 +529,7 @@ export default function Providers() {
       </Dialog>
 
       <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>选择要导入的模型</DialogTitle><DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription></DialogHeader>
-        {upstreamLoading ? <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...</div> : <div className="space-y-3"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} /></div><div className="flex items-center justify-between text-xs text-muted-foreground"><span>已选 {selectedModels.size} / {upstreamModels.length}</span><div className="flex gap-2"><button className="hover:underline" onClick={() => setSelectedModels(new Set(upstreamModels))}>全选</button><button className="hover:underline" onClick={() => setSelectedModels(new Set())}>全不选</button></div></div><div className="h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">{filteredUpstream.map((id) => <label key={id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"><input type="checkbox" checked={selectedModels.has(id)} onChange={(event) => { const next = new Set(selectedModels); if (event.target.checked) next.add(id); else next.delete(id); setSelectedModels(next) }} className="h-3.5 w-3.5" /><span className="font-mono text-xs">{id}</span></label>)}{!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}</div></div>}
+        {upstreamLoading ? <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...</div> : <div className="space-y-3"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} /></div><div className="flex items-center justify-between text-xs text-muted-foreground"><span>已选 {selectedModels.size} / {upstreamModels.length}</span><div className="flex gap-2"><button className="hover:underline" onClick={() => setSelectedModels(new Set(upstreamModels))}>全选</button><button className="hover:underline" onClick={() => setSelectedModels(new Set())}>全不选</button></div></div><div className="h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">{filteredUpstream.map((id) => <label key={id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"><Checkbox checked={selectedModels.has(id)} onCheckedChange={(checked) => { const next = new Set(selectedModels); if (checked) next.add(id); else next.delete(id); setSelectedModels(next) }} /><span className="font-mono text-xs">{id}</span></label>)}{!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}</div></div>}
         <DialogFooter><Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button><Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels] })}>{importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型</Button></DialogFooter>
       </DialogContent></Dialog>
     </div>
