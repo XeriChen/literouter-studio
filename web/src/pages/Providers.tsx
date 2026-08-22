@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
@@ -457,9 +458,22 @@ export default function Providers() {
   }
 
   const hasAnyProvider = (providers.data?.length ?? 0) > 0
+  const overlayOpen = dialogOpen || groupOpen || renaming !== null || !!fetchDialog
+  const resultNotice = result ? (
+    <div role="status" className={`notice ${result.ok ? 'notice-success' : 'notice-error'}`}>
+      <span>{result.message}</span>
+      <button type="button" aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button ml-auto h-6 w-6"><X className="h-3.5 w-3.5" /></button>
+    </div>
+  ) : null
 
   return (
     <>
+    {result && overlayOpen && !dialogOpen && createPortal(
+      <div className="pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center px-4">
+        <div className="pointer-events-auto max-w-lg shadow-lg">{resultNotice}</div>
+      </div>,
+      document.body,
+    )}
     {selectedProviderIds.size > 0 && <div className="fixed inset-x-3 bottom-4 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedProviderIds.size} 个 Provider</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
@@ -486,7 +500,7 @@ export default function Providers() {
         <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={() => openGroupDialog()} size="sm"><FolderPlus className="h-4 w-4" /> 新建分组</Button><Button onClick={openCreate} size="sm"><Plus className="h-4 w-4" /> 新增 Provider</Button></div>
       </div>
 
-      {result && <div className={`notice ${result.ok ? 'notice-success' : 'notice-error'}`}><span>{result.message}</span><button aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button ml-auto h-6 w-6"><X className="h-3.5 w-3.5" /></button></div>}
+      {!overlayOpen && resultNotice}
 
       <div className="space-y-4">
         {PROTOCOLS.map((protocol) => {
@@ -508,6 +522,7 @@ export default function Providers() {
           <DialogHeader className="border-b px-4 py-4 pr-12 text-left sm:px-6 sm:py-5">
             <DialogTitle>{formMode === 'edit' ? '编辑 Provider' : formMode === 'copy' ? '复制 Provider' : '新增 Provider'}</DialogTitle>
             <DialogDescription>API Key 会以明文存储在本机数据库中，请妥善保管。</DialogDescription>
+            {resultNotice}
           </DialogHeader>
           <div
             className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6"

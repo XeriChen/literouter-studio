@@ -174,7 +174,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 ### 测活（liveness）
 
-模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」；30s 硬超时。管理路由会先校验真实模型与 Provider 均启用，测活本身按真实 `provider_id + model_id` 调用，不经过映射层。
+模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」；30s 硬超时。管理路由会校验真实模型存在且 Provider 启用；真实模型未启用仍允许测活。测活按真实 `provider_id + model_id` 调用，不经过映射层。
 
 测活按 Provider 协议构造非流式 Chat/Messages 请求并解析回复。Provider 模型列表拉取和连通性测试复用认证头与 `(proxy_url, timeout)` dispatcher；Provider/全局超时为 0 时，代理请求不设连接/响应头超时，但这两类管理操作仍以 30s `AbortSignal` 兜底。
 

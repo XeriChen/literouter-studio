@@ -207,11 +207,11 @@ export default function ModelAliases() {
     onError: (error) => toast(false, error instanceof Error ? error.message : '创建分组失败'),
   })
   const groupActionMutation = useMutation({
-    mutationFn: ({ action, group }: { action: 'enable' | 'clear' | 'delete'; group: AliasGroup }) => {
-      const path = action === 'enable' ? '/api/alias-groups/batch-enable' : action === 'clear' ? '/api/alias-groups/batch-delete' : '/api/alias-groups'
+    mutationFn: ({ action, group }: { action: 'clear' | 'delete'; group: AliasGroup }) => {
+      const path = action === 'clear' ? '/api/alias-groups/batch-delete' : '/api/alias-groups'
       return api(path, { method: action === 'delete' ? 'DELETE' : 'POST', body: JSON.stringify({ protocol: group.protocol, group_id: group.id }) })
     },
-    onSuccess: (_data, variables) => { invalidate(); toast(true, variables.action === 'enable' ? '分组内映射已批量启用' : variables.action === 'clear' ? '分组内映射已清空' : '分组已删除') },
+    onSuccess: (_data, variables) => { invalidate(); toast(true, variables.action === 'clear' ? '分组内映射已清空' : '分组已删除') },
     onError: (error) => toast(false, error instanceof Error ? error.message : '分组操作失败'),
   })
   const targetMutation = useMutation({
@@ -274,7 +274,7 @@ export default function ModelAliases() {
     const isActive = selectionMode.has(groupKey)
     const groupSelectedCount = groupRows.filter((r) => selected.has(keyOf(r))).length
     const allGroupSelected = groupRows.length > 0 && groupSelectedCount === groupRows.length
-    const cols = isActive ? 7 : 6
+    const cols = isActive ? 8 : 7
     const canDrop = dragAliasKey !== null && protocolValue === dragAliasKey.split('/')[0]
     const isDragOver = canDrop && dragOverGroupKey === groupKey
     return (
@@ -314,7 +314,6 @@ export default function ModelAliases() {
               <ListChecks className="h-4 w-4" />
             </Button>
             {group && <>
-              <Button size="sm" variant="ghost" onClick={() => groupActionMutation.mutate({ action: 'enable', group })}><Power className="h-3.5 w-3.5" /> 启用全部</Button>
               <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /> 清空映射</Button>
               <Button size="sm" variant="ghost" onClick={() => openRename('group', group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -325,7 +324,13 @@ export default function ModelAliases() {
           <Table className="data-table">
             <TableHeader><TableRow>
               {isActive && <TableHead className="w-9 pl-4"><Checkbox checked={allGroupSelected ? true : groupSelectedCount > 0 ? 'indeterminate' : false} onCheckedChange={() => { if (allGroupSelected) setSelected((prev) => { const next = new Set(prev); groupRows.forEach((r) => next.delete(keyOf(r))); return next }); else setSelected((prev) => { const next = new Set(prev); groupRows.forEach((r) => next.add(keyOf(r))); return next }) }} aria-label="选择当前分组全部映射" /></TableHead>}
-              <TableHead className="w-9 pl-0" /><TableHead>映射名</TableHead><TableHead>启用</TableHead><TableHead>当前目标</TableHead><TableHead>候选</TableHead><TableHead className="pr-5 text-right">操作</TableHead>
+              <TableHead className="w-9 pl-0"><span className="sr-only">拖动排序</span></TableHead>
+              <TableHead className="w-9"><span className="sr-only">展开候选</span></TableHead>
+              <TableHead>映射名</TableHead>
+              <TableHead>启用</TableHead>
+              <TableHead>当前目标</TableHead>
+              <TableHead>候选</TableHead>
+              <TableHead className="pr-5 text-right">操作</TableHead>
             </TableRow></TableHeader>
             <TableBody>
               {groupRows.map((alias) => {
@@ -336,12 +341,12 @@ export default function ModelAliases() {
                 return <Fragment key={aliasKey}>
                   <TableRow key={aliasKey} className={selected.has(aliasKey) ? 'bg-muted/50' : ''}>
                     {isActive && <TableCell className="pl-4"><Checkbox checked={selected.has(aliasKey)} onCheckedChange={() => setSelected((prev) => { const next = new Set(prev); if (next.has(aliasKey)) next.delete(aliasKey); else next.add(aliasKey); return next })} aria-label={`选择 ${alias.alias_name}`} /></TableCell>}
-                    <TableCell className="pl-0"><div
+                    <TableCell className="w-9 pl-0"><div
                       draggable
                       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', aliasKey); setDragAliasKey(aliasKey) }}
                       onDragEnd={() => { setDragAliasKey(null); setDragOverGroupKey(null) }}
                     ><GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" /></div></TableCell>
-                    <TableCell><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
+                    <TableCell className="w-9"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
                     <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span><button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="重命名" onClick={() => openRename('alias', alias.protocol, alias.alias_name, alias.alias_name)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>

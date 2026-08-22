@@ -275,7 +275,7 @@ export function registerModelRoutes(api: Hono<Env>): void {
     const provider = getProvider(parsed.data.provider_id)
     if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
     const model = getModel(parsed.data.provider_id, parsed.data.model_id)
-    if (!model || !model.enabled) return fail(c, 404, 'model not found', 'model_not_found')
+    if (!model) return fail(c, 404, 'model not found', 'model_not_found')
     if (!provider.enabled) return fail(c, 503, 'provider disabled', 'provider_disabled')
     const prompt = parsed.data.prompt?.trim() || DEFAULT_TEST_PROMPT
     const invalidReason = validateTestPrompt(prompt)

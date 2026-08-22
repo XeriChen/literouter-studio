@@ -212,3 +212,118 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   await expect(page.getByText('批量移动分组完成')).toBeVisible()
   expect(browserErrors).toEqual([])
 })
+
+test('shows base64 decode feedback above the provider editor overlay', async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/provider-groups', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) })
+  })
+  await page.route('**/api/providers', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) })
+  })
+
+  await page.goto('/providers')
+  await page.getByRole('button', { name: '新增 Provider' }).first().click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: '新增 Provider' })).toBeVisible()
+
+  const apiKey = dialog.getByRole('textbox', { name: 'API Key', exact: true })
+  await dialog.getByRole('button', { name: '显示 API Key' }).click()
+  await apiKey.fill('not-valid-base64!!!')
+  await dialog.getByRole('button', { name: '解码' }).click()
+
+  const decodeNotice = page.getByRole('status').filter({ hasText: '输入内容不是合法的 Base64' })
+  await expect(decodeNotice).toBeVisible()
+  const noticeBox = await decodeNotice.boundingBox()
+  expect(noticeBox).not.toBeNull()
+  const hit = await page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y)
+    return el?.closest('.notice')?.textContent ?? el?.textContent ?? ''
+  }, { x: noticeBox!.x + noticeBox!.width / 2, y: noticeBox!.y + noticeBox!.height / 2 })
+  expect(hit).toContain('输入内容不是合法的 Base64')
+
+  await apiKey.fill('c2stdGVzdA==')
+  await dialog.getByRole('button', { name: '解码' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已解码为明文并回填' })).toBeVisible()
+  await expect(apiKey).toHaveValue('sk-test')
+  await page.screenshot({ path: testInfo.outputPath('provider-decode-notice.png') })
+})
+
+test('aligns models table headers with row content', async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        data: [{ protocol: 'openai', id: 'g1', name: 'Production', created_at: '2026-08-17T00:00:00.000Z', updated_at: '2026-08-17T00:00:00.000Z', alias_count: 1, enabled_count: 1 }],
+      }),
+    })
+  })
+  await page.route('**/api/aliases', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        data: [{
+          protocol: 'openai',
+          alias_name: 'my-brain',
+          group_id: 'g1',
+          enabled: 1,
+          provider_id: 'p1',
+          model_id: 'gpt-4',
+          provider_name: 'Primary',
+          provider_enabled: 1,
+          target_enabled: 1,
+          created_at: '2026-08-17T00:00:00.000Z',
+          updated_at: '2026-08-17T00:00:00.000Z',
+          targets: [{ id: 1, protocol: 'openai', alias_name: 'my-brain', provider_id: 'p1', model_id: 'gpt-4', provider_name: 'Primary', provider_enabled: 1, target_enabled: 1, priority: 0, active: 1, created_at: '2026-08-17T00:00:00.000Z', updated_at: '2026-08-17T00:00:00.000Z' }],
+        }],
+      }),
+    })
+  })
+  await page.route('**/api/providers', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        data: [{ id: 'p1', name: 'Primary', protocol: 'openai', group_id: null, base_url: 'https://api.example.test', auth: {}, custom_headers: {}, enabled: 1, created_at: '2026-08-17T00:00:00.000Z', updated_at: '2026-08-17T00:00:00.000Z' }],
+      }),
+    })
+  })
+  await page.route('**/api/models', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        data: [{ provider_id: 'p1', model_id: 'gpt-4', display_name: null, enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Primary', provider_enabled: 1, created_at: '2026-08-17T00:00:00.000Z', updated_at: '2026-08-17T00:00:00.000Z' }],
+      }),
+    })
+  })
+
+  await page.goto('/models')
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  await expect(page.getByText('my-brain')).toBeVisible()
+  await expect(page.getByRole('button', { name: '启用全部' })).toHaveCount(0)
+
+  async function assertTableColumnsAlign(table: ReturnType<typeof page.locator>) {
+    const headerXs = await table.locator('thead th').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().x))
+    const cellXs = await table.locator('tbody tr').first().locator('> td').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().x))
+    expect(cellXs.length).toBe(headerXs.length)
+    expect(headerXs.length).toBeGreaterThan(0)
+    for (let index = 0; index < headerXs.length; index++) {
+      expect(Math.abs((headerXs[index] ?? 0) - (cellXs[index] ?? 0))).toBeLessThan(2)
+    }
+  }
+
+  const aliasTable = page.locator('table').first()
+  await expect(aliasTable.getByRole('columnheader', { name: '映射名' })).toBeVisible()
+  await assertTableColumnsAlign(aliasTable)
+  await page.screenshot({ path: testInfo.outputPath('models-alias-columns.png') })
+
+  await page.getByRole('button', { name: '真实模型' }).click()
+  const realTable = page.locator('table').first()
+  await expect(realTable.getByRole('columnheader', { name: 'Provider' })).toBeVisible()
+  await assertTableColumnsAlign(realTable)
+  await page.screenshot({ path: testInfo.outputPath('models-real-columns.png') })
+})

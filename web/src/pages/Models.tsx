@@ -337,7 +337,7 @@ function RealModelsList() {
                     {selectionMode && <TableCell className="pl-4">
                       <Checkbox checked={selected.has(rowKey)} onCheckedChange={() => toggleSelect(rowKey)} aria-label={`选择 ${m.model_id}`} />
                     </TableCell>}
-                    <TableCell className="pl-6">{m.provider_name}</TableCell>
+                    <TableCell>{m.provider_name}</TableCell>
                     <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
                     <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
                     <TableCell><Badge variant="secondary">{m.source}</Badge></TableCell>
