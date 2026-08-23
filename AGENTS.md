@@ -11,7 +11,7 @@
 ## 2. 红线（绝对不可违背）
 
 1. **不做协议转换**：严禁在 OpenAI / Anthropic 之间互转请求格式。
-2. **仅替换 model 字段**：映射名请求经网关转发时，只允许把 body 的 `model` 字段替换为真实模型名（`proxy.ts` 路由成功后执行），严禁增删改其他任何字段。
+2. **仅替换 model 与思考等级字段**：映射名请求经网关转发时，只允许把 body 的 `model` 字段替换为真实模型名（`proxy.ts` 路由成功后执行）；若映射配置了思考等级（`model_aliases.thinking_json`），仅按配置定点改写/注入顶层 `thinking`（Anthropic）或 `reasoning_effort`（OpenAI）字段。严禁增删改其他任何字段。
 3. **安全定位**：HTTP 明文，仅限可信局域网/本机，不加密不降级。
 
 ## 3. 常用命令
@@ -43,9 +43,9 @@
 | :--- | :--- |
 | `src/server.ts` | 入口；监听配置按数据库 settings > env > 默认值解析，启动时清日志并处理优雅关闭 |
 | `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
-| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v6 基线（开发期可删库重建），settings 读写助手 |
+| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v7 基线（开发期可删库重建，仅保留 v6→v7 守卫式加列），settings 读写助手 |
 | `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
-| `src/proxy/` | 请求体限流/定点 model 替换、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存 |
+| `src/proxy/` | 请求体限流/定点替换（model + 思考字段）、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存 |
 | `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
 | `src/routes/` | 管理 API 装配与领域路由、代理入口流水线 |
 | `src/services/` | 业务层：providers / models / logs（代理访问日志）/ audit（配置操作日志）/ settings / backup / liveness |
@@ -67,7 +67,7 @@
 - `data/gateway.db` 不入库（.gitignore），按进程当前工作目录解析并在运行时自动创建。
 - `admin_token` 存在 `settings.admin_token`，首次启动自动生成 UUID；管理 API 与代理入口统一校验。
 - Token 提取优先级：`Authorization: Bearer` > `x-api-key` > `api-key`。
-- 备份文件含明文 API Key 与网关 Token，但不含代理访问日志和配置操作日志；导出/导入均要警示用户。导入会先校验数据图，再在事务内全量替换 Provider 分组、Provider、真实模型、映射分组、全部映射（含未分组映射）和候选目标，应用备份设置与 Token；成功后前端强制登出并提示用备份内 Token 重新登录。
+- 备份文件含明文 API Key 与网关 Token，还含映射的思考等级配置，但不含代理访问日志和配置操作日志；导出/导入均要警示用户。导入会先校验数据图（含思考配置的协议形状校验），再在事务内全量替换 Provider 分组、Provider、真实模型、映射分组、全部映射（含未分组映射）和候选目标，应用备份设置与 Token；成功后前端强制登出并提示用备份内 Token 重新登录。
 - `host`/`port` 保存后需重启；`global_timeout_ms` 对后续代理请求生效；`log_retention_days` 在下次启动清理时生效。
 - 严禁把泄漏密钥/Token 的代码或常量提交进仓库。
 
@@ -84,6 +84,7 @@
 - [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
 - [ ] 代理请求须用 undici v8 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
 - [ ] `GET */v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名；其他非 POST 代理请求返回 405
+- [ ] 思考等级仅按映射配置改写顶层 `thinking`（Anthropic）/`reasoning_effort`（OpenAI）：override 无条件替换/注入，default 仅客户端未携带时注入；value 入库前按协议校验（Anthropic enabled 要求 budget_tokens 为 ≥1024 整数）
 - [ ] 模型测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时
 - [ ] Provider 连通性测试：401/403 判认证失败，其他 HTTP 响应判网络可达；配置超时为 0 时仍有 30s AbortSignal 兜底
 
