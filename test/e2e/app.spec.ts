@@ -202,6 +202,7 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   await expect(mobileDialog.getByRole('combobox').nth(1)).toContainText('Canary')
   await mobileDialog.getByRole('button', { name: '取消' }).click()
 
+  await page.getByRole('button', { name: '切换 Production 多选模式' }).click()
   await page.getByRole('checkbox', { name: '选择 Primary' }).check()
   await expect(page.getByText('已选 1 个 Provider')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('provider-bulk-actions-mobile.png') })
