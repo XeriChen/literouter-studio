@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Check, ChevronDown, ChevronRight, Copy, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
+import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
-import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel } from '@/api/types'
+import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, ThinkingConfig } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -17,6 +17,104 @@ type Protocol = 'openai' | 'anthropic'
 
 function keyOf(a: Pick<ModelAlias, 'protocol' | 'alias_name'>): string {
   return `${a.protocol}/${a.alias_name}`
+}
+
+interface ThinkingFormState {
+  mode: 'off' | 'override' | 'default'
+  anthropicType: 'enabled' | 'disabled'
+  budget: string
+  effort: string
+}
+
+const emptyThinkingForm: ThinkingFormState = { mode: 'off', anthropicType: 'enabled', budget: '4096', effort: '' }
+
+function parseThinkingForm(thinkingJson: string | null): ThinkingFormState {
+  if (!thinkingJson) return emptyThinkingForm
+  try {
+    const config = JSON.parse(thinkingJson) as ThinkingConfig
+    if (config.mode !== 'override' && config.mode !== 'default') return emptyThinkingForm
+    const value = config.value
+    if (value !== null && typeof value === 'object') {
+      const thinking = value as { type?: string; budget_tokens?: unknown }
+      return { mode: config.mode, anthropicType: thinking.type === 'disabled' ? 'disabled' : 'enabled', budget: String(thinking.budget_tokens ?? 4096), effort: '' }
+    }
+    return { mode: config.mode, anthropicType: 'enabled', budget: '4096', effort: typeof value === 'string' ? value : '' }
+  } catch {
+    return emptyThinkingForm
+  }
+}
+
+function buildThinking(form: ThinkingFormState, protocol: Protocol): { config: ThinkingConfig | null; error?: string } {
+  if (form.mode === 'off') return { config: null }
+  let value: unknown
+  if (protocol === 'anthropic') {
+    if (form.anthropicType === 'disabled') {
+      value = { type: 'disabled' }
+    } else {
+      const budget = Number(form.budget)
+      if (!Number.isInteger(budget) || budget < 1024) return { config: null, error: 'budget_tokens 需为 ≥1024 的整数' }
+      value = { type: 'enabled', budget_tokens: budget }
+    }
+  } else {
+    const effort = form.effort.trim()
+    if (!effort) return { config: null, error: 'reasoning_effort 不能为空' }
+    value = effort
+  }
+  return { config: { mode: form.mode, value } }
+}
+
+function thinkingBadge(thinkingJson: string | null): string | null {
+  try {
+    if (!thinkingJson) return null
+    const config = JSON.parse(thinkingJson) as ThinkingConfig
+    return config.mode === 'override' ? '思考·覆盖' : config.mode === 'default' ? '思考·默认' : null
+  } catch {
+    return null
+  }
+}
+
+function ThinkingFields({ protocol, form, onChange }: { protocol: Protocol; form: ThinkingFormState; onChange: (form: ThinkingFormState) => void }) {
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div className="space-y-1.5">
+        <Label>思考等级</Label>
+        <Select value={form.mode} onValueChange={(value) => onChange({ ...form, mode: value as ThinkingFormState['mode'] })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="off">不修改（原样透传）</SelectItem>
+            <SelectItem value="override">强制覆盖（忽略客户端携带值）</SelectItem>
+            <SelectItem value="default">仅默认值（客户端未携带时注入）</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {form.mode !== 'off' && protocol === 'anthropic' && (
+        <div className="flex items-end gap-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs">thinking.type</Label>
+            <Select value={form.anthropicType} onValueChange={(value) => onChange({ ...form, anthropicType: value as 'enabled' | 'disabled' })}>
+              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="enabled">enabled</SelectItem>
+                <SelectItem value="disabled">disabled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.anthropicType === 'enabled' && (
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Label className="text-xs">budget_tokens（≥1024）</Label>
+              <Input value={form.budget} inputMode="numeric" onChange={(event) => onChange({ ...form, budget: event.target.value })} />
+            </div>
+          )}
+        </div>
+      )}
+      {form.mode !== 'off' && protocol === 'openai' && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">reasoning_effort</Label>
+          <Input value={form.effort} placeholder="low / medium / high / minimal / none" onChange={(event) => onChange({ ...form, effort: event.target.value })} />
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TargetPanel({
@@ -126,6 +224,9 @@ export default function ModelAliases() {
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
   const [addForm, setAddForm] = useState<{ protocol: Protocol; alias_name: string; group_id: string; provider_id: string; model_id: string }>({ protocol: 'openai', alias_name: '', group_id: '', provider_id: '', model_id: '' })
+  const [addThinking, setAddThinking] = useState<ThinkingFormState>(emptyThinkingForm)
+  const [thinkingFor, setThinkingFor] = useState<ModelAlias | null>(null)
+  const [thinkingForm, setThinkingForm] = useState<ThinkingFormState>(emptyThinkingForm)
   const [renaming, setRenaming] = useState<{ kind: 'alias' | 'group'; protocol: Protocol; id: string; name: string } | null>(null)
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
@@ -187,8 +288,12 @@ export default function ModelAliases() {
   }
 
   const addAliasMutation = useMutation({
-    mutationFn: () => api('/api/aliases', { method: 'POST', body: JSON.stringify({ ...addForm, group_id: addForm.group_id || null, alias_name: addForm.alias_name.trim() }) }),
-    onSuccess: () => { setAddOpen(false); setAddForm({ protocol: 'openai', alias_name: '', group_id: '', provider_id: '', model_id: '' }); invalidate(); toast(true, '映射创建成功') },
+    mutationFn: () => {
+      const built = buildThinking(addThinking, addForm.protocol)
+      if (built.error) return Promise.reject(new Error(built.error))
+      return api('/api/aliases', { method: 'POST', body: JSON.stringify({ ...addForm, group_id: addForm.group_id || null, alias_name: addForm.alias_name.trim(), thinking: built.config ?? undefined }) })
+    },
+    onSuccess: () => { setAddOpen(false); setAddForm({ protocol: 'openai', alias_name: '', group_id: '', provider_id: '', model_id: '' }); setAddThinking(emptyThinkingForm); invalidate(); toast(true, '映射创建成功') },
     onError: (error) => toast(false, error instanceof Error ? error.message : '创建失败'),
   })
   const patchAliasMutation = useMutation({
@@ -254,6 +359,21 @@ export default function ModelAliases() {
 
   function openRename(kind: 'alias' | 'group', protocolValue: Protocol, id: string, name: string) {
     setRenaming({ kind, protocol: protocolValue, id, name })
+  }
+
+  function openThinking(alias: ModelAlias) {
+    setThinkingFor(alias)
+    setThinkingForm(parseThinkingForm(alias.thinking_json))
+  }
+
+  function saveThinking() {
+    if (!thinkingFor) return
+    const built = buildThinking(thinkingForm, thinkingFor.protocol)
+    if (built.error) { toast(false, built.error); return }
+    patchAliasMutation.mutate(
+      { protocol: thinkingFor.protocol, alias_name: thinkingFor.alias_name, thinking: built.config },
+      { onSuccess: () => setThinkingFor(null) },
+    )
   }
 
   function saveRename() {
@@ -337,6 +457,7 @@ export default function ModelAliases() {
                 const aliasKey = keyOf(alias)
                 const aliasStateKey = `alias:${aliasKey}`
                 const open = expanded.has(aliasStateKey)
+                const thinkingTag = thinkingBadge(alias.thinking_json)
                 const activeAvailable = alias.provider_id !== null && alias.model_id !== null && alias.provider_enabled === 1 && alias.target_enabled === 1
                 return <Fragment key={aliasKey}>
                   <TableRow key={aliasKey} className={selected.has(aliasKey) ? 'bg-muted/50' : ''}>
@@ -347,11 +468,11 @@ export default function ModelAliases() {
                       onDragEnd={() => { setDragAliasKey(null); setDragOverGroupKey(null) }}
                     ><GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" /></div></TableCell>
                     <TableCell className="w-9"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
-                    <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span><button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="重命名" onClick={() => openRename('alias', alias.protocol, alias.alias_name, alias.alias_name)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
+                    <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span>{thinkingTag && <Badge variant="outline">{thinkingTag}</Badge>}<button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="重命名" onClick={() => openRename('alias', alias.protocol, alias.alias_name, alias.alias_name)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
-                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
+                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
                   {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
                 </Fragment>
@@ -404,7 +525,21 @@ export default function ModelAliases() {
 
     <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>新建映射分组</DialogTitle><DialogDescription>分组只用于管理和列表展示，不参与代理路由。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={groupForm.protocol} onValueChange={(value) => setGroupForm({ ...groupForm, protocol: value as Protocol })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>分组名称</Label><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="生产环境" /></div></div><DialogFooter><Button variant="outline" onClick={() => setGroupOpen(false)}>取消</Button><Button disabled={!groupForm.name.trim() || addGroupMutation.isPending} onClick={() => addGroupMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
 
-    <Dialog open={addOpen} onOpenChange={setAddOpen}><DialogContent><DialogHeader><DialogTitle>新建模型映射</DialogTitle><DialogDescription>首个目标必须是当前已启用的 Provider 和真实模型。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={addForm.protocol} onValueChange={(value) => setAddForm({ ...addForm, protocol: value as Protocol, group_id: '', provider_id: '', model_id: '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>映射名</Label><Input value={addForm.alias_name} onChange={(event) => setAddForm({ ...addForm, alias_name: event.target.value })} placeholder="my-brain" /></div><div className="space-y-1.5"><Label>分组（可选）</Label><Select value={addForm.group_id || 'none'} onValueChange={(value) => setAddForm({ ...addForm, group_id: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{addGroups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Provider</Label><Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}><SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger><SelectContent>{addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>当前目标</Label><Select value={addForm.model_id} onValueChange={(value) => setAddForm({ ...addForm, model_id: value })} disabled={!addForm.provider_id}><SelectTrigger><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{addModels.map((model) => <SelectItem key={model.model_id} value={model.model_id}>{model.display_name || model.model_id}</SelectItem>)}</SelectContent></Select></div></div><DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>取消</Button><Button disabled={addAliasMutation.isPending || !addForm.alias_name.trim() || !addForm.provider_id || !addForm.model_id} onClick={() => addAliasMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={addOpen} onOpenChange={setAddOpen}><DialogContent><DialogHeader><DialogTitle>新建模型映射</DialogTitle><DialogDescription>首个目标必须是当前已启用的 Provider 和真实模型。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={addForm.protocol} onValueChange={(value) => setAddForm({ ...addForm, protocol: value as Protocol, group_id: '', provider_id: '', model_id: '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>映射名</Label><Input value={addForm.alias_name} onChange={(event) => setAddForm({ ...addForm, alias_name: event.target.value })} placeholder="my-brain" /></div><div className="space-y-1.5"><Label>分组（可选）</Label><Select value={addForm.group_id || 'none'} onValueChange={(value) => setAddForm({ ...addForm, group_id: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{addGroups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Provider</Label><Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}><SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger><SelectContent>{addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>当前目标</Label><Select value={addForm.model_id} onValueChange={(value) => setAddForm({ ...addForm, model_id: value })} disabled={!addForm.provider_id}><SelectTrigger><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{addModels.map((model) => <SelectItem key={model.model_id} value={model.model_id}>{model.display_name || model.model_id}</SelectItem>)}</SelectContent></Select></div><ThinkingFields protocol={addForm.protocol} form={addThinking} onChange={setAddThinking} /></div><DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>取消</Button><Button disabled={addAliasMutation.isPending || !addForm.alias_name.trim() || !addForm.provider_id || !addForm.model_id} onClick={() => addAliasMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
+
+    <Dialog open={thinkingFor !== null} onOpenChange={(open) => !open && setThinkingFor(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>思考等级 — {thinkingFor?.alias_name}</DialogTitle>
+          <DialogDescription>仅改写请求体顶层的 {thinkingFor?.protocol === 'openai' ? 'reasoning_effort' : 'thinking'} 字段，其余字段原样透传。</DialogDescription>
+        </DialogHeader>
+        {thinkingFor && <ThinkingFields protocol={thinkingFor.protocol} form={thinkingForm} onChange={setThinkingForm} />}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setThinkingFor(null)}>取消</Button>
+          <Button disabled={patchAliasMutation.isPending} onClick={saveThinking}><Check className="h-4 w-4" /> 保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>{renaming?.kind === 'group' ? '重命名分组' : '重命名映射'}</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') saveRename(); if (event.key === 'Escape') setRenaming(null) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim()} onClick={saveRename}><Check className="h-4 w-4" /> 保存</Button></DialogFooter></DialogContent></Dialog>
   </>

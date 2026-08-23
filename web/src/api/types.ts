@@ -82,12 +82,20 @@ export interface AliasTarget {
   target_enabled: number
 }
 
+export interface ThinkingConfig {
+  mode: 'override' | 'default'
+  /** anthropic：thinking 对象；openai：reasoning_effort 字符串 */
+  value: unknown
+}
+
 export interface ModelAlias {
   protocol: 'openai' | 'anthropic'
   alias_name: string
   group_id: string | null
   group_name: string | null
   enabled: number
+  /** 思考等级配置 JSON 字符串（ThinkingConfig | null） */
+  thinking_json: string | null
   provider_id: string | null
   model_id: string | null
   created_at: string
@@ -163,6 +171,7 @@ export interface BackupData {
     alias_name: string
     group_id: string | null
     enabled: number
+    thinking: ThinkingConfig | null
     targets: Array<{
       provider_id: string
       model_id: string
