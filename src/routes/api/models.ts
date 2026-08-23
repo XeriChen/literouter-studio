@@ -112,7 +112,8 @@ export function registerModelRoutes(api: Hono<Env>): void {
     const targetProblem = aliasTargetError(c, parsed.data)
     if (targetProblem) return targetProblem
     const row = addAlias(parsed.data)
-    writeAuditLog({ resource: 'alias', action: 'create', target: row.alias_name, detail: `新建映射 ${row.alias_name} → ${parsed.data.provider_id}/${parsed.data.model_id}`, status: 200 })
+    const thinkingNote = parsed.data.thinking ? `，思考等级${parsed.data.thinking.mode === 'override' ? '强制覆盖' : '仅默认'}` : ''
+    writeAuditLog({ resource: 'alias', action: 'create', target: row.alias_name, detail: `新建映射 ${row.alias_name} → ${parsed.data.provider_id}/${parsed.data.model_id}${thinkingNote}`, status: 200 })
     return ok(c, row)
   })
 
@@ -137,6 +138,7 @@ export function registerModelRoutes(api: Hono<Env>): void {
       if (parsed.data.group_id !== undefined) details.push(parsed.data.group_id ? `分组 ${parsed.data.group_id}` : '移出分组')
       if (parsed.data.enabled !== undefined) details.push(parsed.data.enabled ? '启用' : '禁用')
       if (parsed.data.provider_id) details.push(`当前目标 ${parsed.data.provider_id}/${parsed.data.model_id}`)
+      if (parsed.data.thinking !== undefined) details.push(parsed.data.thinking ? `思考等级 ${parsed.data.thinking.mode === 'override' ? '强制覆盖' : '仅默认'}` : '清除思考等级')
       writeAuditLog({ resource: 'alias', action: 'update', target: row.alias_name, detail: `更新映射 ${row.alias_name}: ${details.join(', ')}`, status: 200 })
       return ok(c, row)
     } catch (error) {

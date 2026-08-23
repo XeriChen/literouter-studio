@@ -44,7 +44,7 @@ function createProvider(name: string, protocol: 'openai' | 'anthropic', groupId:
 
 test('provider groups remain routing-neutral and support atomic group operations and backup restore', () => {
   const version = db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  assert.equal(version.version, 6)
+  assert.equal(version.version, 7)
 
   const openaiGroup = providers.createProviderGroup({ protocol: 'openai', name: 'Production' })
   const anthropicGroup = providers.createProviderGroup({ protocol: 'anthropic', name: 'Production' })

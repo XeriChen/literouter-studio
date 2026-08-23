@@ -16,6 +16,21 @@ export interface ParsedProxyBody {
   source: string
   modelValueStart: number
   modelValueEnd: number
+  /** 顶层对象开括号 `{` 之后的位置，用于注入新顶层字段 */
+  contentStart: number
+  /** 顶层 thinking / reasoning_effort 最后一次出现的值区间（重复键沿用 JSON.parse 最后生效语义） */
+  extraRanges: Partial<Record<'thinking' | 'reasoning_effort', { valueStart: number; valueEnd: number }>>
+}
+
+/**
+ * 按映射配置改写思考等级字段（协议原生值）：
+ * - override：字段已存在则替换其值，否则在对象开头注入
+ * - default：仅在字段不存在时注入
+ */
+export interface ThinkingRewrite {
+  key: 'thinking' | 'reasoning_effort'
+  mode: 'override' | 'default'
+  value: unknown
 }
 
 function skipWhitespace(source: string, start: number): number {
@@ -93,8 +108,10 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
     let index = skipWhitespace(source, 0)
     if (source[index] !== '{') return null
     index++
+    const contentStart = index
 
-    let match: Omit<ParsedProxyBody, 'source'> | null = null
+    let match: { model: string; modelValueStart: number; modelValueEnd: number } | null = null
+    const extraRanges: ParsedProxyBody['extraRanges'] = {}
     while (true) {
       index = skipWhitespace(source, index)
       if (source[index] === '}') break
@@ -113,6 +130,9 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
           match = { model, modelValueStart, modelValueEnd }
         }
       }
+      if (key === 'thinking' || key === 'reasoning_effort') {
+        extraRanges[key] = { valueStart: modelValueStart, valueEnd: modelValueEnd }
+      }
 
       index = skipWhitespace(source, modelValueEnd)
       if (source[index] === ',') {
@@ -124,17 +144,55 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
     }
 
     // JSON.parse uses the final duplicate key, so the located value must match it.
-    return match?.model === parsedModel ? { ...match, source } : null
+    return match?.model === parsedModel ? { ...match, source, contentStart, extraRanges } : null
   } catch {
     return null
   }
 }
 
-export function replaceProxyModel(body: ParsedProxyBody, model: string): Uint8Array {
-  const output = body.source.slice(0, body.modelValueStart)
-    + JSON.stringify(model)
-    + body.source.slice(body.modelValueEnd)
+interface BodyEdit {
+  start: number
+  end: number
+  replacement: string
+}
+
+/** 按原文区间做定点替换/插入，不重新序列化 JSON，其余字节原样保留。 */
+function applyEdits(source: string, edits: BodyEdit[]): Uint8Array {
+  edits.sort((a, b) => a.start - b.start)
+  let output = ''
+  let position = 0
+  for (const edit of edits) {
+    output += source.slice(position, edit.start) + edit.replacement
+    position = edit.end
+  }
+  output += source.slice(position)
   return encoder.encode(output)
+}
+
+export function replaceProxyModel(body: ParsedProxyBody, model: string): Uint8Array {
+  return applyEdits(body.source, [
+    { start: body.modelValueStart, end: body.modelValueEnd, replacement: JSON.stringify(model) },
+  ])
+}
+
+/**
+ * model => 真实模型名 + 按映射配置改写思考等级字段，一次扫描完成所有定点编辑。
+ * 除 model 与思考字段外严禁改动其他字节。
+ */
+export function rewriteProxyBody(body: ParsedProxyBody, model: string, thinking: ThinkingRewrite | null): Uint8Array {
+  const edits: BodyEdit[] = [
+    { start: body.modelValueStart, end: body.modelValueEnd, replacement: JSON.stringify(model) },
+  ]
+  if (thinking) {
+    const range = body.extraRanges[thinking.key]
+    if (!range || thinking.mode === 'override') {
+      const serialized = JSON.stringify(thinking.value)
+      edits.push(range
+        ? { start: range.valueStart, end: range.valueEnd, replacement: serialized }
+        : { start: body.contentStart, end: body.contentStart, replacement: `${JSON.stringify(thinking.key)}:${serialized},` })
+    }
+  }
+  return applyEdits(body.source, edits)
 }
 
 /** Reads a Fetch request body without ever buffering more than maxBytes. */

@@ -10,8 +10,8 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 /**
- * 开发阶段当前 schema 基线（v6）。旧数据库允许直接删除 data/gateway.db 后重建，
- * 因此这里不保留历史 v1-v5 迁移分支。
+ * 开发阶段当前 schema 基线（v7）。旧数据库允许直接删除 data/gateway.db 后重建，
+ * 因此这里不保留历史 v1-v5 迁移分支；仅保留 v6 → v7 的一步守卫式加列。
  */
 db.exec(`
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS model_aliases (
   alias_name TEXT NOT NULL,
   group_id TEXT,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  thinking_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (protocol, alias_name),
@@ -130,7 +131,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_alias_targets_priority ON model_alias_targets(protocol, alias_name, priority, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_active_target ON model_alias_targets(protocol, alias_name) WHERE active = 1;
 `)
-db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (6)').run()
+
+// v6 → v7：为既有数据库补 thinking_json 列（守卫式，重复执行无副作用）
+if (!db.prepare("SELECT 1 FROM pragma_table_info('model_aliases') WHERE name = 'thinking_json'").get()) {
+  db.prepare('ALTER TABLE model_aliases ADD COLUMN thinking_json TEXT').run()
+}
+db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (7)').run()
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

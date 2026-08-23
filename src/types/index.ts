@@ -56,8 +56,21 @@ export interface ModelAliasRow {
   alias_name: string
   group_id: string | null
   enabled: number
+  /** 思考等级配置 JSON：{"mode":"override"|"default","value":协议原生值} */
+  thinking_json: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * 思考等级配置（按映射，协议原生值）：
+ * - anthropic → 顶层 thinking 对象，如 {"type":"enabled","budget_tokens":2048}
+ * - openai → 顶层 reasoning_effort 字符串，如 "high"
+ * override 表示无条件替换/注入；default 表示仅在客户端未提供该字段时注入。
+ */
+export interface ThinkingConfig {
+  mode: 'override' | 'default'
+  value: unknown
 }
 
 export interface ModelAliasTargetRow {

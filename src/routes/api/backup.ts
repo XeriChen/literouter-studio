@@ -4,7 +4,7 @@ import { exportBackup, importBackup } from '../../services/backup'
 import { writeAuditLog } from '../../services/audit'
 import { getAdminToken } from '../../services/auth'
 import type { Env } from '../../types'
-import { fail, nonEmptyText, ok, providerSchema, readJson, settingsSchema } from './shared'
+import { fail, nonEmptyText, ok, providerSchema, readJson, settingsSchema, thinkingConfigSchema } from './shared'
 
 const backupSchema = z.object({
   token: nonEmptyText,
@@ -38,6 +38,7 @@ const backupSchema = z.object({
     alias_name: nonEmptyText,
     group_id: nonEmptyText.nullable().default(null),
     enabled: z.union([z.literal(0), z.literal(1)]).default(1),
+    thinking: thinkingConfigSchema.nullable().default(null),
     targets: z.array(z.object({
       provider_id: nonEmptyText,
       model_id: nonEmptyText,

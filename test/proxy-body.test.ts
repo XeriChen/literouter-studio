@@ -4,7 +4,9 @@ import {
   parseProxyBody,
   readRequestBody,
   replaceProxyModel,
+  rewriteProxyBody,
   RequestBodyTooLargeError,
+  type ThinkingRewrite,
 } from '../src/proxy/body'
 
 const encode = (value: string) => new TextEncoder().encode(value)
@@ -46,4 +48,54 @@ test('stops reading once the request body exceeds the configured limit', async (
   })
 
   await assert.rejects(readRequestBody(request, 4), RequestBodyTooLargeError)
+})
+
+const anthropicThinking: ThinkingRewrite = { key: 'thinking', mode: 'override', value: { type: 'enabled', budget_tokens: 2048 } }
+const openaiThinking = (mode: 'override' | 'default'): ThinkingRewrite => ({ key: 'reasoning_effort', mode, value: 'high' })
+
+test('override thinking replaces an existing top-level field value', () => {
+  const source = '{"model":"a","thinking":{"type":"enabled","budget_tokens":1},"max_tokens":1024}'
+  const body = parseProxyBody(encode(source))!
+
+  assert.equal(
+    decode(rewriteProxyBody(body, 'real', anthropicThinking)),
+    '{"model":"real","thinking":{"type":"enabled","budget_tokens":2048},"max_tokens":1024}',
+  )
+})
+
+test('override thinking injects the field when the client omitted it', () => {
+  const body = parseProxyBody(encode('{ "model" : "a", "messages":[] }'))!
+
+  assert.equal(
+    decode(rewriteProxyBody(body, 'real', anthropicThinking)),
+    '{"thinking":{"type":"enabled","budget_tokens":2048}, "model" : "real", "messages":[] }',
+  )
+})
+
+test('default thinking leaves the client-provided field untouched', () => {
+  const source = '{"model":"a","reasoning_effort":"low"}'
+  const body = parseProxyBody(encode(source))!
+
+  assert.equal(
+    decode(rewriteProxyBody(body, 'real', openaiThinking('default'))),
+    '{"model":"real","reasoning_effort":"low"}',
+  )
+})
+
+test('default thinking injects when missing; override replaces the last duplicate key', () => {
+  const injected = rewriteProxyBody(parseProxyBody(encode('{"model":"a"}'))!, 'real', openaiThinking('default'))
+  assert.equal(decode(injected), '{"reasoning_effort":"high","model":"real"}')
+
+  const overridden = rewriteProxyBody(
+    parseProxyBody(encode('{"reasoning_effort":"low","model":"a","reasoning_effort":"medium"}'))!,
+    'real',
+    openaiThinking('override'),
+  )
+  assert.equal(decode(overridden), '{"reasoning_effort":"low","model":"real","reasoning_effort":"high"}')
+})
+
+test('without thinking config, rewrite equals a plain model replacement', () => {
+  const body = parseProxyBody(encode('{"model":"a","thinking":null}'))!
+
+  assert.equal(decode(rewriteProxyBody(body, 'real', null)), '{"model":"real","thinking":null}')
 })

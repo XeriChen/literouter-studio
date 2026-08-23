@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
+import type { ThinkingRewrite } from '../proxy/body'
 import type {
   ModelAliasGroupRow,
   ModelAliasRow,
@@ -7,6 +8,7 @@ import type {
   ProviderModelRow,
   ProviderProtocol,
   ProviderRow,
+  ThinkingConfig,
 } from '../types'
 
 export interface ModelWithProvider extends ProviderModelRow {
@@ -310,6 +312,7 @@ export function listAliases(): AliasWithTarget[] {
     group_id: row.group_id,
     group_name: row.group_name,
     enabled: row.enabled,
+    thinking_json: row.thinking_json,
     provider_id: row.active_provider_id,
     model_id: row.active_model_id,
     provider_name: row.active_provider_name,
@@ -333,13 +336,22 @@ export function addAlias(input: {
   model_id: string
   group_id?: string | null
   enabled?: number
+  thinking?: ThinkingConfig | null
 }): ModelAliasRow {
   const now = new Date().toISOString()
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(input.protocol, input.alias_name, input.group_id ?? null, input.enabled ?? 1, now, now)
+      `INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, thinking_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.protocol,
+      input.alias_name,
+      input.group_id ?? null,
+      input.enabled ?? 1,
+      input.thinking ? JSON.stringify(input.thinking) : null,
+      now,
+      now,
+    )
     insertAliasTargetInTransaction({ protocol: input.protocol, alias_name: input.alias_name, provider_id: input.provider_id, model_id: input.model_id, active: 1, priority: 0 })
   })()
   return getAlias(input.protocol, input.alias_name)!
@@ -353,6 +365,8 @@ export function updateAlias(input: {
   enabled?: number
   provider_id?: string
   model_id?: string
+  /** undefined = 不变；null = 清除；对象 = 设置/更新 */
+  thinking?: ThinkingConfig | null
 }): ModelAliasRow {
   const targetName = input.new_alias_name ?? input.alias_name
   db.transaction(() => {
@@ -360,6 +374,7 @@ export function updateAlias(input: {
     const values: unknown[] = [targetName, new Date().toISOString()]
     if (input.group_id !== undefined) { sets.push('group_id = ?'); values.push(input.group_id) }
     if (input.enabled !== undefined) { sets.push('enabled = ?'); values.push(input.enabled) }
+    if (input.thinking !== undefined) { sets.push('thinking_json = ?'); values.push(input.thinking ? JSON.stringify(input.thinking) : null) }
     values.push(input.protocol, input.alias_name)
     db.prepare(`UPDATE model_aliases SET ${sets.join(', ')} WHERE protocol = ? AND alias_name = ?`).run(...values)
 
@@ -440,12 +455,34 @@ export function reorderAliasTargets(input: { protocol: ProviderProtocol; alias_n
 }
 
 export type RouteResult =
-  | { kind: 'ok'; provider: ProviderRow; model: ProviderModelRow }
+  | { kind: 'ok'; provider: ProviderRow; model: ProviderModelRow; thinking: ThinkingRewrite | null }
   | { kind: 'not_found' }
   | { kind: 'provider_disabled' }
 
+/** 解析映射上的思考等级配置为请求体改写指令；配置缺失或损坏时返回 null（按纯透传处理）。 */
+export function parseThinkingRewrite(protocol: ProviderProtocol, thinkingJson: string | null): ThinkingRewrite | null {
+  if (!thinkingJson) return null
+  try {
+    const config = JSON.parse(thinkingJson) as ThinkingConfig
+    if (config.mode !== 'override' && config.mode !== 'default') return null
+    return { key: protocol === 'anthropic' ? 'thinking' : 'reasoning_effort', mode: config.mode, value: config.value }
+  } catch {
+    return null
+  }
+}
+
+/** 按协议校验思考配置的原生值：anthropic 为 thinking 对象，openai 为 reasoning_effort 字符串。 */
+export function validateThinkingValue(protocol: ProviderProtocol, value: unknown): boolean {
+  if (protocol === 'openai') return typeof value === 'string' && value.length > 0
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const thinking = value as Record<string, unknown>
+  if (thinking.type === 'enabled') return Number.isInteger(thinking.budget_tokens) && (thinking.budget_tokens as number) >= 1024
+  return thinking.type === 'disabled'
+}
+
 interface RouteRow {
   alias_enabled: number
+  thinking_json: string | null
   model_provider_id: string
   model_id: string
   display_name: string | null
@@ -472,6 +509,7 @@ interface RouteRow {
 const findRouteStatement = db.prepare(
   `SELECT
      a.enabled AS alias_enabled,
+     a.thinking_json AS thinking_json,
      pm.provider_id AS model_provider_id,
      pm.model_id,
      pm.display_name,
@@ -531,5 +569,5 @@ export function findRoute(protocol: ProviderProtocol, aliasName: string): RouteR
     updated_at: row.model_updated_at,
   }
   if (!provider.enabled) return { kind: 'provider_disabled' }
-  return { kind: 'ok', provider, model }
+  return { kind: 'ok', provider, model, thinking: parseThinkingRewrite(protocol, row.thinking_json) }
 }

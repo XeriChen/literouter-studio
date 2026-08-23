@@ -2,8 +2,9 @@ import { db } from '../db'
 import { parseAuth, parseCustomHeaders } from '../providers/headers'
 import { invalidateAllDispatchers } from '../proxy'
 import { getAdminToken, setAdminToken } from './auth'
+import { validateThinkingValue } from './models'
 import { getSettings, updateSettings, type SettingsKey } from './settings'
-import type { ProviderRow } from '../types'
+import type { ProviderRow, ThinkingConfig } from '../types'
 
 export interface BackupTarget {
   provider_id: string
@@ -52,6 +53,7 @@ export interface BackupData {
     alias_name: string
     group_id: string | null
     enabled: number
+    thinking: ThinkingConfig | null
     targets: BackupTarget[]
   }>
 }
@@ -105,6 +107,11 @@ function validateBackupGraph(data: BackupData): void {
     if (alias.group_id && !groups.has(JSON.stringify([alias.protocol, alias.group_id]))) {
       throw new Error(`alias group not found: ${alias.protocol}/${alias.group_id}`)
     }
+    if (alias.thinking !== null && alias.thinking !== undefined) {
+      if ((alias.thinking.mode !== 'override' && alias.thinking.mode !== 'default') || !validateThinkingValue(alias.protocol, alias.thinking.value)) {
+        throw new Error(`invalid alias thinking config: ${alias.protocol}/${alias.alias_name}`)
+      }
+    }
     const targets = new Set<string>()
     let activeCount = 0
     for (const target of alias.targets) {
@@ -141,11 +148,12 @@ export function exportBackup(): BackupData {
   const models = db.prepare('SELECT provider_id, model_id, display_name, enabled, source FROM provider_models').all() as BackupData['models']
   const provider_groups = db.prepare('SELECT protocol, id, name FROM provider_groups ORDER BY protocol, created_at, name').all() as BackupData['provider_groups']
   const groups = db.prepare('SELECT protocol, id, name FROM model_alias_groups ORDER BY protocol, created_at, name').all() as BackupData['groups']
-  const aliases = db.prepare('SELECT protocol, alias_name, group_id, enabled FROM model_aliases ORDER BY protocol, alias_name').all() as Array<{
+  const aliases = db.prepare('SELECT protocol, alias_name, group_id, enabled, thinking_json FROM model_aliases ORDER BY protocol, alias_name').all() as Array<{
     protocol: 'openai' | 'anthropic'
     alias_name: string
     group_id: string | null
     enabled: number
+    thinking_json: string | null
   }>
   const targets = db.prepare('SELECT protocol, alias_name, provider_id, model_id, priority, active FROM model_alias_targets ORDER BY protocol, alias_name, priority, id').all() as Array<BackupTarget & { protocol: 'openai' | 'anthropic'; alias_name: string }>
   const byAlias = new Map<string, BackupTarget[]>()
@@ -162,7 +170,11 @@ export function exportBackup(): BackupData {
     provider_groups,
     models,
     groups,
-    aliases: aliases.map((alias) => ({ ...alias, targets: byAlias.get(`${alias.protocol}/${alias.alias_name}`) ?? [] })),
+    aliases: aliases.map(({ thinking_json, ...alias }) => ({
+      ...alias,
+      thinking: thinking_json ? JSON.parse(thinking_json) as ThinkingConfig : null,
+      targets: byAlias.get(`${alias.protocol}/${alias.alias_name}`) ?? [],
+    })),
   }
 }
 
@@ -190,7 +202,7 @@ export function importBackup(data: BackupData): void {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     const insertGroup = db.prepare('INSERT INTO model_alias_groups (protocol, id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-    const insertAlias = db.prepare('INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    const insertAlias = db.prepare('INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, thinking_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     const insertTarget = db.prepare(
       `INSERT INTO model_alias_targets (protocol, alias_name, provider_id, model_id, priority, active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -198,7 +210,7 @@ export function importBackup(data: BackupData): void {
     for (const m of data.models) insertModel.run(m.provider_id, m.model_id, m.display_name, m.enabled, m.source, now, now)
     for (const g of data.groups) insertGroup.run(g.protocol, g.id, g.name, now, now)
     for (const a of data.aliases) {
-      insertAlias.run(a.protocol, a.alias_name, a.group_id, a.enabled, now, now)
+      insertAlias.run(a.protocol, a.alias_name, a.group_id, a.enabled, a.thinking ? JSON.stringify(a.thinking) : null, now, now)
       for (const target of a.targets) insertTarget.run(a.protocol, a.alias_name, target.provider_id, target.model_id, target.priority, target.active, now, now)
     }
     setAdminToken(data.token)

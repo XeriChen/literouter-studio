@@ -8,6 +8,7 @@ import {
   RequestBodyTooLargeError,
 } from '../../proxy/body'
 import type { ApiResponse, Env, ProviderRow } from '../../types'
+import { validateThinkingValue } from '../../services/models'
 
 export type ApiContext = Context<Env>
 
@@ -89,11 +90,26 @@ export const aliasRefSchema = z.object({
   alias_name: nonEmptyText,
 })
 
+/**
+ * 思考等级配置（协议原生值）：
+ * - anthropic → thinking 对象，如 {"type":"enabled", "budget_tokens":2048} 或 {"type":"disabled"}
+ * - openai → reasoning_effort 字符串，如 "high"
+ */
+export const thinkingConfigSchema = z.looseObject({
+  mode: z.enum(['override', 'default']),
+  value: z.unknown(),
+})
+
 export const aliasSchema = aliasRefSchema.extend({
   provider_id: nonEmptyText,
   model_id: nonEmptyText,
   group_id: nonEmptyText.nullable().optional(),
   enabled: z.union([z.literal(0), z.literal(1)]).optional(),
+  thinking: thinkingConfigSchema.optional(),
+}).superRefine((alias, ctx) => {
+  if (alias.thinking && !validateThinkingValue(alias.protocol, alias.thinking.value)) {
+    ctx.addIssue({ code: 'custom', path: ['thinking', 'value'], message: 'thinking value does not match protocol' })
+  }
 })
 
 export const aliasPatchSchema = aliasRefSchema.extend({
@@ -102,14 +118,21 @@ export const aliasPatchSchema = aliasRefSchema.extend({
   enabled: z.union([z.literal(0), z.literal(1)]).optional(),
   provider_id: nonEmptyText.optional(),
   model_id: nonEmptyText.optional(),
+  /** undefined = 不变；null = 清除 */
+  thinking: thinkingConfigSchema.nullable().optional(),
 }).refine(
   (value) => value.new_alias_name !== undefined || value.group_id !== undefined || value.enabled !== undefined
+    || value.thinking !== undefined
     || (value.provider_id !== undefined && value.model_id !== undefined),
   'alias patch cannot be empty',
 ).refine(
   (value) => (value.provider_id === undefined) === (value.model_id === undefined),
   'provider_id and model_id must be provided together',
-)
+).superRefine((alias, ctx) => {
+  if (alias.thinking && !validateThinkingValue(alias.protocol, alias.thinking.value)) {
+    ctx.addIssue({ code: 'custom', path: ['thinking', 'value'], message: 'thinking value does not match protocol' })
+  }
+})
 
 export const aliasGroupRefSchema = z.object({
   protocol: z.enum(['openai', 'anthropic']),

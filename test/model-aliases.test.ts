@@ -27,9 +27,9 @@ after(async () => {
   }
 })
 
-test('initializes schema v6 and keeps exactly one priority-routed active target', () => {
+test('initializes schema v7 and keeps exactly one priority-routed active target', () => {
   const version = db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  assert.equal(version.version, 6)
+  assert.equal(version.version, 7)
 
   const now = new Date().toISOString()
   const insertProvider = db.prepare(
@@ -109,4 +109,70 @@ test('initializes schema v6 and keeps exactly one priority-routed active target'
 
   assert.equal(models.deleteAliasGroup({ protocol: 'openai', id: group.id }), 1)
   assert.equal(models.getAlias('openai', 'renamed-alias'), undefined)
+})
+
+test('thinking config validates protocol-native values, routes to rewrite, and roundtrips via backup', () => {
+  // 校验器：openai 只接受 reasoning_effort 字符串；anthropic 接受 enabled(≥1024)/disabled
+  assert.equal(models.validateThinkingValue('openai', 'high'), true)
+  assert.equal(models.validateThinkingValue('openai', ''), false)
+  assert.equal(models.validateThinkingValue('openai', { type: 'enabled' }), false)
+  assert.equal(models.validateThinkingValue('anthropic', { type: 'enabled', budget_tokens: 2048 }), true)
+  assert.equal(models.validateThinkingValue('anthropic', { type: 'enabled', budget_tokens: 512 }), false)
+  assert.equal(models.validateThinkingValue('anthropic', { type: 'disabled' }), true)
+  assert.equal(models.validateThinkingValue('anthropic', { type: 'other' }), false)
+
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
+     VALUES ('pt1', 'Anthropic Provider', 'anthropic', 'https://anthropic.test', '{}', '{}', NULL, NULL, NULL, 1, ?, ?)`,
+  ).run(now, now)
+  db.prepare(
+    `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, created_at, updated_at)
+     VALUES ('pt1', 'claude-x', NULL, 1, 'manual', ?, ?)`,
+  ).run(now, now)
+
+  models.addAlias({
+    protocol: 'anthropic',
+    alias_name: 'thinking-alias',
+    provider_id: 'pt1',
+    model_id: 'claude-x',
+    thinking: { mode: 'override', value: { type: 'enabled', budget_tokens: 2048 } },
+  })
+  assert.deepEqual(models.getAlias('anthropic', 'thinking-alias')?.thinking_json, '{"mode":"override","value":{"type":"enabled","budget_tokens":2048}}')
+  assert.equal(models.listAliases().find((item) => item.alias_name === 'thinking-alias')?.thinking_json !== null, true)
+
+  const route = models.findRoute('anthropic', 'thinking-alias')
+  assert.equal(route.kind, 'ok')
+  if (route.kind === 'ok') {
+    assert.equal(route.thinking?.key, 'thinking')
+    assert.equal(route.thinking?.mode, 'override')
+    assert.deepEqual(route.thinking?.value, { type: 'enabled', budget_tokens: 2048 })
+  }
+
+  // PATCH：改为 default 模式；传 null 清除
+  models.updateAlias({ protocol: 'anthropic', alias_name: 'thinking-alias', thinking: { mode: 'default', value: { type: 'disabled' } } })
+  const defaulted = models.findRoute('anthropic', 'thinking-alias')
+  assert.equal(defaulted.kind, 'ok')
+  if (defaulted.kind === 'ok') assert.deepEqual(defaulted.thinking, { key: 'thinking', mode: 'default', value: { type: 'disabled' } })
+
+  // 备份导出/导入保留思考配置
+  const exported = backup.exportBackup()
+  const exportedAlias = exported.aliases.find((item) => item.alias_name === 'thinking-alias')
+  assert.deepEqual(exportedAlias?.thinking, { mode: 'default', value: { type: 'disabled' } })
+  backup.importBackup(exported)
+  assert.deepEqual(exportedAlias, backup.exportBackup().aliases.find((item) => item.alias_name === 'thinking-alias'))
+
+  models.updateAlias({ protocol: 'anthropic', alias_name: 'thinking-alias', thinking: null })
+  const cleared = models.findRoute('anthropic', 'thinking-alias')
+  assert.equal(cleared.kind, 'ok')
+  if (cleared.kind === 'ok') assert.equal(cleared.thinking, null)
+
+  // 损坏/非法配置按纯透传处理
+  assert.equal(models.parseThinkingRewrite('openai', null), null)
+  assert.equal(models.parseThinkingRewrite('openai', 'not-json'), null)
+  assert.equal(models.parseThinkingRewrite('openai', '{"mode":"other","value":"high"}'), null)
+  assert.deepEqual(models.parseThinkingRewrite('openai', '{"mode":"override","value":"high"}'), { key: 'reasoning_effort', mode: 'override', value: 'high' })
+
+  models.deleteAlias({ protocol: 'anthropic', alias_name: 'thinking-alias' })
+
 })

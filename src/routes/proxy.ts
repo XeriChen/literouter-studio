@@ -6,7 +6,7 @@ import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody 
 import {
   parseProxyBody,
   readRequestBody,
-  replaceProxyModel,
+  rewriteProxyBody,
   MAX_REQUEST_BODY_BYTES,
   RequestBodyTooLargeError,
 } from '../proxy/body'
@@ -141,8 +141,8 @@ proxyRoutes.all('*', async (c) => {
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
-    // 映射名 -> 真实模型名：定点替换 body.model 的字符串值，其余字节原样保留
-    const outBody = replaceProxyModel(body, route.model.model_id)
+    // 映射名 -> 真实模型名，并按映射配置定点改写思考等级字段，其余字节原样保留
+    const outBody = rewriteProxyBody(body, route.model.model_id, route.thinking)
 
     return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model)
   } catch (err) {
