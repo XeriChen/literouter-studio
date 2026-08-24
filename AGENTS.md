@@ -43,7 +43,7 @@
 | :--- | :--- |
 | `src/server.ts` | 入口；监听配置按数据库 settings > env > 默认值解析，启动时清日志并处理优雅关闭 |
 | `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
-| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v7 基线（开发期可删库重建，仅保留 v6→v7 守卫式加列），settings 读写助手 |
+| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v8 基线（开发期可删库重建，仅保留 v6→v7、v7→v8 守卫式加列），settings 读写助手 |
 | `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
 | `src/proxy/` | 请求体限流/定点替换（model + 思考字段）、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存 |
 | `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
@@ -78,14 +78,14 @@
 - [ ] `custom_headers` 禁止覆盖 `authorization` / `x-api-key` / `api-key` / `accept-encoding`
 - [ ] 透传保留了客户端 Query String；`base_url` 拼接前去除尾部 `/`
 - [ ] 客户端断连（`c.req.raw.signal`）立即 abort 上游请求
-- [ ] 日志在收到上游响应头时立即写入，`latency_ms` = 网关收请求到收响应头耗时（首包）；上游 5xx 的日志 status 保留上游状态码
+- [ ] 日志在收到上游响应头时立即写入，`latency_ms` = 网关收请求到收响应头耗时（首包）；日志记录请求映射名（model）与实际路由的提供商名（provider_name）/真实模型名（resolved_model）；上游 5xx 的日志 status 保留上游状态码
 - [ ] 上游 3xx/4xx（400/401/429 等）原样透传不重新包装；5xx 才包 `upstream_error`（502）；超时 `upstream_timeout`（504）
 - [ ] `accept-encoding: identity` 防止上游压缩破坏 SSE
 - [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
 - [ ] 代理请求须用 undici v8 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
 - [ ] `GET */v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名；其他非 POST 代理请求返回 405
 - [ ] 思考等级仅按映射配置改写顶层 `thinking`（Anthropic）/`reasoning_effort`（OpenAI）：override 无条件替换/注入，default 仅客户端未携带时注入；value 入库前按协议校验（Anthropic enabled 要求 budget_tokens 为 ≥1024 整数）
-- [ ] 模型测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时
+- [ ] 模型测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时；可携带映射同款 `thinking` 配置，value 校验后注入测活请求体
 - [ ] Provider 连通性测试：401/403 判认证失败，其他 HTTP 响应判网络可达；配置超时为 0 时仍有 30s AbortSignal 兜底
 
 ## 9. 错误码速查

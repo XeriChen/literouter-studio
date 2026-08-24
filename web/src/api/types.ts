@@ -116,6 +116,8 @@ export interface LogRow {
   path: string | null
   model: string | null
   provider_id: string | null
+  provider_name: string | null
+  resolved_model: string | null
   status: number | null
   latency_ms: number | null
   error_code: string | null

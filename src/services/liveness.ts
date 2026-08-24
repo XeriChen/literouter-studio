@@ -3,7 +3,7 @@ import { buildAnthropicChatBody, extractAnthropicReply } from '../providers/anth
 import { buildOpenAIChatBody, extractOpenAIReply } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
 import { getProvider } from './providers'
-import type { ProviderRow } from '../types'
+import type { ProviderRow, ThinkingConfig } from '../types'
 
 const LIVENESS_TIMEOUT_MS = 30_000
 
@@ -16,10 +16,13 @@ export function validateTestPrompt(prompt: string): string | null {
   return null
 }
 
-function buildChatBody(provider: ProviderRow, modelId: string, prompt: string): Record<string, unknown> {
-  return provider.protocol === 'openai'
+function buildChatBody(provider: ProviderRow, modelId: string, prompt: string, thinking: ThinkingConfig | null): Record<string, unknown> {
+  const body = provider.protocol === 'openai'
     ? buildOpenAIChatBody({ model: modelId, prompt })
     : buildAnthropicChatBody({ model: modelId, prompt })
+  // 测活按映射思考配置注入协议原生字段（mode 是代理侧语义，测活直接携带 value）
+  if (thinking) body[provider.protocol === 'anthropic' ? 'thinking' : 'reasoning_effort'] = thinking.value
+  return body
 }
 
 function extractReply(provider: ProviderRow, body: unknown): string {
@@ -31,6 +34,8 @@ export async function testModelLiveness(input: {
   provider_id: string
   model_id: string
   prompt: string
+  /** 可选：映射上配置的思考等级，测活时携带其协议原生 value */
+  thinking?: ThinkingConfig | null
 }): Promise<{ reply: string; latency_ms: number }> {
   const provider = getProvider(input.provider_id)
   if (!provider) throw new Error('provider not found')
@@ -48,7 +53,7 @@ export async function testModelLiveness(input: {
       'accept-encoding': 'identity',
       'content-type': 'application/json',
     },
-    body: new TextEncoder().encode(JSON.stringify(buildChatBody(provider, input.model_id, input.prompt))),
+    body: new TextEncoder().encode(JSON.stringify(buildChatBody(provider, input.model_id, input.prompt, input.thinking ?? null))),
     dispatcher: getDispatcher(provider.proxy_url, LIVENESS_TIMEOUT_MS),
     signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS),
   }).catch((err: unknown) => {

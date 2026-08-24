@@ -24,6 +24,7 @@ import {
   setModelEnabled,
   updateAlias,
   updateAliasGroup,
+  validateThinkingValue,
 } from '../../services/models'
 import { getProvider } from '../../services/providers'
 import { testModelLiveness, validateTestPrompt } from '../../services/liveness'
@@ -40,6 +41,7 @@ import {
   type ApiContext,
   ok,
   readJson,
+  thinkingConfigSchema,
 } from './shared'
 
 const DEFAULT_TEST_PROMPT = '现在的美国总统是谁'
@@ -272,19 +274,23 @@ export function registerModelRoutes(api: Hono<Env>): void {
   })
 
   api.post('/models/test', async (c) => {
-    const parsed = modelRefSchema.extend({ prompt: z.string().optional() }).safeParse(await readJson(c))
+    const parsed = modelRefSchema.extend({ prompt: z.string().optional(), thinking: thinkingConfigSchema.nullable().optional() }).safeParse(await readJson(c))
     if (!parsed.success) return fail(c, 400, 'invalid model', 'invalid_request_body')
     const provider = getProvider(parsed.data.provider_id)
     if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
     const model = getModel(parsed.data.provider_id, parsed.data.model_id)
     if (!model) return fail(c, 404, 'model not found', 'model_not_found')
     if (!provider.enabled) return fail(c, 503, 'provider disabled', 'provider_disabled')
+    if (parsed.data.thinking && !validateThinkingValue(provider.protocol, parsed.data.thinking.value)) {
+      return fail(c, 400, 'invalid thinking config', 'invalid_request_body')
+    }
     const prompt = parsed.data.prompt?.trim() || DEFAULT_TEST_PROMPT
     const invalidReason = validateTestPrompt(prompt)
     if (invalidReason) return fail(c, 400, invalidReason, 'invalid_test_prompt')
+    const thinkingNote = parsed.data.thinking ? '（含思考等级）' : ''
     try {
-      const result = await testModelLiveness({ provider_id: parsed.data.provider_id, model_id: parsed.data.model_id, prompt })
-      writeAuditLog({ resource: 'model', action: 'test', target: parsed.data.model_id, detail: `测活模型 ${parsed.data.model_id} (${provider.name}): ${result.latency_ms}ms`, status: 200 })
+      const result = await testModelLiveness({ provider_id: parsed.data.provider_id, model_id: parsed.data.model_id, prompt, thinking: parsed.data.thinking ?? null })
+      writeAuditLog({ resource: 'model', action: 'test', target: parsed.data.model_id, detail: `测活模型 ${parsed.data.model_id} (${provider.name})${thinkingNote}: ${result.latency_ms}ms`, status: 200 })
       return ok(c, result)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'liveness test failed'

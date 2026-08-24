@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-23（已与 schema v7、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 更新时间：2026-08-24（已与 schema v8、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -39,7 +39,7 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  db/index.ts      SQLite 初始化 + 当前 schema v7 基线（开发期允许删库重建，v6→v7 保留守卫式加列）
+  db/index.ts      SQLite 初始化 + 当前 schema v8 基线（开发期允许删库重建，v6→v7、v7→v8 保留守卫式加列）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher
@@ -58,7 +58,7 @@ test/              Node 单元测试与 test/e2e/ Playwright 冒烟测试
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v7）
+## 4. 数据模型（schema v8）
 
 | 表 | 说明 |
 | :--- | :--- |
@@ -69,10 +69,10 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关；`thinking_json` 为可选思考等级配置（`{mode:override/default, value:协议原生值}`） |
 | `model_alias_targets` | 映射候选：指向真实模型，带 priority/active；每个映射最多一个 active |
 | `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days |
-| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时 |
+| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读） |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-当前处于无正式用户的开发阶段，schema v7 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7 的守卫式加列）。正式部署前需重新确认迁移与兼容策略。
+当前处于无正式用户的开发阶段，schema v8 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8 的守卫式加列）。正式部署前需重新确认迁移与兼容策略。
 
 ## 5. 核心概念：模型映射（路由键）
 
@@ -108,7 +108,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
 | `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
 | `POST/PATCH/DELETE /alias-targets`、`POST /alias-targets/reorder` | 候选新增、设为 active、删除与 priority 重排 |
-| `POST /models/test` | 测活：body `{provider_id, model_id, prompt}` |
+| `POST /models/test` | 测活：body `{provider_id, model_id, prompt?, thinking?}`，thinking 为映射同款思考配置（value 按协议校验并注入测活请求体） |
 | `GET/PUT /settings`、`GET /me`、`POST /token/reset` | 配置、Token 查看/重置 |
 | `GET/POST /backup` | 导出/导入配置（含明文 Token 与 Key，不含两类日志）；导入校验后在事务内全量替换配置，成功后前端强制登出 |
 | `GET /logs`、`DELETE /logs` | 代理访问日志分页/清空 |
@@ -157,7 +157,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - 上游响应 body 是 Node `Readable`：成功与 3xx/4xx 响应用 `new Response(readable)` 透传，5xx 或无需返回 body 时调用 `.dump()` 排空；上游缺少 `content-type` 时默认补 `application/json`。
 - 上游 3xx/4xx 保留状态码与响应体；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
 - 转发请求丢弃 hop-by-hop、客户端认证和 `content-length`，强制 `accept-encoding: identity`；Provider 认证头最后写入，`custom_headers` 不能覆盖 `authorization`、`x-api-key`、`api-key` 或 `accept-encoding`。
-- 收到上游响应头即写访问日志：`latency_ms` 是首包耗时，`status` 记录上游原始状态。因此上游 5xx 虽向客户端转换为 502，日志仍保留实际的上游 5xx；映射/超时等网关失败则记录网关状态与 `error_code`。
+- 收到上游响应头即写访问日志：`latency_ms` 是首包耗时，`status` 记录上游原始状态，`model` 记请求的映射名，`provider_name` / `resolved_model` 记实际路由的提供商名称与真实模型名（冗余落库）。因此上游 5xx 虽向客户端转换为 502，日志仍保留实际的上游 5xx；映射/超时等网关失败则记录网关状态与 `error_code`。
 
 ### 生产静态资源与 SPA 回退
 
@@ -175,7 +175,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 ### 测活（liveness）
 
-模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」；30s 硬超时。管理路由会校验真实模型存在且 Provider 启用；真实模型未启用仍允许测活。测活按真实 `provider_id + model_id` 调用，不经过映射层。
+模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」；30s 硬超时。管理路由会校验真实模型存在且 Provider 启用；真实模型未启用仍允许测活。测活按真实 `provider_id + model_id` 调用，不经过映射层；请求体可显式携带 `thinking` 配置，value 校验后按协议注入测活请求体（Anthropic `thinking` / OpenAI `reasoning_effort`），映射页的快速测活会自动带上该映射的思考等级。
 
 测活按 Provider 协议构造非流式 Chat/Messages 请求并解析回复。Provider 模型列表拉取和连通性测试复用认证头与 `(proxy_url, timeout)` dispatcher；Provider/全局超时为 0 时，代理请求不设连接/响应头超时，但这两类管理操作仍以 30s `AbortSignal` 兜底。
 
@@ -198,7 +198,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 3. **日志增长**：启动时按 `log_retention_days`（默认 30，settings 可配）清理过期日志（代理日志与配置操作日志同步清理）；运行期无自动裁剪，条数上限策略未实施。
 4. **客户端断连**：收到上游响应头前断连不会写代理访问日志；若响应头已经收到，访问日志已经按上游状态落库。内部 499 只用于中止后的错误处理，不代表一定存在一条 status=499 的访问日志。
 5. **配置操作日志（audit_logs）**：管理 API 各写操作端点显式写入（`src/routes/api/*` 调用 `writeAuditLog`），无请求体记录（detail 只含变更字段名与可见值，不含 API Key/Token 明文）；登录成败、Token 重置、备份导入导出、代理日志清空有记录。清空审计日志本身不会再写一条审计记录，否则清空后会立即残留新记录。
-6. **请求体原样保留的边界**：只有合法 JSON object 且顶层存在非空字符串 `model` 的代理请求可以路由；除 `model` 与映射配置的思考字段（Anthropic `thinking` / OpenAI `reasoning_effort`）外，网关不会尝试修复或重写其他 JSON 结构，超过 50 MiB 的请求在读取阶段拒绝。思考字段改写对测活等管理侧直连请求不生效（不经映射层）。
+6. **请求体原样保留的边界**：只有合法 JSON object 且顶层存在非空字符串 `model` 的代理请求可以路由；除 `model` 与映射配置的思考字段（Anthropic `thinking` / OpenAI `reasoning_effort`）外，网关不会尝试修复或重写其他 JSON 结构，超过 50 MiB 的请求在读取阶段拒绝。管理侧测活仍不经映射层，但支持在请求体中显式携带 `thinking` 配置（前端映射快速测活会自动带上）。
 7. **dispatcher 生命周期**：Provider 的 `proxy_url` 或 `timeout_ms` 变化、Provider 删除及进程关闭都会清空 dispatcher 缓存；缓存键为 `(proxy_url, timeout_ms)`，`bodyTimeout` 永远为 0。
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
 9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。

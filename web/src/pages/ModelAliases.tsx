@@ -19,6 +19,8 @@ function keyOf(a: Pick<ModelAlias, 'protocol' | 'alias_name'>): string {
   return `${a.protocol}/${a.alias_name}`
 }
 
+const openaiEffortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
 interface ThinkingFormState {
   mode: 'off' | 'override' | 'default'
   anthropicType: 'enabled' | 'disabled'
@@ -26,7 +28,7 @@ interface ThinkingFormState {
   effort: string
 }
 
-const emptyThinkingForm: ThinkingFormState = { mode: 'off', anthropicType: 'enabled', budget: '4096', effort: '' }
+const emptyThinkingForm: ThinkingFormState = { mode: 'off', anthropicType: 'enabled', budget: '4096', effort: 'medium' }
 
 function parseThinkingForm(thinkingJson: string | null): ThinkingFormState {
   if (!thinkingJson) return emptyThinkingForm
@@ -36,9 +38,9 @@ function parseThinkingForm(thinkingJson: string | null): ThinkingFormState {
     const value = config.value
     if (value !== null && typeof value === 'object') {
       const thinking = value as { type?: string; budget_tokens?: unknown }
-      return { mode: config.mode, anthropicType: thinking.type === 'disabled' ? 'disabled' : 'enabled', budget: String(thinking.budget_tokens ?? 4096), effort: '' }
+      return { mode: config.mode, anthropicType: thinking.type === 'disabled' ? 'disabled' : 'enabled', budget: String(thinking.budget_tokens ?? 4096), effort: 'medium' }
     }
-    return { mode: config.mode, anthropicType: 'enabled', budget: '4096', effort: typeof value === 'string' ? value : '' }
+    return { mode: config.mode, anthropicType: 'enabled', budget: '4096', effort: typeof value === 'string' && value ? value : 'medium' }
   } catch {
     return emptyThinkingForm
   }
@@ -58,6 +60,7 @@ function buildThinking(form: ThinkingFormState, protocol: Protocol): { config: T
   } else {
     const effort = form.effort.trim()
     if (!effort) return { config: null, error: 'reasoning_effort 不能为空' }
+    if (!(openaiEffortLevels as readonly string[]).includes(effort)) return { config: null, error: `reasoning_effort 仅支持 ${openaiEffortLevels.join(' / ')}` }
     value = effort
   }
   return { config: { mode: form.mode, value } }
@@ -68,6 +71,16 @@ function thinkingBadge(thinkingJson: string | null): string | null {
     if (!thinkingJson) return null
     const config = JSON.parse(thinkingJson) as ThinkingConfig
     return config.mode === 'override' ? '思考·覆盖' : config.mode === 'default' ? '思考·默认' : null
+  } catch {
+    return null
+  }
+}
+
+function parseThinkingConfig(thinkingJson: string | null): ThinkingConfig | null {
+  if (!thinkingJson) return null
+  try {
+    const config = JSON.parse(thinkingJson) as ThinkingConfig
+    return config.mode === 'override' || config.mode === 'default' ? config : null
   } catch {
     return null
   }
@@ -110,7 +123,12 @@ function ThinkingFields({ protocol, form, onChange }: { protocol: Protocol; form
       {form.mode !== 'off' && protocol === 'openai' && (
         <div className="space-y-1.5">
           <Label className="text-xs">reasoning_effort</Label>
-          <Input value={form.effort} placeholder="low / medium / high / minimal / none" onChange={(event) => onChange({ ...form, effort: event.target.value })} />
+          <Select value={form.effort || 'medium'} onValueChange={(value) => onChange({ ...form, effort: value })}>
+            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {openaiEffortLevels.map((level) => <SelectItem key={level} value={level}>{level}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       )}
     </div>
@@ -472,7 +490,7 @@ export default function ModelAliases() {
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
-                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
+                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
                   {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
                 </Fragment>

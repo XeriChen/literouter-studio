@@ -30,6 +30,7 @@ async function forward(
   startedAt: number,
   protocol: 'openai' | 'anthropic',
   requestedModel: string,
+  resolvedModel: string,
 ) {
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -54,6 +55,8 @@ async function forward(
     path: c.req.path,
     model: requestedModel,
     provider_id: provider.id,
+    provider_name: provider.name,
+    resolved_model: resolvedModel,
     status: res.status,
     latency_ms: headerAt - startedAt,
   })
@@ -144,7 +147,7 @@ proxyRoutes.all('*', async (c) => {
     // 映射名 -> 真实模型名，并按映射配置定点改写思考等级字段，其余字节原样保留
     const outBody = rewriteProxyBody(body, route.model.model_id, route.thinking)
 
-    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model)
+    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model, route.model.model_id)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err

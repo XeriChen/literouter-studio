@@ -52,8 +52,8 @@ export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] }
 
 export function writeLog(row: Partial<LogRow>): void {
   db.prepare(
-    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, status, latency_ms, error_code)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, provider_name, resolved_model, status, latency_ms, error_code)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.created_at ?? new Date().toISOString(),
     row.client_ip ?? null,
@@ -62,6 +62,8 @@ export function writeLog(row: Partial<LogRow>): void {
     row.path ?? null,
     row.model ?? null,
     row.provider_id ?? null,
+    row.provider_name ?? null,
+    row.resolved_model ?? null,
     row.status ?? null,
     row.latency_ms ?? null,
     row.error_code ?? null,

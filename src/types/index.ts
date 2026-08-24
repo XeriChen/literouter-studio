@@ -94,6 +94,10 @@ export interface LogRow {
   path: string | null
   model: string | null
   provider_id: string | null
+  /** 实际路由到的提供商名称（冗余存储，Provider 删除后日志仍可读） */
+  provider_name: string | null
+  /** 实际路由到的真实模型名（冗余存储） */
+  resolved_model: string | null
   status: number | null
   latency_ms: number | null
   error_code: string | null

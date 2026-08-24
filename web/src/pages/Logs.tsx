@@ -168,8 +168,10 @@ function AccessLogsTab() {
                 <TableHead>方法</TableHead>
                 <TableHead>路径</TableHead>
                 <TableHead>模型</TableHead>
+                <TableHead>Provider</TableHead>
+                <TableHead>真实模型</TableHead>
                 <TableHead>状态</TableHead>
-                <TableHead>耗时</TableHead>
+                <TableHead className="pr-6">耗时</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -179,13 +181,15 @@ function AccessLogsTab() {
                   <TableCell className="font-mono text-xs">{r.method}</TableCell>
                   <TableCell className="max-w-[180px] truncate font-mono text-xs">{r.path}</TableCell>
                   <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.model ?? '-'}</TableCell>
+                  <TableCell className="max-w-[120px] truncate text-xs">{r.provider_name ?? '-'}</TableCell>
+                  <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.resolved_model ?? '-'}</TableCell>
                   <TableCell>{statusBadge(r.status)}</TableCell>
                   <TableCell className="pr-6 text-xs text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</TableCell>
                 </TableRow>
               ))}
               {!logs.data?.rows.length && !logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center">
+                  <TableCell colSpan={8} className="h-32 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <ScrollText className="h-8 w-8" />
                       <p className="text-sm">暂无代理访问日志</p>
@@ -195,7 +199,7 @@ function AccessLogsTab() {
               )}
               {logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
                 </TableRow>
               )}
             </TableBody>
