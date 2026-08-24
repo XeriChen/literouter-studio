@@ -12,7 +12,7 @@
 
 ## 功能特性
 
-- OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/v1/*`）代理入口，支持 SSE 流式透传
+- OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/v1/*`）代理入口，支持 SSE 流式透传；端点路径缺 `/v1` 自动补齐、多重 `/v1` 自动去重
 - Provider 管理：按协议自定义分组、表单内新建分组、批量选择/移动/启用/禁用/删除、分组启用滑块、配置复制、API Key 显隐、连通性测试、模型拉取、HTTP 代理、自定义请求头与模型过滤
 - 模型管理：手动添加或批量导入、启用/禁用、模型测活、批量操作
 - 模型映射：按协议分组、独立启用开关、多个候选目标与手动优先级；每次请求只使用唯一 active 目标；可选思考等级（强制覆盖或仅默认，值为协议原生字段）
@@ -73,6 +73,8 @@ pnpm start
 | :--- | :--- | :--- |
 | OpenAI | `GET /openai/v1/models` | `POST /openai/v1/chat/completions`、`POST /openai/v1/responses` |
 | Anthropic | `GET /anthropic/v1/models` | `POST /anthropic/v1/messages` |
+
+> 端点的 `/v1` 版本段会自动归一化：缺 `/v1`（如 `/openai/chat/completions`）会自动补齐，多重 `/v1`（如 `/openai/v1/v1/chat/completions`）会自动去重。
 
 所有管理 API 与代理入口都需要网关 Token。提取优先级为：
 

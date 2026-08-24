@@ -17,3 +17,5 @@ docs/superpowers/
 gui-test-screenshots/
 test-results/
 playwright-report/
+.pi/
+.opencode/

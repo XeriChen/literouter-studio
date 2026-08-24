@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
+import { normalizeUpstreamPath } from '../proxy/path'
 import {
   parseProxyBody,
   readRequestBody,
@@ -108,13 +109,9 @@ proxyRoutes.all('*', async (c) => {
   const startedAt = Date.now()
   const path = c.req.path
   const protocol: 'openai' | 'anthropic' = path.startsWith('/openai') ? 'openai' : 'anthropic'
-  const upstreamPath = path.replace(/^\/(openai|anthropic)/, '')
+  // 去掉 /openai|/anthropic 前缀后，归一化端点的 v1 版本段：缺失自动补齐、多重自动去重
+  const upstreamPath = normalizeUpstreamPath(path.replace(/^\/(openai|anthropic)/, ''))
   let requestedModel: string | null = null
-
-  // OpenAI 入口严格限定 /openai/v1/*：不带 /v1 的路径一律 404
-  if (protocol === 'openai' && !upstreamPath.startsWith('/v1/')) {
-    return logAndFail(c, protocol, path, c.req.method, null, startedAt, 404, 'not_found', 'not found')
-  }
 
   try {
     // GET /v1/models：只返回已建立映射的模型名（未建映射不可见、不可调用）

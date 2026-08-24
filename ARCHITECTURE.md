@@ -42,7 +42,7 @@ src/
   db/index.ts      SQLite 初始化 + 当前 schema v8 基线（开发期允许删库重建，v6→v7、v7→v8 保留守卫式加列）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
-  proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher
+  proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher；path.ts 做 v1 路径归一化
   routes/api.ts    管理 API 装配入口（领域路由位于 routes/api/*）
   routes/api/*     auth、providers、models、settings、logs、backup 领域路由
   routes/proxy.ts  代理入口流水线（路由、透传、日志）
@@ -55,6 +55,7 @@ web/src/
   components/      ChatUI（SSE 双协议解析）等
   lib/sse.ts       跨网络 chunk 的 OpenAI / Anthropic SSE 增量解析器
 test/              Node 单元测试与 test/e2e/ Playwright 冒烟测试
+skills/literouter/ agent 管理 Skill：SKILL.md（引导/安全分级/工作流）+ references/api.md（端点规范本体，未来 CLI/MCP 工具面按其映射）；经 .opencode/opencode.json 的 skills.paths 注册
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
@@ -130,7 +131,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | 404 | `model_not_found` / `provider_not_found` / `provider_group_not_found` / `alias_not_found` | 不存在（含模型未启用） |
 | 404 | `alias_group_not_found` / `alias_target_not_found` | 映射分组或候选目标不存在 |
 | 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议 Provider 分组名、映射名/分组名或候选目标重复 |
-| 404 | `not_found` | `/api` 未匹配或 OpenAI 代理路径不在 `/openai/v1/*` |
+| 404 | `not_found` | `/api` 未匹配（代理端点路径已自动归一化，见 §6） |
 | 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
 | 502 | `upstream_error` | 代理上游不可达/拒绝连接/5xx，或管理侧上游调用失败 |
@@ -139,7 +140,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 
 ## 6. 代理管线（routing/proxy + proxy/）
 
-入口约束：OpenAI 仅接受 `/openai/v1/*`；Anthropic 使用 `/anthropic/v1/*`。两协议的 `GET */v1/models` 是网关本地生成的映射列表，不请求上游；其余代理请求只接受 POST，其他方法返回 405。
+入口约束：两协议入口分别挂 `/openai`、`/anthropic`。端点的版本段在做路由判断前统一归一化（`src/proxy/path.ts`）：剔除路径中所有 `v1` 段（忽略大小写）后在头部补回恰好一个 `/v1`，因此客户端缺失 `/v1` 会自动补齐、多重 `/v1` 自动去重（如 `/openai/chat/completions`、`/openai/v1/v1/chat/completions` 均视为 `/v1/chat/completions`）。两协议的 `GET */v1/models`（含归一化后）是网关本地生成的映射列表，不请求上游；其余代理请求只接受 POST，其他方法返回 405。
 
 ```text
 POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 model
@@ -202,3 +203,4 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 7. **dispatcher 生命周期**：Provider 的 `proxy_url` 或 `timeout_ms` 变化、Provider 删除及进程关闭都会清空 dispatcher 缓存；缓存键为 `(proxy_url, timeout_ms)`，`bodyTimeout` 永远为 0。
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
 9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
+10. **路径归一化的边界**：代理端点 v1 段归一化后，未知 POST 路径会原样转发上游、由上游回 4xx，网关不再本地判 `not_found`；非模型列表的 GET 按「只接受 POST」规则返回 405。路径中任何 `v1` 段（忽略大小写）都会被剔除——若未来上游真有含字面 `v1` 段的端点会被误伤（当前两协议端点集不存在）。
