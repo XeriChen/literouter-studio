@@ -12,6 +12,8 @@ data/
 *.log
 .vite/
 .mimocode/
+.agents/
+.claude/
 .superpowers/
 docs/superpowers/
 gui-test-screenshots/

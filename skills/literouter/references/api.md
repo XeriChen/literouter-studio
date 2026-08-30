@@ -16,9 +16,11 @@ curl -sS -X POST "$BASE_URL/api/providers" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   --data-binary @- <<'JSON'
-{ "name": "示例", "protocol": "openai", "base_url": "https://api.example.com/v1" }
+{ "name": "示例", "protocol": "openai", "base_url": "https://api.example.com", "auth": {"api_key": "sk-…"} }
 JSON
 ```
+
+⚠️ **base_url 只填到版本前缀的上一级，不要带尾部 `/v1`**：网关拼接上游 URL 时会无条件追加 `/v1/models`、`/v1/chat/completions` 且不去重。若上游真实路径含 `/v1`（如 `https://host/api/v1`），base_url 填 `https://host/api`，让网关补 `/v1`。
 
 - 危险级别图例：🟢 免确认直接执行；🔴 先向用户复述影响并获确认后执行。
 
@@ -49,10 +51,10 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 
 | 操作 | 端点 | Body / 说明 | 级别 |
 | :--- | :--- | :--- | :--- |
-| 新建 Provider | `POST /api/providers` | `{name, protocol, base_url, auth?, custom_headers?, group_id?, proxy_url?, timeout_ms?, model_filter?}`；auth 示例 `{"authorization":"Bearer sk-…"}` 或 `{"x-api-key":"…"}` | 🟢 |
+| 新建 Provider | `POST /api/providers` | `{name, protocol, base_url, auth?, custom_headers?, group_id?, proxy_url?, timeout_ms?, model_filter?}`；auth 统一用 `{"api_key":"…"}`（裸 token，不含 `Bearer ` 前缀）：openai 协议会自动拼成 `authorization: Bearer <api_key>`，anthropic 协议会自动映射到 `x-api-key`。⚠️ 不要写成 `{"authorization":"Bearer sk-…"}`，网关不读该字段会导致上游 401。base_url 不带尾部 `/v1`（见第 0 节） | 🟢 |
 | 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` | 🟢 |
 | 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 | 🔴 |
-| 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其他 HTTP 响应判网络可达 | 🟢 |
+| 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，**其余 HTTP 响应（含 404/502）判网络可达**——不提供 `/v1/models` 的渠道会返回非 2xx，只要非 401/403 即网络通，代理转发不受影响 | 🟢 |
 | 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 | 🟢 |
 | 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组；落库并自动建同名映射（同名已存在只追加 inactive 候选，不切 active） | 🟢 |
 | 新建分组 | `POST /api/provider-groups` | `{protocol, name}`；同协议组名唯一 | 🟢 |
@@ -69,7 +71,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 手动加模型 | `POST /api/models` | `{provider_id, model_id, display_name?}`；默认 enabled=1 | 🟢 |
 | 启用/禁用模型 | `PATCH /api/models` | `{provider_id, model_id, enabled:0\|1}` | 🟢 |
 | 删除模型 | `DELETE /api/models` | `{provider_id, model_id}` | 🔴 |
-| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时 | 🟢 |
+| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时。**跑之前必须先向用户确认测哪个模型**；**默认不带 thinking**（除非用户明确要求带 thinking 或自定义 prompt），不得自行挑模型测 | 🔴 |
 
 ## 4. 模型映射与候选（路由核心）
 
@@ -145,6 +147,6 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 1. 客户端请求的 `model` 必须是**映射名**；直写真实模型名 → 代理返回 `404 model_not_found`。
 2. 只有「映射 enabled + 目标候选 active + Provider enabled + 真实模型 enabled」四者齐备才能被调通；任一缺失分别表现为 404/503。
 3. 代理入口：OpenAI `/openai/v1/*`、Anthropic `/anthropic/v1/*`，除 `GET */v1/models` 外只收 POST。
-4. 删除/禁用 active 目标后网关自动把 active 迁到剩余候选中 priority 最小者；重新启用旧目标**不会**自动切回。
+4. **删除/禁用 active 候选、或禁用/启用 Provider 与真实模型**都会触发网关自动修复：把 active 迁到剩余候选中 priority 最小且可用的候选；若所有候选都不可用（Provider/模型全部禁用），active 保持原样不动（访问仍会 503）。重新启用旧目标**不会**自动切回。
 5. 导入/新增真实模型会自动建同名映射，但同名映射已存在时不切 active。
 6. 上游 4xx 原样透传给客户端，5xx 包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是首包耗时。
