@@ -31,7 +31,7 @@
 - `pnpm test` 运行 Node 原生测试；`pnpm test:e2e` 用 Playwright 启动生产服务执行浏览器冒烟测试。
 - 提交前必须过：`pnpm check`（`typecheck` + 单元测试 + `build:web`）。
 
-启动与关闭约定：数据库 `settings` 中已持久化的 `host`/`port` 优先于 `HOST`/`PORT` 环境变量，再回退到 `0.0.0.0:3000`；端口必须是 1–65535 的整数，否则使用 3000。`host`/`port` 保存后需重启，`global_timeout_ms` 在后续代理请求读取，`log_retention_days` 只在启动清理时使用（0 表示不清理）。收到 `SIGTERM`/`SIGINT` 后先等待 HTTP server 关闭，再释放 dispatcher 缓存和 SQLite；5 秒后仍未结束则强制退出。
+启动与关闭约定：数据库 `settings` 中已持久化的 `host`/`port` 优先于 `HOST`/`PORT` 环境变量，再回退到 `0.0.0.0:3000`；端口必须是 1–65535 的整数，否则使用 3000。`host`/`port` 保存后需重启，`global_timeout_ms` 在后续代理请求读取，`log_retention_days` 只在启动清理时使用（0 表示不清理）。收到 `SIGTERM`/`SIGINT` 后先等待 HTTP server 关闭，再释放 dispatcher 缓存和 SQLite；5 秒后仍未结束则强制退出。启动后每 30 秒采样一次进程 RSS，超过环境变量 `GATEWAY_RSS_SNAPSHOT_BYTES`（默认 1.5 GiB，设 0 或非法值关闭）时向 `data/` 写堆快照用于事后定位内存泄漏，两次快照至少间隔 5 分钟。
 
 ## 3. 目录结构
 
@@ -50,6 +50,7 @@ src/
   types/           行类型
 web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
+  hooks/           useBottomInset：用 visualViewport 测量移动端浏览器底栏/虚拟键盘遮挡，为 fixed 底栏定位补偿
   pages/           Login / Home / Providers（分组管理）/ Models（映射 + 真实模型）/ Logs / Settings / Playground
   pages/ModelAliases.tsx  分组列表、映射开关、候选优先级/当前目标与快速测活
   components/      ChatUI（SSE 双协议解析）等
@@ -102,7 +103,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `GET/POST/PATCH/DELETE /provider-groups` | Provider 分组 CRUD；删除组只解除成员归属 |
 | `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-toggle`、`POST /provider-groups/batch-delete` | 原子批量启用/禁用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
-| `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库 |
+| `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库；响应体累计超过 50 MiB 判上游异常（502 upstream_error） |
 | `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
 | `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
 | `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段与思考等级（PATCH 传 null 清除） |

@@ -4,6 +4,13 @@ const encoder = new TextEncoder()
 /** Maximum request size accepted by both proxy and management endpoints. */
 export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
 
+/**
+ * 上游 /models 响应体的累积上限。原本这段代码会把整个响应体无界地 push 进内存数组
+ * 直到 timeout 兜底才中止——是代码层面唯一的无限累积点。这里加硬上限，超限即抛错，
+ * 避免上游返回异常超大 body 时撑爆网关内存。
+ */
+export const MAX_UPSTREAM_MODELS_BODY_BYTES = 50 * 1024 * 1024
+
 export class RequestBodyTooLargeError extends Error {
   constructor(maxBytes: number) {
     super(`request body too large (max ${maxBytes} bytes)`)

@@ -5,6 +5,7 @@ data/
 *.db-journal
 *.db-wal
 *.db-shm
+*.heapsnapshot
 .env
 .env.*
 !.env.example
@@ -19,5 +20,7 @@ docs/superpowers/
 gui-test-screenshots/
 test-results/
 playwright-report/
+/.playwright-mcp/
+/mobile-*.png
 .pi/
 .opencode/

@@ -62,8 +62,9 @@ pnpm start
 - `host`、`port` 保存后需重启后端才能重新绑定监听地址。
 - `global_timeout_ms` 由后续代理请求读取；Provider 自身的 `timeout_ms` 优先。值为 0 时代理连接/响应头不超时，流式响应体始终不设超时；Provider 连通性测试和模型列表拉取仍有 30 秒兜底。
 - `log_retention_days` 在后端启动时清理代理日志和审计日志；0 表示不自动清理。
+- 后端内置 RSS 看门狗：进程内存超过 `GATEWAY_RSS_SNAPSHOT_BYTES`（默认 1.5 GiB，设 0 关闭）时向 `data/` 写堆快照用于定位内存泄漏，两次快照至少间隔 5 分钟。
 - 数据库路径是启动进程当前目录下的 `data/gateway.db`，请始终从项目根目录通过 pnpm 脚本启动。
-- 当前为无正式用户的开发阶段，schema v6 是直接基线；遇到 schema 不兼容时可删除 `data/gateway.db` 重建，不承诺兼容早期开发版数据库或备份。
+- 当前为无正式用户的开发阶段，schema v8 是直接基线；遇到 schema 不兼容时可删除 `data/gateway.db` 重建，不承诺兼容早期开发版数据库或备份。
 
 ## 客户端接入
 

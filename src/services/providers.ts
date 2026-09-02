@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
 import { isTimeoutError, sendToUpstream, getDispatcher, drainBody, invalidateAllDispatchers } from '../proxy'
+import { MAX_UPSTREAM_MODELS_BODY_BYTES } from '../proxy/body'
 import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
@@ -170,7 +171,14 @@ export async function listUpstreamModels(providerId: string): Promise<string[]> 
       throw new Error(`upstream returned HTTP ${res.status}`)
     }
     const chunks: Buffer[] = []
-    for await (const chunk of res.body) chunks.push(Buffer.from(chunk))
+    let accumulated = 0
+    for await (const chunk of res.body) {
+      accumulated += chunk.length
+      if (accumulated > MAX_UPSTREAM_MODELS_BODY_BYTES) {
+        throw new Error(`upstream model list body too large (max ${MAX_UPSTREAM_MODELS_BODY_BYTES} bytes)`)
+      }
+      chunks.push(Buffer.from(chunk))
+    }
     const raw = Buffer.concat(chunks).toString('utf-8')
     const json = JSON.parse(raw) as { data?: unknown } | null
     if (!json || !Array.isArray(json.data)) throw new Error('invalid upstream model list')

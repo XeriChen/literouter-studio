@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, ListChecks, Loader2, Plus, Search, Trash2, X, Box } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
+import { useBottomInset } from '@/hooks/useBottomInset'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -54,6 +55,7 @@ export default function Models() {
 
 function RealModelsList() {
   const qc = useQueryClient()
+  const chromeInset = useBottomInset()
   const [protocol, setProtocol] = useState<'all' | 'openai' | 'anthropic'>('all')
   const [providerId, setProviderId] = useState('all')
   const [addOpen, setAddOpen] = useState(false)
@@ -215,9 +217,9 @@ function RealModelsList() {
     <>
     {/* Batch action bar */}
     {selectedModels.length > 0 && (
-      <div className="fixed bottom-6 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-3 rounded-xl border bg-card px-5 py-3 shadow-xl">
+      <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
         <span className="text-sm font-medium">已选 {selectedModels.length} 个模型</span>
-        <div className="h-4 w-px bg-border" />
+        <div className="hidden h-4 w-px bg-border sm:block" />
         <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 1 })}>
           启用
         </Button>
@@ -227,7 +229,7 @@ function RealModelsList() {
         <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedModels.length} 个模型？`)) batchDeleteMutation.mutate(selectedModels) }}>
           <Trash2 className="h-3.5 w-3.5" /> 删除
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(false) }}>
+        <Button size="sm" variant="ghost" aria-label="清除选择" onClick={() => { setSelected(new Set()); setSelectionMode(false) }}>
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -258,7 +260,7 @@ function RealModelsList() {
     <div className="page-shell space-y-6">
       <div className="page-heading">
         <div><div className="eyebrow mb-2 flex items-center gap-2"><Box className="h-3.5 w-3.5" /> 模型目录</div><h1 className="page-title">真实模型</h1><p className="page-description">按 Provider 管理真实模型，客户端仅可通过模型映射调用。</p></div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input

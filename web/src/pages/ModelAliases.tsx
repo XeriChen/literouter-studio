@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, ThinkingConfig } from '@/api/types'
+import { useBottomInset } from '@/hooks/useBottomInset'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -256,6 +257,7 @@ export default function ModelAliases() {
   const [dragAliasKey, setDragAliasKey] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState<Set<string>>(new Set())
   const toastId = useRef(0)
+  const chromeInset = useBottomInset()
 
   function toast(ok: boolean, message: string) {
     const id = ++toastId.current
@@ -433,14 +435,14 @@ export default function ModelAliases() {
           patchAliasMutation.mutate({ protocol: dragProtocol, alias_name: dragAliasName, group_id: group?.id ?? null })
         }}
       >
-        <CardHeader className="flex-row items-center justify-between border-b border-foreground/10 px-5 py-3">
+        <CardHeader className="flex-row items-center justify-between gap-2 border-b border-foreground/10 px-5 py-3">
           <button className="flex min-w-0 items-center gap-2 text-left" onClick={toggle}>
-            {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{group?.name ?? '未分组'}</CardTitle>
-            <Badge variant="secondary">{groupRows.length}</Badge>
-            {group && <Badge variant="outline">{group.enabled_count} 已启用</Badge>}
+            <Badge variant="secondary" className="shrink-0 whitespace-nowrap">{groupRows.length}</Badge>
+            {group && <Badge variant="outline" className="shrink-0 whitespace-nowrap">{group.enabled_count} 已启用</Badge>}
           </button>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <Button size="icon" variant={isActive ? 'secondary' : 'ghost'} className="h-8 w-8" aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`} onClick={() => {
               if (selectionMode.has(groupKey)) {
                 setSelectionMode((prev) => { const next = new Set(prev); next.delete(groupKey); return next })
@@ -452,7 +454,7 @@ export default function ModelAliases() {
               <ListChecks className="h-4 w-4" />
             </Button>
             {group && <>
-              <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /> 清空映射</Button>
+              <Button size="sm" variant="ghost" aria-label={`清空分组 ${group.name} 内的映射`} onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 清空映射</span></Button>
               <Button size="sm" variant="ghost" onClick={() => openRename('group', group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
             </>}
@@ -509,7 +511,7 @@ export default function ModelAliases() {
 
   return <>
     {toasts.length > 0 && <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col gap-2">{toasts.map((item) => <div key={item.id} className={`rounded-lg border px-4 py-2 text-sm shadow-lg ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>{item.message}</div>)}</div>}
-    {selectedAliases.length > 0 && <div className="fixed inset-x-3 bottom-4 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+    {selectedAliases.length > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
       <Select
@@ -530,7 +532,7 @@ export default function ModelAliases() {
       <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
       {visibleProtocols.map((protocolValue) => {
         const protocolGroups = filteredGroups.filter((group) => group.protocol === protocolValue)
         const hasSearch = debouncedSearch.trim().length > 0

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider, ProviderGroup } from '@/api/types'
+import { useBottomInset } from '@/hooks/useBottomInset'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -77,6 +78,7 @@ const PROTOCOLS: Protocol[] = ['openai', 'anthropic']
 
 export default function Providers() {
   const qc = useQueryClient()
+  const chromeInset = useBottomInset()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [formMode, setFormMode] = useState<FormMode>('create')
   const [editing, setEditing] = useState<Provider | null>(null)
@@ -446,7 +448,7 @@ export default function Providers() {
             </Button>
             {group && <>
               <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground"><span>{enabledCount === rows.length && rows.length > 0 ? '全部启用' : enabledCount > 0 ? '部分启用' : '全部禁用'}</span><Switch checked={groupSwitchChecked} disabled={!rows.length || groupActionMutation.isPending} onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })} aria-label={`切换 ${group.name} 内全部 Provider 启用状态`} title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'} /></div>
-              <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /> 清空 Provider</Button>
+              <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} aria-label={`清空分组 ${group.name} 内的 Provider`} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 清空 Provider</span></Button>
               <Button variant="ghost" size="icon" className="icon-button" aria-label={`重命名分组 ${group.name}`} title="重命名分组" onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除分组 ${group.name}`} title="删除分组" onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
             </>}
@@ -474,7 +476,7 @@ export default function Providers() {
       </div>,
       document.body,
     )}
-    {selectedProviderIds.size > 0 && <div className="fixed inset-x-3 bottom-4 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+    {selectedProviderIds.size > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedProviderIds.size} 个 Provider</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
       <Select

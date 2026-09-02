@@ -1,4 +1,7 @@
 import { serve } from '@hono/node-server'
+import { writeHeapSnapshot } from 'node:v8'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { app } from './app'
 import './db'
 import { db, getSetting } from './db'
@@ -53,3 +56,32 @@ function shutdown(signal: string) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.on('SIGINT', () => shutdown('SIGINT'))
+
+// RSS 看门狗：周期性采样内存占用，越过高水位时手动写堆快照，便于事后定位泄漏点。
+// 与 node --heapsnapshot-near-heap-limit 互为冗余——即便未加该 flag 也能留快照。
+// 阈值通过环境变量 GATEWAY_RSS_SNAPSHOT_BYTES 配置，默认 1.5 GiB；设 0 关闭。
+function startRssWatchdog() {
+  const threshold = Number(process.env.GATEWAY_RSS_SNAPSHOT_BYTES ?? 1.5 * 1024 * 1024 * 1024)
+  if (!Number.isFinite(threshold) || threshold <= 0) return
+  let lastShot = 0
+  const snapshotDir = join(process.cwd(), 'data')
+  setInterval(() => {
+    const rss = process.memoryUsage().rss
+    if (rss > threshold) {
+      const now = Date.now()
+      // 至少间隔 5 分钟，避免内存高位期疯狂刷快照
+      if (now - lastShot > 5 * 60 * 1000) {
+        lastShot = now
+        try {
+          if (!existsSync(snapshotDir)) mkdirSync(snapshotDir, { recursive: true })
+          const file = writeHeapSnapshot(join(snapshotDir, `gateway-rss-${now}.heapsnapshot`))
+          console.error(`[gateway] RSS ${Math.round(rss / 1024 / 1024)}MiB exceeded watchdog threshold, heap snapshot written to ${file}`)
+        } catch (err) {
+          console.error('[gateway] failed to write heap snapshot:', err)
+        }
+      }
+    }
+  }, 30_000).unref()
+}
+
+startRssWatchdog()
