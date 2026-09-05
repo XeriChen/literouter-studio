@@ -77,7 +77,14 @@ export const providerSchema = z.object({
 export const providerPatchSchema = providerSchema
   .omit({ protocol: true })
   .partial()
-  .extend({ enabled: z.union([z.literal(0), z.literal(1)]).optional() })
+  .extend({
+    enabled: z.union([z.literal(0), z.literal(1)]).optional(),
+    // Zod 4 中 .partial() 不会剥离内层 ZodDefault：缺省的 auth/custom_headers
+    // 仍会被注入 default({})，导致纯 enabled 切换时把 auth_json 覆盖成 "{}"、清空 key。
+    // patch 场景必须显式声明为无 default 的 optional。
+    auth: authSchema.optional(),
+    custom_headers: authSchema.optional(),
+  })
   .refine((value) => Object.keys(value).length > 0, 'provider patch cannot be empty')
 
 export const modelRefSchema = z.object({
