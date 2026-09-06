@@ -58,6 +58,8 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await expect(page.getByRole('button', { name: /新建分组/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建映射/ })).toBeVisible()
   await expect(page.getByText('未分组').first()).toBeVisible()
+  // 分组默认折叠，展开后才渲染映射表格
+  await page.locator('section button[aria-expanded]').first().click()
   await expect(page.getByRole('columnheader', { name: '候选' }).first()).toBeVisible()
 })
 
@@ -304,6 +306,8 @@ test('aligns models table headers with row content', async ({ page }, testInfo) 
 
   await page.goto('/models')
   await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  // 分组默认折叠，先展开第一个分组
+  await page.locator('section button[aria-expanded]').first().click()
   await expect(page.getByText('my-brain')).toBeVisible()
   await expect(page.getByRole('button', { name: '启用全部' })).toHaveCount(0)
 
@@ -323,8 +327,73 @@ test('aligns models table headers with row content', async ({ page }, testInfo) 
   await page.screenshot({ path: testInfo.outputPath('models-alias-columns.png') })
 
   await page.getByRole('button', { name: '真实模型' }).click()
-  const realTable = page.locator('table').first()
-  await expect(realTable.getByRole('columnheader', { name: 'Provider' })).toBeVisible()
+  // 真实模型按 Provider 分组且默认折叠
+  await page.locator('section[aria-label="真实模型分组"] button[aria-expanded]').first().click()
+  const realTable = page.locator('section[aria-label="真实模型分组"] table').first()
+  await expect(realTable.getByRole('columnheader', { name: 'Model' })).toBeVisible()
   await assertTableColumnsAlign(realTable)
   await page.screenshot({ path: testInfo.outputPath('models-real-columns.png') })
+})
+
+test('merges selected aliases into a new alias from the bulk bar', async ({ page }) => {
+  const ts = '2026-09-06T00:00:00.000Z'
+  const target = (id: number, aliasName: string, modelId: string, active: number) => ({
+    id,
+    protocol: 'openai',
+    alias_name: aliasName,
+    provider_id: 'p1',
+    model_id: modelId,
+    priority: 0,
+    active,
+    created_at: ts,
+    updated_at: ts,
+    provider_name: 'Primary',
+    provider_protocol: 'openai',
+    provider_enabled: 1,
+    target_enabled: 1,
+  })
+  const aliases = [
+    { protocol: 'openai', alias_name: 'alias-a', group_id: null, group_name: null, enabled: 1, thinking_json: null, provider_id: 'p1', model_id: 'mm-a', created_at: ts, updated_at: ts, provider_name: 'Primary', provider_protocol: 'openai', provider_enabled: 1, target_enabled: 1, targets: [target(1, 'alias-a', 'mm-a', 1)] },
+    { protocol: 'openai', alias_name: 'alias-b', group_id: null, group_name: null, enabled: 1, thinking_json: null, provider_id: 'p1', model_id: 'mm-b', created_at: ts, updated_at: ts, provider_name: 'Primary', provider_protocol: 'openai', provider_enabled: 1, target_enabled: 1, targets: [target(2, 'alias-b', 'mm-b', 1)] },
+  ]
+  let mergeBody: Record<string, unknown> | null = null
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/providers', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/models', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/aliases/merge', async (route) => {
+    mergeBody = JSON.parse(route.request().postData() ?? '{}')
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, data: { alias: { alias_name: 'merged-e2e', group_id: null }, created: true, added: 2, skipped: 0, deleted: 0 } }),
+    })
+  })
+  await page.route('**/api/aliases', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: aliases }) }))
+
+  await page.goto('/models')
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  // 分组默认折叠，先展开
+  await page.locator('section button[aria-expanded]').first().click()
+  await expect(page.getByText('alias-a')).toBeVisible()
+
+  await page.locator('section').first().getByLabel('切换 未分组 多选模式').click()
+  await page.getByLabel('选择 alias-a').check()
+  await page.getByLabel('选择 alias-b').check()
+
+  await page.getByRole('button', { name: '合并' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('来源映射（2 个）')).toBeVisible()
+  await expect(dialog.getByText('alias-a · 提供当前目标')).toBeVisible()
+  await dialog.getByPlaceholder('merged-brain').fill('merged-e2e')
+  // 默认不勾选「合并后删除原有映射」
+  await expect(dialog.getByRole('checkbox', { name: /合并后删除原有映射/ })).not.toBeChecked()
+  await dialog.getByRole('button', { name: '合并' }).click()
+
+  await expect.poll(() => mergeBody).toMatchObject({
+    protocol: 'openai',
+    sources: ['alias-a', 'alias-b'],
+    target_alias_name: 'merged-e2e',
+    delete_sources: false,
+  })
+  await expect(page.getByText(/合并完成（新建映射）.*新增 2 个候选/)).toBeVisible()
 })
