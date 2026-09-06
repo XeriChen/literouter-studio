@@ -198,7 +198,12 @@ export function deleteModel(input: { provider_id: string; model_id: string }): v
   })()
 }
 
-export function importModels(providerId: string, modelIds: string[]): { added: number; updated: number } {
+export function importModels(
+  providerId: string,
+  modelIds: string[],
+  options: { createAlias?: boolean } = {},
+): { added: number; updated: number } {
+  const createAlias = options.createAlias !== false
   const now = new Date().toISOString()
   const provider = db.prepare('SELECT protocol, enabled FROM providers WHERE id = ?').get(providerId) as { protocol: ProviderProtocol; enabled: number } | undefined
   if (!provider) throw new Error('provider not found')
@@ -214,7 +219,7 @@ export function importModels(providerId: string, modelIds: string[]): { added: n
     for (const id of ids) {
       const existed = existsStmt.get(providerId, id) !== undefined
       upsert.run(providerId, id, now, now, now)
-      if (provider.enabled === 1) ensureAutoAliasTargetInTransaction(provider.protocol, id, providerId)
+      if (createAlias && provider.enabled === 1) ensureAutoAliasTargetInTransaction(provider.protocol, id, providerId)
       if (existed) updated++
       else added++
     }

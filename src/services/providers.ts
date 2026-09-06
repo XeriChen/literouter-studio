@@ -192,8 +192,12 @@ export async function listUpstreamModels(providerId: string): Promise<string[]> 
 }
 
 /** 将选中的模型 ID 写入数据库并维护同名映射候选。 */
-export function importModels(providerId: string, modelIds: string[]): { added: number; updated: number } {
-  return importModelsForProvider(providerId, modelIds)
+export function importModels(
+  providerId: string,
+  modelIds: string[],
+  options: { createAlias?: boolean } = {},
+): { added: number; updated: number } {
+  return importModelsForProvider(providerId, modelIds, options)
 }
 
 /** 网络连通性测试：401/403 视为认证失败；其余 HTTP 响应表示网络可达，网络异常/超时为失败。 */

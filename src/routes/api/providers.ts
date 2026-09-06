@@ -213,15 +213,16 @@ export function registerProviderRoutes(api: Hono<Env>): void {
     const provider = getProvider(c.req.param('id'))
     if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
 
-    const body = await readJson(c) as { model_ids?: unknown } | null
+    const body = await readJson(c) as { model_ids?: unknown; create_alias?: unknown } | null
     if (!Array.isArray(body?.model_ids) || body.model_ids.length === 0) {
       return fail(c, 400, 'model_ids must be a non-empty array', 'invalid_request_body')
     }
     const ids = [...new Set(body.model_ids.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))]
     if (!ids.length) return fail(c, 400, 'no valid model ids', 'invalid_request_body')
 
-    const result = importModels(provider.id, ids)
-    writeAuditLog({ resource: 'model', action: 'import', target: provider.name, detail: `导入模型到 ${provider.name}: 新增 ${result.added}, 更新 ${result.updated}`, status: 200 })
+    const createAlias = body?.create_alias !== false
+    const result = importModels(provider.id, ids, { createAlias })
+    writeAuditLog({ resource: 'model', action: 'import', target: provider.name, detail: `导入模型到 ${provider.name}: 新增 ${result.added}, 更新 ${result.updated}${createAlias ? '' : '（不创建映射）'}`, status: 200 })
     return ok(c, result)
   })
 }

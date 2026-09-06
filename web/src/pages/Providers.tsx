@@ -97,6 +97,7 @@ export default function Providers() {
   const [upstreamLoading, setUpstreamLoading] = useState(false)
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [modelSearch, setModelSearch] = useState('')
+  const [createAlias, setCreateAlias] = useState(true)
 
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Provider[]>('/api/providers') })
   const providerGroups = useQuery({ queryKey: ['provider-groups'], queryFn: () => api<ProviderGroup[]>('/api/provider-groups') })
@@ -324,11 +325,11 @@ export default function Providers() {
     setUpstreamModels([])
     setSelectedModels(new Set())
     setModelSearch('')
+    setCreateAlias(true)
     setUpstreamLoading(true)
     try {
       const data = await api<{ model_ids: string[] }>(`/api/providers/${id}/upstream-models`, { method: 'POST' })
       setUpstreamModels(data.model_ids)
-      setSelectedModels(new Set(data.model_ids))
     } catch (error) {
       setResult({ message: `拉取失败：${error instanceof Error ? error.message : 'unknown'}`, ok: false })
       setFetchDialog(null)
@@ -338,7 +339,7 @@ export default function Providers() {
   }
 
   const importModelsMutation = useMutation({
-    mutationFn: ({ providerId, modelIds }: { providerId: string; modelIds: string[] }) => api<{ added: number; updated: number }>(`/api/providers/${providerId}/import-models`, { method: 'POST', body: JSON.stringify({ model_ids: modelIds }) }),
+    mutationFn: ({ providerId, modelIds, createAlias: withAlias }: { providerId: string; modelIds: string[]; createAlias: boolean }) => api<{ added: number; updated: number }>(`/api/providers/${providerId}/import-models`, { method: 'POST', body: JSON.stringify({ model_ids: modelIds, create_alias: withAlias }) }),
     onSuccess: (data) => {
       setResult({ message: `导入成功：新增 ${data.added}，刷新 ${data.updated}`, ok: true })
       setFetchDialog(null)
@@ -546,8 +547,8 @@ export default function Providers() {
       </Dialog>
 
       <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>选择要导入的模型</DialogTitle><DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription></DialogHeader>
-        {upstreamLoading ? <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...</div> : <div className="space-y-3"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} /></div><div className="flex items-center justify-between text-xs text-muted-foreground"><span>已选 {selectedModels.size} / {upstreamModels.length}</span><div className="flex gap-2"><button className="hover:underline" onClick={() => setSelectedModels(new Set(upstreamModels))}>全选</button><button className="hover:underline" onClick={() => setSelectedModels(new Set())}>全不选</button></div></div><div className="h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">{filteredUpstream.map((id) => <label key={id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"><Checkbox checked={selectedModels.has(id)} onCheckedChange={(checked) => { const next = new Set(selectedModels); if (checked) next.add(id); else next.delete(id); setSelectedModels(next) }} /><span className="font-mono text-xs">{id}</span></label>)}{!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}</div></div>}
-        <DialogFooter><Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button><Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels] })}>{importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型</Button></DialogFooter>
+        {upstreamLoading ? <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...</div> : <div className="space-y-3"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} /></div><div className="flex items-center justify-between text-xs text-muted-foreground"><span>已选 {selectedModels.size} / {upstreamModels.length}{modelSearch.trim() ? `（筛选 ${filteredUpstream.length} 个）` : ''}</span><div className="flex gap-2"><button className="hover:underline" onClick={() => setSelectedModels(new Set([...selectedModels, ...filteredUpstream]))}>全选</button><button className="hover:underline" onClick={() => { const filtered = new Set(filteredUpstream); setSelectedModels(new Set([...selectedModels].filter((id) => !filtered.has(id)))) }}>全不选</button></div></div><div className="h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">{filteredUpstream.map((id) => <label key={id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"><Checkbox checked={selectedModels.has(id)} onCheckedChange={(checked) => { const next = new Set(selectedModels); if (checked) next.add(id); else next.delete(id); setSelectedModels(next) }} /><span className="font-mono text-xs">{id}</span></label>)}{!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}</div><label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs"><Checkbox checked={createAlias} onCheckedChange={(checked) => setCreateAlias(checked === true)} className="mt-0.5" /><span><span className="font-medium">同时创建同名映射</span><span className="block text-muted-foreground">取消勾选只登记模型，不创建同名映射；未建映射的模型无法被代理请求。</span></span></label></div>}
+        <DialogFooter><Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button><Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>{importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型</Button></DialogFooter>
       </DialogContent></Dialog>
     </div>
     </>
