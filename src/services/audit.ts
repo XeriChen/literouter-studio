@@ -31,6 +31,7 @@ export type AuditAction =
   | 'batch_delete'
   | 'activate'
   | 'reorder'
+  | 'merge'
 
 export interface AuditInput {
   resource: AuditResource

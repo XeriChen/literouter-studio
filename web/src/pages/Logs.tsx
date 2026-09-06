@@ -41,6 +41,7 @@ const ACTION_LABELS: Record<string, string> = {
   batch_delete: '批量删除',
   activate: '设为当前',
   reorder: '重排优先级',
+  merge: '合并',
 }
 
 function statusBadge(status: number | null) {

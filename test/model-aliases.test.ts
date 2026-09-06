@@ -176,3 +176,100 @@ test('thinking config validates protocol-native values, routes to rewrite, and r
   models.deleteAlias({ protocol: 'anthropic', alias_name: 'thinking-alias' })
 
 })
+
+test('merges alias candidates into a new or existing alias without switching traffic', () => {
+  const now = new Date().toISOString()
+  const insertProvider = db.prepare(
+    `INSERT INTO providers
+      (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
+     VALUES (?, ?, ?, 'https://example.test', '{}', '{}', NULL, NULL, NULL, 1, ?, ?)`,
+  )
+  const insertModel = db.prepare(
+    `INSERT INTO provider_models
+      (provider_id, model_id, display_name, enabled, source, created_at, updated_at)
+     VALUES (?, ?, NULL, 1, 'manual', ?, ?)`,
+  )
+  insertProvider.run('mp1', 'Merge P1', 'openai', now, now)
+  insertProvider.run('mp2', 'Merge P2', 'openai', now, now)
+  insertProvider.run('mp3', 'Merge P3', 'openai', now, now)
+  insertModel.run('mp1', 'mm1', now, now)
+  insertModel.run('mp2', 'mm2', now, now)
+  insertModel.run('mp3', 'mm3', now, now)
+
+  // merge-a: mp1/mm1(active) + mp2/mm2；merge-b: mp2/mm2(active) + mp3/mm3
+  models.addAlias({ protocol: 'openai', alias_name: 'merge-a', provider_id: 'mp1', model_id: 'mm1' })
+  models.addAliasTarget({ protocol: 'openai', alias_name: 'merge-a', provider_id: 'mp2', model_id: 'mm2' })
+  models.addAlias({ protocol: 'openai', alias_name: 'merge-b', provider_id: 'mp2', model_id: 'mm2' })
+  models.addAliasTarget({ protocol: 'openai', alias_name: 'merge-b', provider_id: 'mp3', model_id: 'mm3' })
+
+  // 1. 合并到新映射：按 (provider, model) 去重跳过，priority 连续，active 取自第一个源
+  const created = models.mergeAliases({ protocol: 'openai', sources: ['merge-a', 'merge-b'], target_alias_name: 'merged-new' })
+  assert.equal(created.created, true)
+  assert.equal(created.added, 3)
+  assert.equal(created.skipped, 1)
+  const merged = models.listAliases().find((item) => item.alias_name === 'merged-new')
+  assert.deepEqual(merged?.targets.map((target) => target.priority), [0, 1, 2])
+  assert.equal(merged?.targets.filter((target) => target.active).length, 1)
+  const activeTarget = merged?.targets.find((target) => target.active)
+  assert.equal(activeTarget?.provider_id, 'mp1')
+  assert.equal(activeTarget?.model_id, 'mm1')
+  const route = models.findRoute('openai', 'merged-new')
+  assert.equal(route.kind, 'ok')
+  if (route.kind === 'ok') assert.equal(route.provider.id, 'mp1')
+
+  // 2. 并入已有映射：不改其 active（不切流量），只追加缺失候选
+  models.addAlias({ protocol: 'openai', alias_name: 'merge-dest', provider_id: 'mp3', model_id: 'mm3' })
+  const appended = models.mergeAliases({ protocol: 'openai', sources: ['merge-a', 'merge-b'], target_alias_name: 'merge-dest' })
+  assert.equal(appended.created, false)
+  assert.equal(appended.added, 2)
+  assert.equal(appended.skipped, 2)
+  const dest = models.listAliases().find((item) => item.alias_name === 'merge-dest')
+  assert.equal(dest?.targets.filter((target) => target.active).length, 1)
+  assert.deepEqual(dest?.targets.find((target) => target.active)?.model_id, 'mm3')
+  const destRoute = models.findRoute('openai', 'merge-dest')
+  assert.equal(destRoute.kind, 'ok')
+  if (destRoute.kind === 'ok') assert.equal(destRoute.provider.id, 'mp3')
+
+  // 3. 新建时 thinking 继承 sources 顺序上第一个非空配置
+  models.addAlias({ protocol: 'openai', alias_name: 'merge-c', provider_id: 'mp1', model_id: 'mm1' })
+  models.updateAlias({ protocol: 'openai', alias_name: 'merge-c', thinking: { mode: 'override', value: 'high' } })
+  models.addAlias({ protocol: 'openai', alias_name: 'merge-e', provider_id: 'mp1', model_id: 'mm1' })
+  models.updateAlias({ protocol: 'openai', alias_name: 'merge-e', thinking: { mode: 'override', value: 'low' } })
+  const inherited = models.getAlias('openai', 'merge-c')?.thinking_json ?? null
+  models.mergeAliases({ protocol: 'openai', sources: ['merge-a', 'merge-c'], target_alias_name: 'merged-think' })
+  assert.equal(models.getAlias('openai', 'merged-think')?.thinking_json, inherited)
+  models.mergeAliases({ protocol: 'openai', sources: ['merge-c', 'merge-e'], target_alias_name: 'merged-think-2' })
+  assert.equal(models.getAlias('openai', 'merged-think-2')?.thinking_json, inherited)
+
+  // 4. delete_sources：删除源映射，目标与候选保留
+  const withDelete = models.mergeAliases({
+    protocol: 'openai',
+    sources: ['merge-a', 'merge-b'],
+    target_alias_name: 'merged-delete',
+    delete_sources: true,
+  })
+  assert.equal(withDelete.deleted, 2)
+  assert.equal(models.getAlias('openai', 'merge-a'), undefined)
+  assert.equal(models.getAlias('openai', 'merge-b'), undefined)
+  assert.equal(models.listAliases().find((item) => item.alias_name === 'merged-delete')?.targets.length, 3)
+
+  // 5. 源即目标 / 源不存在 / 跨协议 → 直接抛错
+  assert.throws(
+    () => models.mergeAliases({ protocol: 'openai', sources: ['merged-new'], target_alias_name: 'merged-new' }),
+    /no source aliases/,
+  )
+  assert.throws(
+    () => models.mergeAliases({ protocol: 'openai', sources: ['nope'], target_alias_name: 'merged-x' }),
+    /alias not found/,
+  )
+  assert.throws(
+    () => models.mergeAliases({ protocol: 'anthropic', sources: ['merged-new'], target_alias_name: 'merged-y' }),
+    /alias not found/,
+  )
+
+  // 6. 备份往返保留合并结果
+  const snapshot = backup.exportBackup()
+  backup.importBackup(snapshot)
+  assert.equal(models.findRoute('openai', 'merged-new').kind, 'ok')
+  assert.equal(models.listAliases().find((item) => item.alias_name === 'merged-new')?.targets.length, 3)
+})

@@ -156,6 +156,16 @@ export const aliasTargetRefSchema = aliasRefSchema.extend({
   model_id: nonEmptyText,
 })
 
+export const aliasMergeSchema = z.object({
+  protocol: z.enum(['openai', 'anthropic']),
+  /** 源映射名，按合并顺序；与目标同名的项会被忽略 */
+  sources: z.array(nonEmptyText).min(1),
+  target_alias_name: nonEmptyText,
+  /** 仅当目标映射不存在（新建）时生效；null/缺省 = 未分组 */
+  group_id: nonEmptyText.nullable().optional(),
+  delete_sources: z.boolean().optional().default(false),
+})
+
 export function providerOut(provider: ProviderRow) {
   return {
     id: provider.id,

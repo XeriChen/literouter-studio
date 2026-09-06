@@ -403,6 +403,112 @@ export function deleteAlias(input: { protocol: ProviderProtocol; alias_name: str
   db.prepare('DELETE FROM model_aliases WHERE protocol = ? AND alias_name = ?').run(input.protocol, input.alias_name)
 }
 
+export interface MergeAliasesInput {
+  protocol: ProviderProtocol
+  /** 源映射名，按合并顺序；与目标同名的项会被忽略 */
+  sources: string[]
+  target_alias_name: string
+  /** 仅当目标映射不存在（新建）时生效；null/缺省 = 未分组 */
+  group_id?: string | null
+  delete_sources?: boolean
+}
+
+export interface MergeAliasesResult {
+  alias: ModelAliasRow
+  created: boolean
+  /** 实际参与合并的源映射名（已去重、已排除目标） */
+  sources: string[]
+  added: number
+  skipped: number
+  deleted: number
+}
+
+/**
+ * 合并多个映射的候选目标到同一个映射名。
+ * - 目标不存在则新建（enabled=1，thinking 继承 sources 顺序上第一个非空配置）
+ * - 按 (provider_id, model_id) 去重，已存在则跳过
+ * - 仅新建映射时以第一个源的当前目标作为 active；并入已有映射不改其 active
+ */
+export function mergeAliases(input: MergeAliasesInput): MergeAliasesResult {
+  const sources = [...new Set(input.sources)].filter((name) => name !== input.target_alias_name)
+  if (!sources.length) throw new Error('no source aliases to merge')
+  const sourceRows = sources.map((name) => {
+    const row = getAlias(input.protocol, name)
+    if (!row) throw new Error('alias not found')
+    return row
+  })
+
+  return db.transaction(() => {
+    const created = !getAlias(input.protocol, input.target_alias_name)
+
+    if (created) {
+      const now = new Date().toISOString()
+      db.prepare(
+        `INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, thinking_json, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?, ?)`,
+      ).run(
+        input.protocol,
+        input.target_alias_name,
+        input.group_id ?? null,
+        sourceRows.map((row) => row.thinking_json).find((value) => value !== null) ?? null,
+        now,
+        now,
+      )
+    }
+
+    const selectTargets = db.prepare(
+      `SELECT * FROM model_alias_targets WHERE protocol = ? AND alias_name = ? ORDER BY priority ASC, id ASC`,
+    )
+    const existsTarget = db.prepare(
+      `SELECT 1 FROM model_alias_targets WHERE protocol = ? AND alias_name = ? AND provider_id = ? AND model_id = ?`,
+    )
+
+    const firstTargets = selectTargets.all(input.protocol, sourceRows[0]?.alias_name ?? '') as ModelAliasTargetRow[]
+    const designated = firstTargets.find((row) => row.active === 1) ?? firstTargets[0] ?? null
+
+    let priority = nextPriority(input.protocol, input.target_alias_name)
+    let added = 0
+    let skipped = 0
+
+    for (const source of sources) {
+      const rows = selectTargets.all(input.protocol, source) as ModelAliasTargetRow[]
+      for (const row of rows) {
+        if (existsTarget.get(input.protocol, input.target_alias_name, row.provider_id, row.model_id)) {
+          skipped++
+          continue
+        }
+        insertAliasTargetInTransaction({
+          protocol: input.protocol,
+          alias_name: input.target_alias_name,
+          provider_id: row.provider_id,
+          model_id: row.model_id,
+          active: created && designated !== null && row.id === designated.id ? 1 : 0,
+          priority,
+        })
+        priority++
+        added++
+      }
+    }
+
+    let deleted = 0
+    if (input.delete_sources) {
+      const remove = db.prepare('DELETE FROM model_aliases WHERE protocol = ? AND alias_name = ?')
+      for (const source of sources) deleted += Number(remove.run(input.protocol, source).changes)
+    }
+
+    repairAliasTargetsInTransaction()
+
+    return {
+      alias: getAlias(input.protocol, input.target_alias_name)!,
+      created,
+      sources,
+      added,
+      skipped,
+      deleted,
+    }
+  })()
+}
+
 export function addAliasTarget(input: { protocol: ProviderProtocol; alias_name: string; provider_id: string; model_id: string }): ModelAliasTargetRow {
   return db.transaction(() => {
     const hasAny = db.prepare('SELECT 1 FROM model_alias_targets WHERE protocol = ? AND alias_name = ? LIMIT 1').get(input.protocol, input.alias_name)

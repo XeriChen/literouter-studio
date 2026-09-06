@@ -20,6 +20,7 @@ import {
   listAliases,
   listAliasGroups,
   listModels,
+  mergeAliases,
   reorderAliasTargets,
   setModelEnabled,
   updateAlias,
@@ -31,6 +32,7 @@ import { testModelLiveness, validateTestPrompt } from '../../services/liveness'
 import type { Env, ProviderProtocol } from '../../types'
 import {
   aliasGroupRefSchema,
+  aliasMergeSchema,
   aliasPatchSchema,
   aliasRefSchema,
   aliasSchema,
@@ -155,6 +157,45 @@ export function registerModelRoutes(api: Hono<Env>): void {
     deleteAlias(parsed.data)
     writeAuditLog({ resource: 'alias', action: 'delete', target: parsed.data.alias_name, detail: `删除映射 ${parsed.data.alias_name}`, status: 200 })
     return ok(c, {})
+  })
+
+  api.post('/aliases/merge', async (c) => {
+    const parsed = aliasMergeSchema.safeParse(await readJson(c))
+    if (!parsed.success) return fail(c, 400, 'invalid alias merge', 'invalid_request_body')
+    const { protocol, target_alias_name, delete_sources } = parsed.data
+    const sources = [...new Set(parsed.data.sources)].filter((name) => name !== target_alias_name)
+    if (!sources.length) return fail(c, 400, 'no source aliases to merge', 'invalid_request_body')
+    for (const name of sources) {
+      if (!getAlias(protocol, name)) return fail(c, 404, 'alias not found', 'alias_not_found')
+    }
+    const targetExists = !!getAlias(protocol, target_alias_name)
+    if (!targetExists) {
+      const groupProblem = groupError(c, protocol, parsed.data.group_id)
+      if (groupProblem) return groupProblem
+    }
+    try {
+      const result = mergeAliases({
+        protocol,
+        sources,
+        target_alias_name,
+        group_id: targetExists ? undefined : (parsed.data.group_id ?? null),
+        delete_sources,
+      })
+      writeAuditLog({
+        resource: 'alias',
+        action: 'merge',
+        target: result.alias.alias_name,
+        detail: `合并 ${result.sources.length} 个映射（${result.sources.join('、')}）→ ${result.alias.alias_name}`
+          + `${result.created ? '（新建）' : '（并入已有，不改当前目标）'}：新增 ${result.added} 个候选，跳过 ${result.skipped} 个重复`
+          + `${result.deleted ? `，删除 ${result.deleted} 个源映射` : ''}`,
+        status: 200,
+      })
+      return ok(c, result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid alias merge'
+      if (message.includes('UNIQUE constraint failed: model_aliases')) return fail(c, 400, 'alias name already exists', 'alias_exists')
+      return fail(c, 400, message, 'invalid_request_body')
+    }
   })
 
   api.get('/alias-groups', (c) => ok(c, listAliasGroups()))
