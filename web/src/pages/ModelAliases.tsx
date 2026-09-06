@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
+import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, ThinkingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
@@ -238,7 +238,8 @@ function TargetPanel({
 export default function ModelAliases() {
   const qc = useQueryClient()
   const [protocol, setProtocol] = useState<'all' | Protocol>('all')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [expandedAliases, setExpandedAliases] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
@@ -246,7 +247,15 @@ export default function ModelAliases() {
   const [addThinking, setAddThinking] = useState<ThinkingFormState>(emptyThinkingForm)
   const [thinkingFor, setThinkingFor] = useState<ModelAlias | null>(null)
   const [thinkingForm, setThinkingForm] = useState<ThinkingFormState>(emptyThinkingForm)
-  const [renaming, setRenaming] = useState<{ kind: 'alias' | 'group'; protocol: Protocol; id: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState<{ protocol: Protocol; id: string; name: string } | null>(null)
+  const [editing, setEditing] = useState<ModelAlias | null>(null)
+  const [editForm, setEditForm] = useState<{ alias_name: string; group_id: string }>({ alias_name: '', group_id: '' })
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeMode, setMergeMode] = useState<'new' | 'existing'>('new')
+  const [mergeName, setMergeName] = useState('')
+  const [mergeTarget, setMergeTarget] = useState('')
+  const [mergeGroup, setMergeGroup] = useState('')
+  const [mergeDeleteSources, setMergeDeleteSources] = useState(false)
   const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -283,6 +292,8 @@ export default function ModelAliases() {
     )
   }, [visibleRows, debouncedSearch])
 
+  const forceExpand = debouncedSearch.trim().length > 0
+
   useEffect(() => {
     if (!aliases.data) return
     const existingKeys = new Set(aliases.data.map((a) => keyOf(a)))
@@ -300,6 +311,16 @@ export default function ModelAliases() {
     && new Set(selectedAliases.map((a) => a.protocol)).size === 1
     ? selectedAliases[0]?.protocol ?? null
     : null
+
+  const mergeTargetName = mergeMode === 'new' ? mergeName.trim() : mergeTarget
+  // 合并顺序固定为映射名字典序，避免与列表排序/点选顺序不一致导致 active 归属难以预期
+  const mergeSources = useMemo(() => {
+    if (!selectedProtocol) return []
+    return selectedAliases
+      .map((alias) => alias.alias_name)
+      .filter((name) => name !== mergeTargetName)
+      .sort((a, b) => a.localeCompare(b))
+  }, [selectedAliases, selectedProtocol, mergeTargetName])
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['aliases'] })
@@ -371,14 +392,61 @@ export default function ModelAliases() {
     onSuccess: (_data, { enabled }) => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, enabled ? '批量启用完成' : '批量禁用完成') },
     onError: (error) => toast(false, error instanceof Error ? error.message : '批量更新失败'),
   })
+  const mergeMutation = useMutation({
+    mutationFn: (body: { protocol: Protocol; sources: string[]; target_alias_name: string; group_id?: string | null; delete_sources: boolean }) => api<{
+      alias: { alias_name: string; group_id: string | null }
+      created: boolean
+      added: number
+      skipped: number
+      deleted: number
+    }>('/api/aliases/merge', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: (data, body) => {
+      setMergeOpen(false)
+      setSelected(new Set())
+      setSelectionMode(new Set())
+      setExpandedGroups((previous) => new Set(previous).add(`${body.protocol}/${data.alias.group_id ?? 'ungrouped'}`))
+      setExpandedAliases((previous) => new Set(previous).add(`${body.protocol}/${data.alias.alias_name}`))
+      invalidate()
+      toast(true, `合并完成${data.created ? '（新建映射）' : '（并入已有映射，不改当前目标）'}：新增 ${data.added} 个候选，跳过 ${data.skipped} 个重复${data.deleted ? `，删除 ${data.deleted} 个源映射` : ''}`)
+    },
+    onError: (error) => toast(false, error instanceof Error ? error.message : '合并失败'),
+  })
 
   const filteredGroups = (groups.data ?? []).filter((group) => protocol === 'all' || group.protocol === protocol)
   function rowsFor(protocolValue: Protocol, groupId: string | null) {
     return filteredRows.filter((row) => row.protocol === protocolValue && row.group_id === groupId)
   }
 
-  function openRename(kind: 'alias' | 'group', protocolValue: Protocol, id: string, name: string) {
-    setRenaming({ kind, protocol: protocolValue, id, name })
+  function openMerge() {
+    if (!selectedProtocol) return
+    setMergeMode('new')
+    setMergeName('')
+    setMergeTarget('')
+    setMergeGroup('')
+    setMergeDeleteSources(false)
+    setMergeOpen(true)
+  }
+
+  function openRename(protocolValue: Protocol, id: string, name: string) {
+    setRenaming({ protocol: protocolValue, id, name })
+  }
+
+  function openEdit(alias: ModelAlias) {
+    setEditing(alias)
+    setEditForm({ alias_name: alias.alias_name, group_id: alias.group_id ?? '' })
+  }
+
+  function saveEdit() {
+    if (!editing || !editForm.alias_name.trim()) return
+    patchAliasMutation.mutate(
+      {
+        protocol: editing.protocol,
+        alias_name: editing.alias_name,
+        new_alias_name: editForm.alias_name.trim(),
+        group_id: editForm.group_id || null,
+      },
+      { onSuccess: () => setEditing(null) },
+    )
   }
 
   function openThinking(alias: ModelAlias) {
@@ -398,19 +466,14 @@ export default function ModelAliases() {
 
   function saveRename() {
     if (!renaming || !renaming.name.trim()) return
-    if (renaming.kind === 'alias') {
-      patchAliasMutation.mutate({ protocol: renaming.protocol, alias_name: renaming.id, new_alias_name: renaming.name.trim() }, { onSuccess: () => setRenaming(null) })
-    } else {
-      api('/api/alias-groups', { method: 'PATCH', body: JSON.stringify({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() }) }).then(() => { setRenaming(null); invalidate(); toast(true, '分组名称已更新') }).catch((error) => toast(false, error instanceof Error ? error.message : '重命名失败'))
-    }
+    api('/api/alias-groups', { method: 'PATCH', body: JSON.stringify({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() }) }).then(() => { setRenaming(null); invalidate(); toast(true, '分组名称已更新') }).catch((error) => toast(false, error instanceof Error ? error.message : '重命名失败'))
   }
 
   function renderGroup(protocolValue: Protocol, group: AliasGroup | null) {
     const groupRows = rowsFor(protocolValue, group?.id ?? null)
     const groupKey = `${protocolValue}/${group?.id ?? 'ungrouped'}`
-    const groupStateKey = `group:${groupKey}`
-    const isOpen = !expanded.has(groupStateKey)
-    const toggle = () => setExpanded((previous) => { const next = new Set(previous); if (next.has(groupStateKey)) next.delete(groupStateKey); else next.add(groupStateKey); return next })
+    const isOpen = forceExpand || expandedGroups.has(groupKey)
+    const toggle = () => setExpandedGroups((previous) => { const next = new Set(previous); if (next.has(groupKey)) next.delete(groupKey); else next.add(groupKey); return next })
     const isActive = selectionMode.has(groupKey)
     const groupSelectedCount = groupRows.filter((r) => selected.has(keyOf(r))).length
     const allGroupSelected = groupRows.length > 0 && groupSelectedCount === groupRows.length
@@ -436,7 +499,7 @@ export default function ModelAliases() {
         }}
       >
         <CardHeader className="flex-row items-center justify-between gap-2 border-b border-foreground/10 px-5 py-3">
-          <button className="flex min-w-0 items-center gap-2 text-left" onClick={toggle}>
+          <button className="flex min-w-0 items-center gap-2 text-left" onClick={toggle} aria-expanded={isOpen}>
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{group?.name ?? '未分组'}</CardTitle>
             <Badge variant="secondary" className="shrink-0 whitespace-nowrap">{groupRows.length}</Badge>
@@ -455,7 +518,7 @@ export default function ModelAliases() {
             </Button>
             {group && <>
               <Button size="sm" variant="ghost" aria-label={`清空分组 ${group.name} 内的映射`} onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 清空映射</span></Button>
-              <Button size="sm" variant="ghost" onClick={() => openRename('group', group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
+              <Button size="sm" variant="ghost" onClick={() => openRename(group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
             </>}
           </div>
@@ -475,8 +538,7 @@ export default function ModelAliases() {
             <TableBody>
               {groupRows.map((alias) => {
                 const aliasKey = keyOf(alias)
-                const aliasStateKey = `alias:${aliasKey}`
-                const open = expanded.has(aliasStateKey)
+                const open = expandedAliases.has(aliasKey)
                 const thinkingTag = thinkingBadge(alias.thinking_json)
                 const activeAvailable = alias.provider_id !== null && alias.model_id !== null && alias.provider_enabled === 1 && alias.target_enabled === 1
                 return <Fragment key={aliasKey}>
@@ -487,12 +549,12 @@ export default function ModelAliases() {
                       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', aliasKey); setDragAliasKey(aliasKey) }}
                       onDragEnd={() => { setDragAliasKey(null); setDragOverGroupKey(null) }}
                     ><GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" /></div></TableCell>
-                    <TableCell className="w-9"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(aliasStateKey)) next.delete(aliasStateKey); else next.add(aliasStateKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
-                    <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span>{thinkingTag && <Badge variant="outline">{thinkingTag}</Badge>}<button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="重命名" onClick={() => openRename('alias', alias.protocol, alias.alias_name, alias.alias_name)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
+                    <TableCell className="w-9"><Button variant="ghost" size="icon" className="h-7 w-7" aria-expanded={open} onClick={() => setExpandedAliases((previous) => { const next = new Set(previous); if (next.has(aliasKey)) next.delete(aliasKey); else next.add(aliasKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
+                    <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{alias.alias_name}</span>{thinkingTag && <Badge variant="outline">{thinkingTag}</Badge>}<button className="text-muted-foreground hover:text-foreground" title="复制" onClick={() => navigator.clipboard?.writeText(alias.alias_name).then(() => toast(true, '已复制映射名'))}><Copy className="h-3.5 w-3.5" /></button><button className="text-muted-foreground hover:text-foreground" title="编辑" onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
-                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
+                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" title="编辑" onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></Button><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
                   {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
                 </Fragment>
@@ -516,7 +578,7 @@ export default function ModelAliases() {
       <div className="hidden h-4 w-px bg-border sm:block" />
       <Select
         onValueChange={(groupId) => batchMoveGroupMutation.mutate({ items: selectedAliases, groupId: groupId === 'none' ? null : groupId })}
-        disabled={!selectedProtocol || batchMoveGroupMutation.isPending || batchSetEnabledMutation.isPending || batchDeleteMutation.isPending}
+        disabled={!selectedProtocol || batchMoveGroupMutation.isPending || mergeMutation.isPending || batchSetEnabledMutation.isPending || batchDeleteMutation.isPending}
       >
         <SelectTrigger className="h-8 w-[170px] max-w-full text-xs" aria-label="批量移动映射到分组">
           <SelectValue placeholder={selectedProtocol ? '移动到分组' : '需选择同一协议'} />
@@ -526,9 +588,18 @@ export default function ModelAliases() {
           {(groups.data ?? []).filter((g) => g.protocol === selectedProtocol).map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 1 })} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
-      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
-      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedAliases.length} 个映射？`)) batchDeleteMutation.mutate(selectedAliases) }} disabled={batchSetEnabledMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
+      <Button
+        size="sm"
+        variant="outline"
+        title={selectedProtocol ? '把所选映射的候选合并到一个映射' : '需选择同一协议'}
+        disabled={!selectedProtocol || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchSetEnabledMutation.isPending || batchDeleteMutation.isPending}
+        onClick={openMerge}
+      >
+        <GitMerge className="h-3.5 w-3.5" /> 合并
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 1 })} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
+      <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 0 })} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
+      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedAliases.length} 个映射？`)) batchDeleteMutation.mutate(selectedAliases) }} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
       <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
@@ -561,6 +632,122 @@ export default function ModelAliases() {
       </DialogContent>
     </Dialog>
 
-    <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>{renaming?.kind === 'group' ? '重命名分组' : '重命名映射'}</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') saveRename(); if (event.key === 'Escape') setRenaming(null) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim()} onClick={saveRename}><Check className="h-4 w-4" /> 保存</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>重命名分组</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') saveRename(); if (event.key === 'Escape') setRenaming(null) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim()} onClick={saveRename}><Check className="h-4 w-4" /> 保存</Button></DialogFooter></DialogContent></Dialog>
+
+    <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑映射</DialogTitle>
+          <DialogDescription>只修改映射名与所属分组；启用开关、思考等级和候选目标请在列表中单独操作。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>映射名</Label>
+            <Input autoFocus value={editForm.alias_name} onChange={(event) => setEditForm({ ...editForm, alias_name: event.target.value })} placeholder="my-brain" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>分组</Label>
+            <Select value={editForm.group_id || 'none'} onValueChange={(value) => setEditForm({ ...editForm, group_id: value === 'none' ? '' : value })}>
+              <SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">未分组</SelectItem>
+                {(groups.data ?? []).filter((group) => group.protocol === editing?.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setEditing(null)}>取消</Button>
+          <Button disabled={!editForm.alias_name.trim() || patchAliasMutation.isPending} onClick={saveEdit}><Check className="h-4 w-4" /> 保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>合并映射</DialogTitle>
+          <DialogDescription>把所选映射的候选目标合并到一个映射名；已存在的候选会跳过，不会重复添加。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>目标映射</Label>
+            <Select value={mergeMode === 'new' ? '__new__' : mergeTarget} onValueChange={(value) => {
+              if (value === '__new__') { setMergeMode('new'); setMergeTarget(''); return }
+              setMergeMode('existing')
+              setMergeTarget(value)
+            }}>
+              <SelectTrigger><SelectValue placeholder="选择目标映射" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__new__">新建映射…</SelectItem>
+                {(aliases.data ?? []).filter((alias) => alias.protocol === selectedProtocol).map((alias) => (
+                  <SelectItem key={keyOf(alias)} value={alias.alias_name}>{alias.alias_name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {mergeMode === 'new' && <>
+            <div className="space-y-1.5">
+              <Label>新映射名</Label>
+              <Input value={mergeName} onChange={(event) => setMergeName(event.target.value)} placeholder="merged-brain" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>分组（可选）</Label>
+              <Select value={mergeGroup || 'none'} onValueChange={(value) => setMergeGroup(value === 'none' ? '' : value)}>
+                <SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">未分组</SelectItem>
+                  {(groups.data ?? []).filter((group) => group.protocol === selectedProtocol).map((group) => (
+                    <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </>}
+          <div className="space-y-1.5">
+            <Label>来源映射（{mergeSources.length} 个）</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {mergeSources.map((name, index) => (
+                <Badge key={name} variant={mergeMode === 'new' && index === 0 ? 'default' : 'secondary'}>
+                  {name}{mergeMode === 'new' && index === 0 ? ' · 提供当前目标' : ''}
+                </Badge>
+              ))}
+              {!mergeSources.length && <span className="text-xs text-muted-foreground">没有可合并的来源（目标映射本身不计入）。</span>}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {mergeMode === 'new'
+                ? '新建映射的当前目标取自第一个来源的当前目标，其余候选按上述顺序（映射名字典序）追加。'
+                : '并入已有映射不会改变它的当前目标（不切流量）；需要切换请单独设置当前目标。'}
+            </p>
+          </div>
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs">
+            <Checkbox checked={mergeDeleteSources} onCheckedChange={(checked) => setMergeDeleteSources(checked === true)} className="mt-0.5" />
+            <span>
+              <span className="font-medium">合并后删除原有映射</span>
+              <span className="block text-muted-foreground">删除后不可恢复；目标映射本身不会被删除。</span>
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setMergeOpen(false)}>取消</Button>
+          <Button
+            variant={mergeDeleteSources ? 'destructive' : 'default'}
+            disabled={!selectedProtocol || !mergeSources.length || (mergeMode === 'new' ? !mergeName.trim() : !mergeTarget) || mergeMutation.isPending}
+            onClick={() => {
+              if (!selectedProtocol) return
+              if (mergeDeleteSources && !window.confirm(`合并后将删除 ${mergeSources.length} 个原有映射，确定继续？`)) return
+              mergeMutation.mutate({
+                protocol: selectedProtocol,
+                sources: mergeSources,
+                target_alias_name: mergeMode === 'new' ? mergeName.trim() : mergeTarget,
+                ...(mergeMode === 'new' ? { group_id: mergeGroup || null } : {}),
+                delete_sources: mergeDeleteSources,
+              })
+            }}
+          >
+            {mergeMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 合并
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </>
 }
