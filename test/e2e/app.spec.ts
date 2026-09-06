@@ -536,3 +536,65 @@ test('creates an alias via searchable model selection and real-model name fill',
   await dialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect.poll(() => createBody).toMatchObject({ protocol: 'openai', alias_name: 'o3', provider_id: 'p1', model_id: 'o3' })
 })
+
+test('adds a candidate target by searching models across providers', async ({ page }) => {
+  const ts = '2026-09-06T00:00:00.000Z'
+  let addTargetBody: Record<string, unknown> | null = null
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/providers', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [
+    { id: 'p1', name: 'Primary', protocol: 'openai', group_id: null, base_url: 'https://api.example.test', auth: {}, custom_headers: {}, enabled: 1, created_at: ts, updated_at: ts },
+    { id: 'p2', name: 'Other', protocol: 'openai', group_id: null, base_url: 'https://other.example.test', auth: {}, custom_headers: {}, enabled: 1, created_at: ts, updated_at: ts },
+  ] }) }))
+  await page.route('**/api/models', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [
+    { provider_id: 'p1', model_id: 'gpt-a', display_name: null, enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Primary', provider_enabled: 1, created_at: ts, updated_at: ts },
+    { provider_id: 'p2', model_id: 'canary-model', display_name: null, enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Other', provider_enabled: 1, created_at: ts, updated_at: ts },
+    { provider_id: 'p2', model_id: 'canary-mini', display_name: 'Canary Mini', enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Other', provider_enabled: 1, created_at: ts, updated_at: ts },
+  ] }) }))
+  await page.route('**/api/alias-targets', async (route) => {
+    if (route.request().method() === 'POST') {
+      addTargetBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { id: 9, protocol: 'openai', alias_name: addTargetBody.alias_name, provider_id: addTargetBody.provider_id, model_id: addTargetBody.model_id, priority: 1, active: 0, created_at: ts, updated_at: ts } }) })
+      return
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: {} }) })
+  })
+  await page.route('**/api/aliases', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [{
+    protocol: 'openai',
+    alias_name: 'alias-a',
+    group_id: null,
+    group_name: null,
+    enabled: 1,
+    thinking_json: null,
+    provider_id: 'p1',
+    model_id: 'gpt-a',
+    created_at: ts,
+    updated_at: ts,
+    provider_name: 'Primary',
+    provider_protocol: 'openai',
+    provider_enabled: 1,
+    target_enabled: 1,
+    targets: [{ id: 1, protocol: 'openai', alias_name: 'alias-a', provider_id: 'p1', model_id: 'gpt-a', priority: 0, active: 1, created_at: ts, updated_at: ts, provider_name: 'Primary', provider_protocol: 'openai', provider_enabled: 1, target_enabled: 1 }],
+  }] }) }))
+
+  await page.goto('/models')
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  await page.locator('section button[aria-expanded]').first().click()
+  await expect(page.getByText('alias-a')).toBeVisible()
+  // 展开候选面板
+  await page.locator('table button[aria-expanded]').first().click()
+  await expect(page.getByText('候选目标（按优先级排序，当前只使用一个）')).toBeVisible()
+
+  // 不选 Provider 直接模糊搜索，可命中其他 Provider 的真实模型
+  await page.getByRole('combobox', { name: '模型' }).click()
+  await expect(page.getByRole('option', { name: 'gpt-a' })).toBeDisabled()
+  await page.getByPlaceholder('模糊搜索真实模型…').fill('canary')
+  await expect(page.getByRole('option', { name: 'canary-model' })).toBeVisible()
+  await page.getByRole('option', { name: 'canary-model' }).click()
+
+  // 选中后自动回填 Provider 与模型
+  await expect(page.getByRole('combobox').filter({ hasText: 'Other' })).toHaveCount(1)
+  await expect(page.getByRole('combobox', { name: '模型' })).toContainText('canary-model')
+  await page.getByRole('button', { name: '添加' }).click()
+  await expect.poll(() => addTargetBody).toMatchObject({ protocol: 'openai', alias_name: 'alias-a', provider_id: 'p2', model_id: 'canary-model' })
+})

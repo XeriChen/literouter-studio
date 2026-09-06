@@ -158,7 +158,8 @@ function TargetPanel({
   const [modelId, setModelId] = useState('')
   const [dragKey, setDragKey] = useState<string | null>(null)
   const availableProviders = providers.filter((p) => p.protocol === alias.protocol && p.enabled === 1)
-  const availableModels = models.filter((m) => m.provider_id === providerId && m.provider_enabled === 1 && m.enabled === 1)
+  // 搜索覆盖同协议全部已启用 Provider 的真实模型；选中后回填上方 Provider 与模型
+  const searchableModels = models.filter((m) => m.protocol === alias.protocol && m.provider_enabled === 1 && m.enabled === 1)
   const existing = new Set(alias.targets.map((t) => `${t.provider_id}/${t.model_id}`))
 
   function move(target: AliasTarget, over: AliasTarget) {
@@ -226,18 +227,24 @@ function TargetPanel({
         <div className="min-w-0 flex-1 space-y-1">
           <Label className="text-xs">模型</Label>
           <SearchableSelect
-            value={modelId}
-            onValueChange={setModelId}
-            disabled={!providerId}
+            value={providerId && modelId ? `${providerId}/${modelId}` : ''}
+            onValueChange={(_value, option) => {
+              if (!option.meta) return
+              setProviderId(option.meta.provider_id)
+              setModelId(option.meta.model_id)
+            }}
             className="h-8 text-xs"
-            placeholder={providerId ? '搜索并选择模型' : '先选择 Provider'}
+            ariaLabel="模型"
+            placeholder="搜索并选择模型"
             searchPlaceholder="模糊搜索真实模型…"
             emptyText="没有匹配的真实模型"
-            options={availableModels.map((model) => ({
-              value: model.model_id,
+            options={searchableModels.map((model) => ({
+              value: `${model.provider_id}/${model.model_id}`,
               label: model.display_name || model.model_id,
-              keywords: [model.model_id, ...(model.display_name ? [model.display_name] : [])],
+              keywords: [model.model_id, ...(model.display_name ? [model.display_name] : []), model.provider_name],
+              group: model.provider_name,
               disabled: existing.has(`${model.provider_id}/${model.model_id}`),
+              meta: model,
             }))}
           />
         </div>
