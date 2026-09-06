@@ -4,18 +4,22 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
-export interface SearchableSelectOption {
+export interface SearchableSelectOption<T = unknown> {
   value: string
   label: string
-  /** 额外参与模糊匹配的关键词（如真实模型 ID、显示名） */
+  /** 额外参与模糊匹配的关键词（如真实模型 ID、显示名、Provider 名） */
   keywords?: string[]
   disabled?: boolean
+  /** 分组标题：提供后按首次出现顺序分组渲染，空组在搜索时自动隐藏 */
+  group?: string
+  /** 选择时原样回传给 onValueChange 的附加数据 */
+  meta?: T
 }
 
-interface SearchableSelectProps {
-  options: SearchableSelectOption[]
+interface SearchableSelectProps<T = unknown> {
+  options: SearchableSelectOption<T>[]
   value: string
-  onValueChange: (value: string) => void
+  onValueChange: (value: string, option: SearchableSelectOption<T>) => void
   placeholder?: string
   searchPlaceholder?: string
   emptyText?: string
@@ -24,8 +28,25 @@ interface SearchableSelectProps {
   ariaLabel?: string
 }
 
+/** 按 group 字段聚合选项，保持首次出现顺序；无 group 的选项合入同一个无名分组。 */
+function groupOptions<T>(options: SearchableSelectOption<T>[]): Array<{ label: string | null; options: SearchableSelectOption<T>[] }> {
+  const result: Array<{ label: string | null; options: SearchableSelectOption<T>[] }> = []
+  const byLabel = new Map<string | null, { label: string | null; options: SearchableSelectOption<T>[] }>()
+  for (const option of options) {
+    const label = option.group ?? null
+    let entry = byLabel.get(label)
+    if (!entry) {
+      entry = { label, options: [] }
+      byLabel.set(label, entry)
+      result.push(entry)
+    }
+    entry.options.push(option)
+  }
+  return result
+}
+
 /** 基于 Popover + Command 的可搜索下拉；选项按 value 与 keywords 模糊匹配。 */
-export function SearchableSelect({ options, value, onValueChange, placeholder = '请选择', searchPlaceholder = '搜索…', emptyText = '没有匹配的选项', disabled, className, ariaLabel }: SearchableSelectProps) {
+export function SearchableSelect<T = unknown>({ options, value, onValueChange, placeholder = '请选择', searchPlaceholder = '搜索…', emptyText = '没有匹配的选项', disabled, className, ariaLabel }: SearchableSelectProps<T>) {
   const [open, setOpen] = React.useState(false)
   const selected = options.find((option) => option.value === value)
   return (
@@ -50,20 +71,22 @@ export function SearchableSelect({ options, value, onValueChange, placeholder = 
           <CommandInput autoFocus placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
-            <CommandGroup>
-              {options.map((option) => (
-                <CommandItem
-                  key={option.value}
-                  value={option.value}
-                  keywords={option.keywords}
-                  disabled={option.disabled}
-                  onSelect={() => { onValueChange(option.value); setOpen(false) }}
-                >
-                  <Check className={cn('h-3.5 w-3.5 shrink-0', option.value === value ? 'opacity-100' : 'opacity-0')} />
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
+            {groupOptions(options).map((group) => (
+              <CommandGroup key={group.options[0]?.value} heading={group.label ?? undefined}>
+                {group.options.map((option) => (
+                  <CommandItem
+                    key={option.value}
+                    value={option.value}
+                    keywords={option.keywords}
+                    disabled={option.disabled}
+                    onSelect={() => { onValueChange(option.value, option); setOpen(false) }}
+                  >
+                    <Check className={cn('h-3.5 w-3.5 shrink-0', option.value === value ? 'opacity-100' : 'opacity-0')} />
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
           </CommandList>
         </Command>
       </PopoverContent>
