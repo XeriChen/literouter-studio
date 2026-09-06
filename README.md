@@ -14,8 +14,8 @@
 
 - OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/v1/*`）代理入口，支持 SSE 流式透传；端点路径缺 `/v1` 自动补齐、多重 `/v1` 自动去重
 - Provider 管理：按协议自定义分组、表单内新建分组、批量选择/移动/启用/禁用/删除、分组启用滑块、配置复制、API Key 显隐、连通性测试、模型拉取、HTTP 代理、自定义请求头与模型过滤
-- 模型管理：手动添加或批量导入、启用/禁用、模型测活、批量操作
-- 模型映射：按协议分组、独立启用开关、多个候选目标与手动优先级；每次请求只使用唯一 active 目标；可选思考等级（强制覆盖或仅默认，值为协议原生字段）
+- 模型管理：按 Provider 分组展示（默认折叠）、手动添加或批量导入、启用/禁用、模型测活、批量操作
+- 模型映射：按协议分组（默认折叠）、编辑/移动分组、多个候选目标与手动优先级、合并多个映射的候选（可选删除源映射）；每次请求只使用唯一 active 目标；可选思考等级（强制覆盖或仅默认，值为协议原生字段）
 - 双轨日志：代理访问日志与配置操作审计日志，支持分页、筛选、刷新和清空
 - 配置与备份：监听地址、超时、日志保留、Token 管理，以及配置数据的全量导出/导入
 - Playground：直接调用真实网关入口，解析两种协议的 SSE，并按协议与映射名保存本地会话
@@ -45,7 +45,7 @@ pnpm dev
 pnpm exec tsx -e "import { getAdminToken } from './src/services/auth.ts'; console.log(getAdminToken())"
 ```
 
-请勿把命令输出粘贴到源码、Issue、日志或其他不可信位置。
+此命令供部署者在自己的终端取 Token 登录。AI 助手操作网关时使用项目 Skill 的进程内凭据读取方式，避免将 Token 带入工具输出或对话；请勿把命令输出粘贴到源码、Issue、日志或其他不可信位置。
 
 ### 生产运行
 
@@ -97,7 +97,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 ├── src/
 │   ├── server.ts         # 入口、监听配置、启动清理与优雅关闭
 │   ├── app.ts            # Hono 应用、路由挂载、静态文件与 SPA fallback
-│   ├── db/               # SQLite 当前 schema v6 基线
+│   ├── db/               # SQLite 当前 schema v8 基线
 │   ├── middlewares/      # Token 认证
 │   ├── proxy/            # 请求体边界、model 定点替换与 undici dispatcher
 │   ├── providers/        # OpenAI / Anthropic URL、认证与请求头构造
@@ -110,6 +110,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 │   ├── lib/sse.ts        # 跨网络 chunk 的双协议 SSE 增量解析器
 │   └── pages/            # Home、Providers、Models、Logs、Settings、Playground
 ├── test/                 # Node 单元测试与 Playwright 浏览器冒烟测试
+├── skills/literouter/    # 网关管理 Skill 的维护源
 ├── ARCHITECTURE.md       # 唯一权威设计指南
 ├── AGENTS.md             # AI 助手开发约定
 └── data/                 # 运行时数据库目录（不入库）
@@ -124,15 +125,32 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 | `pnpm dev:web` | 仅前端（Vite，默认 5173） |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test` | Node 单元测试 |
-| `pnpm test:e2e` | Playwright 浏览器测试；先构建 `web/dist`，命令会启动 `pnpm start`，认证用例需 `E2E_GATEWAY_TOKEN`（未提供时跳过） |
+| `pnpm test:e2e` | Playwright 浏览器测试；构建、服务复用与 Token 前提见下文 |
 | `pnpm check` | 类型检查、单元测试与前端生产构建 |
 | `pnpm build:web` | 构建前端到 `web/dist` |
 | `pnpm start` | 生产模式运行 API、代理与前端静态站点 |
 
+### 浏览器验证
+
+- 先运行 `pnpm build:web` 生成与当前前端对应的 `web/dist`。Playwright 默认访问 `http://127.0.0.1:3000`，非 CI 环境可复用该地址已有服务，否则由配置启动 `pnpm start`；核对目标服务是否对应当前后端及构建，避免用旧服务的结果证明新改动。数据库中的监听设置可能覆盖环境变量，端口冲突或地址不符时先选择受控的测试实例，不随意停止已有服务。
+- 认证用例优先使用 `E2E_GATEWAY_TOKEN`；未设置时，`test/e2e/global-setup.ts` 尝试从仓库开发库 `data/gateway.db` 只读取得 `admin_token`。两者都不可用时，依赖真实登录的用例跳过；模拟 API 的 UI 用例不依赖真实 Token。
+- 验证结论需覆盖本次受影响场景，并说明相关跳过项。模拟 API 的 UI 用例通过不等于真实后端链路通过，关键登录用例跳过也不能算该场景已验证。
+- `test/ui-check.mjs` 是可按需运行的桌面与移动端 UI 检查脚本，不属于 `pnpm check` 或正式 E2E 套件；需要已运行的后端和有效 Token，产物在 `test-results/ui-check/`。它不是每次改动的额外门槛。
+
+开发与提交按 [AGENTS.md](AGENTS.md) 第 8 节选择验证范围，局部改动可运行相关用例；同一代码与环境下已通过的检查不因提交动作重复执行。
+
+## 项目 Skill
+
+[skills/literouter/SKILL.md](skills/literouter/SKILL.md) 是网关管理 Skill 的维护源，[references/api.md](skills/literouter/references/api.md) 提供按需查阅的端点参考。Skill 用于实际配置与排障任务，开发或规则审查不自动触发网关访问。
+
+工具加载配置和安装副本属于本机环境，已被 Git 忽略，新克隆不保证存在。OpenCode 可在项目根目录的 `.opencode/opencode.json` 中将 `skills.paths` 设为 `["skills"]`，合并时保留已有配置。本机还保留 `.agents/skills.json` 的路径记录，以及 `.claude/skills/literouter/`、`.pi/skills/literouter/` 的安装副本；这些记录不代表所有客户端都支持相同的加载方式。
+
+各工具按其支持的技能路径或安装入口引用同一个维护源，支持目录引用或符号链接时优先采用。使用安装副本时仅在源 Skill 变更后同步整个目录并核对一致性，不独立编辑副本，也不把同步变成其他任务的完成门槛。
+
 ## 设计文档
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)：唯一权威设计指南，包含数据模型、API、代理与备份边界和已知权衡。
-- [`AGENTS.md`](AGENTS.md)：面向 AI 助手的实现约定、红线、提交前检查清单和错误码速查。
+- [`AGENTS.md`](AGENTS.md)：面向 AI 助手的项目约束、按任务阅读索引、风险验证和完成、提交与整理规则。
 
 ## License
 

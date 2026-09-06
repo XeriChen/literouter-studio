@@ -1,36 +1,30 @@
-# literouter 管理 API 参考（agent 操作规范本体）
+# literouter 管理 API 参考
 
-与网关 `src/routes/api/*` 的实现一一对应；字段名以 `src/routes/api/shared.ts` 的 zod schema 为准。
-本文档是规范本体：未来 CLI / MCP 工具面按此表的操作名一一映射实现。
+按当前任务查阅相关端点、字段和副作用。授权、凭据与完成标准统一见 [SKILL.md](../SKILL.md)，表中端点本身不构成执行授权或重新确认的要求。
+
+维护本参考时，项目设计以仓库 `ARCHITECTURE.md` 为准，受影响字段和实现可在 `src/routes/api/shared.ts` 的 zod schema 与 `src/routes/api/*` 核对；实际操作网关无需预先通读源码。
 
 ## 0. 通用约定
 
-- Base URL：本机网关通常为 `http://127.0.0.1:3000`（实际监听地址由 settings 或 `HOST`/`PORT` 环境变量决定，见 `src/server.ts`）；站点不在本机时向用户索取。
+- Base URL：复用已知目标，本机通常为 `http://127.0.0.1:3000`（实际监听地址由 settings 或 `HOST`/`PORT` 决定）；目标缺失且无法从已有配置确定时才询问。
 - 认证：所有 `/api` 请求（除 `POST /api/login`）带 `Authorization: Bearer <管理Token>`。
 - **指定真实模型一律用 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因为 `model_id` 可能含 `/`（如 `openai/gpt-4`）。
-- 响应外形统一为 `{"ok":true,"data":…}` 或 `{"ok":false,"error":{"message","type","code"}}`；排错先读 `error.code` 对照第 7 节。
-- curl 写请求模板（body 走 stdin，避免密钥进 shell 历史）：
+- 响应外形统一为 `{"ok":true,"data":…}` 或 `{"ok":false,"error":{"message","type","code"}}`；先检查 HTTP 状态与 `ok`，失败按 `error.code` 对照第 7 节，避免直接读取不存在的 `data` 掩盖错误。
+- 凭据由请求进程从环境、受保护文件或对应本机数据库只读取得，使用结构化请求 API 或 stdin 传 body；敏感响应在输出前筛选或脱敏。以下只展示创建 Provider 的请求体形状，占位符由请求进程替换，真实 Key 不写入命令文本：
 
-```bash
-curl -sS -X POST "$BASE_URL/api/providers" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data-binary @- <<'JSON'
-{ "name": "示例", "protocol": "openai", "base_url": "https://api.example.com", "auth": {"api_key": "sk-…"} }
-JSON
+```json
+{ "name": "示例", "protocol": "openai", "base_url": "https://api.example.com", "auth": {"api_key": "<API_KEY>"} }
 ```
 
-⚠️ **base_url 只填到版本前缀的上一级，不要带尾部 `/v1`**：网关拼接上游 URL 时会无条件追加 `/v1/models`、`/v1/chat/completions` 且不去重。若上游真实路径含 `/v1`（如 `https://host/api/v1`），base_url 填 `https://host/api`，让网关补 `/v1`。
+**base_url 只填到版本前缀的上一级，不要带尾部 `/v1`**：网关拼接上游 URL 时会追加 `/v1/models`、`/v1/chat/completions` 且不去重。若上游真实路径含 `/v1`（如 `https://host/api/v1`），base_url 填 `https://host/api`，让网关补 `/v1`。这是 Provider 地址约定，与客户端代理入口的 v1 路径归一化不同。
 
-- 危险级别图例：🟢 免确认直接执行；🔴 先向用户复述影响并获确认后执行。
-
-## 1. 引导与查询（全部 🟢）
+## 1. 引导与查询
 
 | 操作 | 端点 | 说明 |
 | :--- | :--- | :--- |
-| 验证 Token | `GET /api/me` | 返回 `{token}`，成功即引导完成 |
+| 验证 Token | `GET /api/me` | 响应含 `{token}`；检查状态和 `ok` 后仅输出认证结果，不回显 Token |
 | 换取会话 | `POST /api/login` | body `{token}`；agent 一般不需要，直接用 Bearer |
-| Provider 列表 | `GET /api/providers` | ⚠️ `auth` 字段回显明文 Key |
+| Provider 列表 | `GET /api/providers` | `auth` 字段回显明文 Key，输出前脱敏 |
 | Provider 详情 | `GET /api/providers/:id` | 同上 |
 | Provider 分组列表 | `GET /api/provider-groups` | |
 | 真实模型列表 | `GET /api/models` | 含 enabled/source/display_name |
@@ -43,91 +37,92 @@ JSON
 Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_url, auth(键值对), custom_headers(键值对), proxy_url, timeout_ms, model_filter, enabled(0|1)`。
 
 - `timeout_ms`：`null` = 用全局 `global_timeout_ms`；`0` = 永不超时（连接/响应头仍受管理操作 30s 兜底）；正整数 = 毫秒。
-- ⚠️ **Provider 名称不强制唯一**：重名创建会静默生成同名新实例，不会报错。创建前必须先 `GET /api/providers` 查重，靠 `id` 区分实例。
+- **Provider 名称不强制唯一**：重名创建会生成同名新实例，不会报错。结合名称、协议、地址与用户目标识别对象，靠 `id` 区分实例；已有足够且有效的查询结果可复用。
 
-⚠️ 所有 `group_id` 字段都传分组对象返回的 **`id`（UUID），不是组名**；传名字会得到 `provider_group_not_found` / `alias_group_not_found`。
+所有 `group_id` 字段都传分组对象返回的 **`id`（UUID），不是组名**；传名字会得到 `provider_group_not_found` / `alias_group_not_found`。
 
 ## 2. Provider 及其分组
 
-| 操作 | 端点 | Body / 说明 | 级别 |
-| :--- | :--- | :--- | :--- |
-| 新建 Provider | `POST /api/providers` | `{name, protocol, base_url, auth?, custom_headers?, group_id?, proxy_url?, timeout_ms?, model_filter?}`；auth 统一用 `{"api_key":"…"}`（裸 token，不含 `Bearer ` 前缀）：openai 协议会自动拼成 `authorization: Bearer <api_key>`，anthropic 协议会自动映射到 `x-api-key`。⚠️ 不要写成 `{"authorization":"Bearer sk-…"}`，网关不读该字段会导致上游 401。base_url 不带尾部 `/v1`（见第 0 节） | 🟢 |
-| 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` | 🟢 |
-| 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 | 🔴 |
-| 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，**其余 HTTP 响应（含 404/502）判网络可达**——不提供 `/v1/models` 的渠道会返回非 2xx，只要非 401/403 即网络通，代理转发不受影响 | 🟢 |
-| 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 | 🟢 |
-| 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组；落库并自动建同名映射（同名已存在只追加 inactive 候选，不切 active） | 🟢 |
-| 新建分组 | `POST /api/provider-groups` | `{protocol, name}`；同协议组名唯一 | 🟢 |
-| 重命名分组 | `PATCH /api/provider-groups` | `{protocol, group_id, name}` | 🟢 |
-| 删除分组 | `DELETE /api/provider-groups` | `{protocol, group_id}`；仅解除成员归属到「未分组」，不删数据 | 🔴 |
-| 批量启用组内 | `POST /api/provider-groups/batch-enable` | `{protocol, group_id}` | 🟢 |
-| 批量启/禁组内 | `POST /api/provider-groups/batch-toggle` | `{protocol, group_id, enabled}`；批量禁用会使流量 503（可逆） | 🟢 |
-| 批量删除组内 | `POST /api/provider-groups/batch-delete` | `{protocol, group_id}`；删成员 Provider 及其模型/候选，保留空组 | 🔴 |
+| 操作 | 端点 | Body / 说明 |
+| :--- | :--- | :--- |
+| 新建 Provider | `POST /api/providers` | `{name, protocol, base_url, auth?, custom_headers?, group_id?, proxy_url?, timeout_ms?, model_filter?}`；auth 统一用 `{"api_key":"…"}`（裸 token，不含 `Bearer ` 前缀）：openai 协议会自动拼成 `authorization: Bearer <api_key>`，anthropic 协议会自动映射到 `x-api-key`。不要写成 `{"authorization":"Bearer sk-…"}`，网关不读该字段会导致上游 401。base_url 不带尾部 `/v1`（见第 0 节） |
+| 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` |
+| 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 |
+| 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其余 HTTP 响应（含 404/502）判网络可达；结果不证明模型推理或映射链路可用 |
+| 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 |
+| 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组，可选 `create_alias`（默认 true）；启用导入模型，已启用的 Provider 自动建同名映射（同名已存在只追加 inactive 候选，不切 active）；传 `create_alias:false` 只登记模型 |
+| 新建分组 | `POST /api/provider-groups` | `{protocol, name}`；同协议组名唯一 |
+| 重命名分组 | `PATCH /api/provider-groups` | `{protocol, group_id, name}` |
+| 删除分组 | `DELETE /api/provider-groups` | `{protocol, group_id}`；删除分组并解除成员归属到「未分组」，不删除 Provider |
+| 批量启用组内 | `POST /api/provider-groups/batch-enable` | `{protocol, group_id}` |
+| 批量启/禁组内 | `POST /api/provider-groups/batch-toggle` | `{protocol, group_id, enabled}`；禁用会触发 active 修复，相关映射可能切换到其他候选或变为不可调用 |
+| 批量删除组内 | `POST /api/provider-groups/batch-delete` | `{protocol, group_id}`；删成员 Provider 及其模型/候选，保留空组 |
 
 ## 3. 真实模型与测活
 
-| 操作 | 端点 | Body / 说明 | 级别 |
-| :--- | :--- | :--- | :--- |
-| 手动加模型 | `POST /api/models` | `{provider_id, model_id, display_name?}`；默认 enabled=1 | 🟢 |
-| 启用/禁用模型 | `PATCH /api/models` | `{provider_id, model_id, enabled:0\|1}` | 🟢 |
-| 删除模型 | `DELETE /api/models` | `{provider_id, model_id}` | 🔴 |
-| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时。**跑之前必须先向用户确认测哪个模型**；**默认不带 thinking**（除非用户明确要求带 thinking 或自定义 prompt），不得自行挑模型测 | 🔴 |
+| 操作 | 端点 | Body / 说明 |
+| :--- | :--- | :--- |
+| 手动加模型 | `POST /api/models` | `{provider_id, model_id, display_name?}`；默认 enabled=1 |
+| 启用/禁用模型 | `PATCH /api/models` | `{provider_id, model_id, enabled:0\|1}` |
+| 删除模型 | `DELETE /api/models` | `{provider_id, model_id}` |
+| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时。产生真实推理消耗，按 Skill 中的推理授权与 thinking 规则执行；不经过映射层 |
 
 ## 4. 模型映射与候选（路由核心）
 
 映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。请求只路由到唯一 `active=1` 候选。
 
-| 操作 | 端点 | Body / 说明 | 级别 |
-| :--- | :--- | :--- | :--- |
-| 建映射 | `POST /api/aliases` | `{protocol, alias_name, provider_id, model_id, group_id?, enabled?, thinking?}`；目标 Provider 与真实模型必须已启用且协议一致；首个目标即 active | 🟢 |
-| 改映射 | `PATCH /api/aliases` | `{protocol, alias_name, new_alias_name?/group_id?/enabled?/(provider_id+model_id 成对出现=换当前目标)/thinking?}`；`thinking:null` 清除思考配置 | 🟢 |
-| 删映射 | `DELETE /api/aliases` | `{protocol, alias_name}` | 🔴 |
-| 加候选 | `POST /api/alias-targets` | `{protocol, alias_name, provider_id, model_id}`；已有 active 时新候选为 inactive，**不切换流量** | 🟢 |
-| 设为当前目标 | `PATCH /api/alias-targets` | 同上 body；原子切换 active（迁移流量用这个） | 🟢 |
-| 删候选 | `DELETE /api/alias-targets` | 同上 body；若删的是 active 自动按 priority 修复到首个可用候选 | 🔴 |
-| 重排优先级 | `POST /api/alias-targets/reorder` | `{protocol, alias_name, targets:[{provider_id, model_id},…]}`；targets 必须是完整候选集按新顺序排列 | 🟢 |
+| 操作 | 端点 | Body / 说明 |
+| :--- | :--- | :--- |
+| 建映射 | `POST /api/aliases` | `{protocol, alias_name, provider_id, model_id, group_id?, enabled?, thinking?}`；目标 Provider 与真实模型必须已启用且协议一致；首个目标即 active |
+| 改映射 | `PATCH /api/aliases` | `{protocol, alias_name, new_alias_name?/group_id?/enabled?/(provider_id+model_id 成对出现=换当前目标)/thinking?}`；`thinking:null` 清除思考配置 |
+| 删映射 | `DELETE /api/aliases` | `{protocol, alias_name}` |
+| 合并映射 | `POST /api/aliases/merge` | `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加；**并入已有映射不改其 active（不切流量）**，新建映射以第一个源的当前目标为 active、thinking 继承第一个非空源；`delete_sources:true` 删除源映射（属删除类操作，需确认授权） |
+| 加候选 | `POST /api/alias-targets` | `{protocol, alias_name, provider_id, model_id}`；已有 active 时新候选为 inactive，**不切换流量** |
+| 设为当前目标 | `PATCH /api/alias-targets` | 同上 body；原子切换 active（迁移流量用这个） |
+| 删候选 | `DELETE /api/alias-targets` | 同上 body；若删的是 active 自动按 priority 修复到首个可用候选 |
+| 重排优先级 | `POST /api/alias-targets/reorder` | `{protocol, alias_name, targets:[{provider_id, model_id},…]}`；targets 必须是完整候选集按新顺序排列 |
 
 注意：候选新增/设 active 的前置校验相同——Provider 与真实模型都存在且 enabled、协议一致，否则 400。
 
 ## 5. 映射分组
 
-| 操作 | 端点 | Body | 级别 |
-| :--- | :--- | :--- | :--- |
-| 新建分组 | `POST /api/alias-groups` | `{protocol, name}` | 🟢 |
-| 重命名 | `PATCH /api/alias-groups` | `{protocol, group_id, name}` | 🟢 |
-| 删除分组 | `DELETE /api/alias-groups` | `{protocol, group_id}`；**连同组内全部映射一起删除** | 🔴 |
-| 批量启用 | `POST /api/alias-groups/batch-enable` | `{protocol, group_id}` | 🟢 |
-| 清空分组映射 | `POST /api/alias-groups/batch-delete` | `{protocol, group_id}`；删组内映射但保留空分组 | 🔴 |
+| 操作 | 端点 | Body |
+| :--- | :--- | :--- |
+| 新建分组 | `POST /api/alias-groups` | `{protocol, name}` |
+| 重命名 | `PATCH /api/alias-groups` | `{protocol, group_id, name}` |
+| 删除分组 | `DELETE /api/alias-groups` | `{protocol, group_id}`；**连同组内全部映射一起删除** |
+| 批量启用 | `POST /api/alias-groups/batch-enable` | `{protocol, group_id}` |
+| 清空分组映射 | `POST /api/alias-groups/batch-delete` | `{protocol, group_id}`；删组内映射但保留空分组 |
 
 ## 6. 设置 / Token / 日志清理 / 备份
 
-| 操作 | 端点 | Body / 说明 | 级别 |
-| :--- | :--- | :--- | :--- |
-| 改设置 | `PUT /api/settings` | `{host?/port?/global_timeout_ms?/log_retention_days?}`（字符串数字）；host/port 需重启生效 | 🔴 |
-| 重置 Token | `POST /api/token/reset` | 无 body；旧 Token 全部失效 | 🔴 |
-| 清空代理日志 | `DELETE /api/logs` | 不可恢复 | 🔴 |
-| 清空审计日志 | `DELETE /api/audit-logs` | 不可恢复 | 🔴 |
-| 导出备份 | `GET /api/backup` | 🟢 但产物含明文 API Key 与网关 Token，落盘前告知用户 | 🟢* |
-| 导入备份 | `POST /api/backup` | 备份 JSON 原样作 body；**全量替换现有配置**（含未分组映射），不含两类日志 | 🔴 |
+| 操作 | 端点 | Body / 说明 |
+| :--- | :--- | :--- |
+| 改设置 | `PUT /api/settings` | `{host?/port?/global_timeout_ms?/log_retention_days?}`（字符串数字）；host/port 需重启，超时对后续代理请求生效，日志保留天数在下次启动清理时生效 |
+| 重置 Token | `POST /api/token/reset` | 无 body；旧 Token 全部失效，新 Token 在请求进程内保存和使用，不原样输出 |
+| 清空代理日志 | `DELETE /api/logs` | 不可恢复 |
+| 清空审计日志 | `DELETE /api/audit-logs` | 不可恢复 |
+| 导出备份 | `GET /api/backup` | 产物含明文 API Key 与网关 Token，保存到约定位置并告知敏感性 |
+| 导入备份 | `POST /api/backup` | 备份 JSON 原样作 body；**全量替换现有配置**（含未分组映射、设置和 Token），备份不含两类日志，导入也不清空既有日志 |
 
 ## 7. 错误码速查
 
 | HTTP | code | 触发与处置 |
 | :--- | :--- | :--- |
-| 400 | `invalid_request_body` | 参数非法；对照 schema 修正字段后重试一次 |
+| 400 | `invalid_request_body` | 参数非法；按错误与字段约定修正后继续，避免不改请求地重复提交 |
 | 413 | `invalid_request_body` | body 超 50 MiB |
 | 400 | `invalid_test_prompt` | 测活提示词命中黑名单或过短，换提示词 |
 | 400 | `invalid_backup` | 备份内部引用/协议/候选关系不合法 |
-| 401 | `invalid_api_key` | Token 错误 → 回引导步骤重取 |
+| 401 | `invalid_api_key` | 核对目标地址与凭据来源，更新有效 Token 后再验证；来源缺失时才询问 |
 | 404 | `model_not_found` / `provider_not_found` / `alias_not_found` 等 `_not_found` 系列 | 目标不存在或未启用；先 GET 列表核对标识再操作 |
-| 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 已存在；视为幂等成功，继续后续步骤 |
+| 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 已存在；读回并比对协议、标识和任务相关配置，一致才视为目标已满足并复用 id，否则按已有授权修正 |
 | 404 | `not_found` | 路径错误 |
 | 405 | `method_not_allowed` | 方法用错 |
-| 503 | `provider_disabled` | Provider 被禁用；先启用再操作 |
+| 503 | `provider_disabled` | 核对 Provider 启用状态和任务目标；已有授权涵盖启用或恢复服务时再修正，查询排障不自动启用 |
 | 502 | `upstream_error` | 上游不可达/5xx/管理侧上游失败 |
 | 504 | `upstream_timeout` | 上游超时 |
 
-写操作失败（尤其创建类）禁止盲目原样重试，防重复创建或重复副作用。
+写入超时或断连时结果可能未知，先读回现状再决定是否重试，防止重复创建或重复副作用。可依据新错误信息继续修正；同一原因反复出现且没有新依据时报告该操作的阻塞，继续不受影响的步骤。
 
 ## 8. 思考等级（thinking）配置规则
 
@@ -140,13 +135,13 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 
 - `override` = 无条件替换/注入顶层 `thinking`（Anthropic）或 `reasoning_effort`（OpenAI）；`default` = 仅客户端未携带时注入。
 - 不配置 = 客户端什么就转发什么，网关不动。
-- `POST /models/test` 可带同款 `thinking` 直接验证效果。
+- `POST /api/models/test` 可在已授权的思考配置验证中带同款 `thinking`；它直接调用真实模型，不证明映射路由或代理侧定点改写已生效。
 
-## 9. 关键路由语义（排障必读）
+## 9. 关键路由语义（路由排障时查阅）
 
 1. 客户端请求的 `model` 必须是**映射名**；直写真实模型名 → 代理返回 `404 model_not_found`。
-2. 只有「映射 enabled + 目标候选 active + Provider enabled + 真实模型 enabled」四者齐备才能被调通；任一缺失分别表现为 404/503。
+2. 映射可路由要求「映射 enabled + 目标候选 active + Provider enabled + 真实模型 enabled」。路由到禁用的 Provider 返回 `503 provider_disabled`；真实模型禁用、映射不存在或禁用等返回 `404 model_not_found`。
 3. 代理入口：OpenAI `/openai/v1/*`、Anthropic `/anthropic/v1/*`，除 `GET */v1/models` 外只收 POST。
-4. **删除/禁用 active 候选、或禁用/启用 Provider 与真实模型**都会触发网关自动修复：把 active 迁到剩余候选中 priority 最小且可用的候选；若所有候选都不可用（Provider/模型全部禁用），active 保持原样不动（访问仍会 503）。重新启用旧目标**不会**自动切回。
-5. 导入/新增真实模型会自动建同名映射，但同名映射已存在时不切 active。
+4. 删除 active 候选、或删除/禁用其 Provider 与真实模型时，在配置事务内按 priority 选择首个可用候选修复 active。没有可用候选时映射保留但不可调用，按实际路由状态返回 404/503；重新启用旧目标不会替换已经可用的 active。请求期不会尝试其他候选。
+5. 已启用的 Provider 导入/新增真实模型会自动建同名映射，但同名映射已存在时只追加 inactive 候选，不切 active。
 6. 上游 4xx 原样透传给客户端，5xx 包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是首包耗时。

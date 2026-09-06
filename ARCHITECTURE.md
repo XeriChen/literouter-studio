@@ -1,7 +1,7 @@
 # 架构与设计文档
 
-> 面向后来维护者的精简指南：先读 README（使用），再读本文档（设计），最后看代码。
-> 更新时间：2026-08-24（已与 schema v8、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 本文是项目设计的唯一权威指南。按任务从 [AGENTS.md](AGENTS.md) 的阅读索引定位相关章节；部署与使用说明见 [README.md](README.md)，无需每次改动前通读三份文档。
+> 实现核对记录：2026-08-24（已与 schema v8、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -10,7 +10,7 @@
 轻量 LLM 聚合网关：一个进程同时提供 OpenAI / Anthropic 兼容的代理入口 + Web 管理界面。
 客户端只认识「模型映射名」，网关把请求路由到真实 Provider。
 
-**三条红线（改动代码前必读）：**
+**三条红线（实现必须遵守，相关改动时核对）：**
 
 1. **不做协议转换**：严禁在 OpenAI / Anthropic 之间互转请求格式。
 2. **仅替换 model 与思考等级字段**：客户端请求体的 `model` 是映射名，网关路由成功后只把该字段替换为真实模型名（`proxy.ts`）；若映射配置了思考等级，仅按配置定点改写/注入顶层 `thinking`（Anthropic）或 `reasoning_effort`（OpenAI）字段。严禁增删改其他任何字段。
@@ -28,8 +28,8 @@
 - 单包仓库；Node ≥ 24，包管理器固定为 pnpm 11.22.0；`web/dist` 由 Hono 托管（生产 `pnpm start`）。
 - 开发：`pnpm dev` = 后端 3000（tsx watch）+ 前端 5173（Vite，`/api`、`/openai`、`/anthropic` 已代理到 3000）。
 - 强制 `tsx` 直接跑 TS，禁止编译后端到 JS 再跑。
-- `pnpm test` 运行 Node 原生测试；`pnpm test:e2e` 用 Playwright 启动生产服务执行浏览器冒烟测试。
-- 提交前必须过：`pnpm check`（`typecheck` + 单元测试 + `build:web`）。
+- `pnpm test` 运行 Node 原生测试；`pnpm test:e2e` 用 Playwright 启动或复用生产服务执行浏览器冒烟测试，构建、服务与 Token 前提见 [README.md](README.md) 的浏览器验证说明。
+- 开发与提交按 [AGENTS.md](AGENTS.md) 第 8 节选择验证范围。`pnpm check`（`typecheck` + 单元测试 + `build:web`）保留为核心行为、共享逻辑、依赖或构建配置改动的默认全量检查；文档和局部改动按风险验证。
 
 启动与关闭约定：数据库 `settings` 中已持久化的 `host`/`port` 优先于 `HOST`/`PORT` 环境变量，再回退到 `0.0.0.0:3000`；端口必须是 1–65535 的整数，否则使用 3000。`host`/`port` 保存后需重启，`global_timeout_ms` 在后续代理请求读取，`log_retention_days` 只在启动清理时使用（0 表示不清理）。收到 `SIGTERM`/`SIGINT` 后先等待 HTTP server 关闭，再释放 dispatcher 缓存和 SQLite；5 秒后仍未结束则强制退出。启动后每 30 秒采样一次进程 RSS，超过环境变量 `GATEWAY_RSS_SNAPSHOT_BYTES`（默认 1.5 GiB，设 0 或非法值关闭）时向 `data/` 写堆快照用于事后定位内存泄漏，两次快照至少间隔 5 分钟。
 
@@ -52,11 +52,11 @@ web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
   hooks/           useBottomInset：用 visualViewport 测量移动端浏览器底栏/虚拟键盘遮挡，为 fixed 底栏定位补偿
   pages/           Login / Home / Providers（分组管理）/ Models（映射 + 真实模型）/ Logs / Settings / Playground
-  pages/ModelAliases.tsx  分组列表、映射开关、候选优先级/当前目标与快速测活
+  pages/ModelAliases.tsx  分组列表（默认折叠）、映射编辑/合并、映射开关、候选优先级/当前目标与快速测活
   components/      ChatUI（SSE 双协议解析）等
   lib/sse.ts       跨网络 chunk 的 OpenAI / Anthropic SSE 增量解析器
 test/              Node 单元测试与 test/e2e/ Playwright 冒烟测试
-skills/literouter/ agent 管理 Skill：SKILL.md（引导/安全分级/工作流）+ references/api.md（端点规范本体，未来 CLI/MCP 工具面按其映射）；经 .opencode/opencode.json 的 skills.paths 注册
+skills/literouter/ agent 管理 Skill 的维护源：SKILL.md（按任务引导、授权与工作流）+ references/api.md（按需读取的端点参考）；各工具的本地安装入口见 README
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
@@ -74,7 +74,7 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读） |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-当前处于无正式用户的开发阶段，schema v8 直接作为基线；破坏性变更允许删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8 的守卫式加列）。正式部署前需重新确认迁移与兼容策略。
+当前处于无正式用户的开发阶段，schema v8 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8 的守卫式加列）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
 
 ## 5. 核心概念：模型映射（路由键）
 
@@ -87,8 +87,9 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 - 映射有独立 `enabled` 开关；`GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名。
 - 未建立映射的模型（或直接写真实模型名）→ `404 model_not_found`。
 - 映射指向的 Provider 被禁用 → `503 provider_disabled`；目标模型被禁用 → `404`。
-- 自动建映射：启用的 Provider 新增/导入模型时自动生成同名映射；已有同名映射时只追加 inactive 候选，不切换 active。导入会启用新模型，也会重新启用已存在的目标模型。
+- 自动建映射：启用的 Provider 新增/导入模型时自动生成同名映射；已有同名映射时只追加 inactive 候选，不切换 active。导入会启用新模型，也会重新启用已存在的目标模型。导入可传 `create_alias:false` 只登记真实模型、不动映射。
 - 删除/禁用 active 真实模型或 Provider 时，在配置事务内按 priority 选择首个可用候选；重新启用旧目标不回切。没有可用候选则映射保留但不可调用。
+- 合并映射（`POST /aliases/merge`）：把多个映射的候选按 (provider_id, model_id) 去重后追加到目标映射（先到先得，重复计入 `skipped`）；并入已有映射不改其 active（不切流量），新建映射以第一个源（按 sources 顺序）的当前目标为 active，thinking 仅在新建时继承第一个非空源；`delete_sources:true` 删除源映射并可能留下空分组。合并后调用修复逻辑，仅当目标 active 已失效时才提升首个可用候选。
 - 删除分组会级联删除组内映射；“清空组内映射”批量操作可保留空分组。
 - 手动添加模型默认 enabled=1（开箱即用）。
 - 映射可选配**思考等级**（`thinking`）：`{mode, value}`，`value` 是协议原生值 —— Anthropic 为 `thinking` 对象（如 `{"type":"enabled","budget_tokens":2048}` 或 `{"type":"disabled"}`），OpenAI 为 `reasoning_effort` 字符串（如 `"high"`）。`override` = 无条件替换/注入对应顶层字段；`default` = 仅在客户端未携带该字段时注入；不配置 = 原样透传。管理 API 的 `POST/PATCH /aliases` 用 `thinking` 字段配置（PATCH 传 `null` 清除），value 形状在入库前按协议校验。
@@ -104,9 +105,10 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-toggle`、`POST /provider-groups/batch-delete` | 原子批量启用/禁用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
 | `POST /providers/:id/upstream-models` | 拉上游模型 ID 列表并应用 model_filter，仅返回、不落库；响应体累计超过 50 MiB 判上游异常（502 upstream_error） |
-| `POST /providers/:id/import-models` | body `{model_ids:[...]}`，落库 + 自动建同名映射 |
+| `POST /providers/:id/import-models` | body `{model_ids:[...], create_alias?:boolean}`（默认 true），落库 + 自动建同名映射；`create_alias:false` 只落库不建/不追加映射 |
 | `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
 | `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段与思考等级（PATCH 传 null 清除） |
+| `POST /aliases/merge` | 合并映射：body `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加（`added`/`skipped`），并入已有映射不改其 active，新建映射以第一个源的当前目标为 active、thinking 继承第一个非空源；`delete_sources:true` 时删除源映射（FK 级联候选） |
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
 | `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
 | `POST/PATCH/DELETE /alias-targets`、`POST /alias-targets/reorder` | 候选新增、设为 active、删除与 priority 重排 |
@@ -165,7 +167,9 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 `app.ts` 以 `import.meta.dirname` 为基准定位 `web/dist`，并防止路径穿越。`/api`、`/openai`、`/anthropic` 网关前缀永不回退到 `index.html`；带文件扩展名的缺失静态资源返回 404，只有非网关、非静态资源的 GET 客户端路由才回退到 `index.html`。静态文件按扩展名设置内容类型和缓存策略。
 
-**陷阱清单（改代理代码必逐条核对）：**
+**陷阱清单（按受影响行为核对）：**
+
+上游传输、请求头或 dispatcher 改动核对相关的第 1–6 项，生产托管改动核对第 7 项；路由、请求体、日志或测活改动同时核对本节及第 5 节的对应约定。跨模块改动扩大覆盖范围，文档或无关界面改动不触发整份清单。
 
 1. undici v8：超时配置在 **Agent 构造参数**（`connectTimeout`/`headersTimeout`/`bodyTimeout:0` 恒设，timeout=0 时全 0），`request()` 层不接收这些参数。
 2. 响应 body 是 Node Readable：排空用 `.dump()`，透传 `new Response(readable)`。
@@ -186,7 +190,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
 - Providers 页按协议和自定义分组折叠展示，支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。
 - Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
-- Models 页两个 tab：**模型映射**（按协议折叠分组、映射启用开关、候选展开管理/拖拽优先级、当前目标切换与快速测活）与**真实模型**（搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
+- Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
 - Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
 - `ChatUI` 使用 `SseDeltaParser` 处理任意网络 chunk 边界、CRLF、多个 `data:` 行和没有尾部分隔符的最终事件；按 `protocol + alias` 将对话持久化到 `localStorage`。

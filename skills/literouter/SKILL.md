@@ -1,74 +1,70 @@
 ---
 name: literouter
-description: 管理 literouter LLM 网关的 Provider 与模型映射配置。当用户要求添加/修改/删除 provider、导入或启停真实模型、建立/改名/删除模型映射（alias）、切换映射目标、配置思考等级、测活、查代理日志、备份或恢复网关配置时使用。仅用于 literouter 网关管理面，不处理业务代码。
+description: 通过 literouter 网关 API 管理 Provider、真实模型、映射与思考配置，以及排障、测活、日志和备份恢复。用于实际网关操作，不用于业务代码开发或规则审查。
 ---
 
 # literouter 网关管理
 
-通过网关自带的 HTTP 管理 API 操作，无需任何额外工具。端点与字段的完整定义在 [references/api.md](references/api.md)，先读完本文件的引导与安全规则再动手。
+通过网关自带的 HTTP 管理 API 完成用户指定的配置或排障任务。配置写入仅使用 `/api`；用户要求验证映射链路时，可在授权范围内调用对应协议的代理入口，不改变网关的协议与请求体约定。
 
-## 引导（每次会话首次操作前执行一次）
+## 按需查阅
 
-1. 确定 Base URL：本机网关通常为 `http://127.0.0.1:3000`（实际监听由 settings 或 `HOST`/`PORT` 环境变量决定）；远端网关向用户索取。
-2. 取管理 Token（网关在本机时直读数据库，必须在项目根目录执行；装了 sqlite3 CLI 用前者，否则用后者）：
-   ```bash
-   sqlite3 data/gateway.db "SELECT value FROM settings WHERE key='admin_token'"
-   # 或（项目自带 better-sqlite3，必然可用）：
-   node -e "const db=require('better-sqlite3')('data/gateway.db',{readonly:true});process.stdout.write(db.prepare(\"SELECT value FROM settings WHERE key='admin_token'\").get().value);db.close()"
-   ```
-   - 读不到（远端网关）就向用户索取 Token。
-   - 绝不猜测 Token。
-3. 验证：`curl -sS "$BASE_URL/api/me" -H "Authorization: Bearer $TOKEN"`，返回 `{ok:true,…}` 即完成；401 则重取或询问用户。
+[references/api.md](references/api.md) 按端点分节：引导与查询见第 0、1 节，Provider 见第 2 节，真实模型与测活见第 3 节，映射与分组见第 4、5 节，设置与备份见第 6 节，错误恢复见第 7 节，thinking 见第 8 节，路由排障见第 9 节。只读取当前任务涉及的章节，已读且未变的内容可以复用。
 
-## 安全规则（必须遵守）
+## 连接与凭据
 
-- **免确认**：全部 GET 查询；新建/更新 Provider、真实模型、映射、候选；设 active 目标；重排优先级；测连通；拉上游模型；导入模型；批量启用。
-- **严禁自发测活**：`POST /api/models/test` 会产生真实推理消耗，**严禁在接入、导入、建映射或切流量等流程中自发触发测活**；仅当用户明确指令要求测活后，才对用户指定模型发起测活，且**默认不带 thinking**（除非用户明确要求带 thinking/自定义 prompt）。
-- **须先向用户复述影响并获明确同意**：一切 DELETE 与 batch-delete（含「删分组连带删映射」「清空组内 Provider」）；`POST /api/backup` 导入（全量替换现有配置）；`POST /api/token/reset`（旧 Token 全失效）；`PUT /api/settings`；清空两类日志。
-- **密钥卫生**：`GET /providers` 与备份文件含明文 Key/Token，向用户展示时必须打码（如 `sk-…abcd`），不得原样回显完整密钥；**Base64/编码密钥解码后同样敏感，中间过程也不得把完整 key 回显到对话**；写请求 body 用 stdin/heredoc 传，避免密钥进 shell 历史。
-- **写失败不自愈**：创建类请求失败后禁止盲目原样重试；按 `error.code` 处置（见 references 第 7 节），`*_exists` 视为幂等成功继续。
-- 不修改代理请求语义相关的任何约定；本 skill 只操作 `/api` 管理面。
+只有实际访问网关且连接信息缺失或失效时才执行引导；阅读、开发或审查 Skill 不触发引导。
 
-## 响应瘦身（必须遵守）
+1. 复用用户已提供的目标地址和连接信息。本机通常为 `http://127.0.0.1:3000`，实际监听由 settings 或 `HOST`/`PORT` 决定；缺少无法从已知配置确定的地址时再询问。
+2. 让请求进程从已有环境变量或受保护文件读取 Token。本机也可在项目根目录用 SQLite **只读**打开 `data/gateway.db`，读取 `settings.admin_token` 并在同一进程中用于请求；例如 Node ≥24 的 `DatabaseSync` 支持 `{readOnly:true}`。不将 Token 打印后再传给下一条命令，不猜测 Token，也不为取 Token 创建数据库。目标与本机开发库须对应，远端凭据不能用本机 Token 代替。
+3. 目标尚未验证时调用 `GET /api/me`，检查 HTTP 状态和 `ok`，只输出认证结果。该响应含 Token，不能原样输出；401 时检查目标与凭据来源，更新后再验证。只有凭据确实缺失且无法从已授权来源取得时才向用户索取。
 
-查询类响应必须先用 `node -e` 过滤出本次任务需要的字段再读入上下文，禁止把完整 JSON 列表原样倒进对话；写操作的响应很小，直接看 `ok` 和返回的 `id` 即可。
+## 授权与操作影响
 
-```bash
-# 列 Provider：只要 id/协议/名称/启停
-curl -sS "$BASE_URL/api/providers" -H "Authorization: Bearer $TOKEN" \
-  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const p of JSON.parse(s).data)console.log(p.id,p.protocol,p.name,'enabled='+p.enabled)})"
-# 看映射当前路由：只要名称和 active 目标
-curl -sS "$BASE_URL/api/aliases" -H "Authorization: Bearer $TOKEN" \
-  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const a of JSON.parse(s).data){const t=a.targets.find(t=>t.active);console.log(a.protocol,a.alias_name,'->',t?t.provider_name+'/'+t.model_id:'(无可用目标)','enabled='+a.enabled)}})"
-```
+- **复用授权**：用户已明确的目标、对象、范围和影响持续有效。查询、常规配置变更、模型导入、连通性检查和已授权的切换可继续执行；不因 HTTP 方法或工作流进入下一步而再次确认。对象集合尚未确定时才澄清选择。
+- **核对实质影响**：级联或批量删除、全量恢复、Token 重置、日志清空等操作，结合已有信息核对授权是否覆盖数据丢失、配置替换或凭据失效，必要时查询受影响对象。已有明确授权直接执行；未覆盖或范围发生变化时，准备具体对象与影响说明后再确认。删除 Provider 分组仅解除归属；删除映射分组会连带删除映射，两者不能按 DELETE 一概处理。
+- **推理有消耗**：用户要求测活、实际推理验证或任务明确包含该验证时，按已授权模型、集合和必要请求量执行，不重复询问已指定的模型。仅接入、导入、建映射或切换配置不自动触发推理。此边界同时适用于 `/api/models/test`、代理 chat/messages/responses、Playground 和直连上游；不自行遍历未知模型探测或无依据地重复推理。
+- **配置与验证分开**：普通真实模型测活默认不带 thinking；用户要求验证映射的思考配置时携带该映射的配置。自定义 prompt 本身不代表要求改变 thinking。模型集合、验证目标或消耗范围不明且影响执行时再澄清。
 
-需要完整单条详情时按 id 取 `GET /api/providers/:id`，不要拉全表。
+## 响应与密钥
+
+- 先检查 HTTP 状态、`ok` 和 `error.code`，再读取 `data`。大列表按任务筛选字段或分页，单条 Provider 详情优先按 id 获取；小型且无敏感字段的响应可直接查看，不限定使用 Node、jq 或某一种工具。
+- Provider 响应、`/api/me`、Token 重置响应和备份含明文凭据。**输出到工具结果、日志或对话前脱敏**，Base64 解码后的 Key 同样处理；只输出所需字段。需保留的新 Token 在请求进程内处理，不因响应较小而原样回显。
+- 用结构化请求 API 或 stdin 传请求体，凭据从环境或受保护文件在请求进程内读取，避免把真实密钥写入命令文本、展开到命令参数或放进调试输出。备份保存到用户指定或项目已忽略的受保护位置，并告知含明文密钥。
+
+## 失败恢复
+
+按参考第 7 节的错误原因处理。`*_exists` 只表示对象存在：查询现状，核对协议、标识及目标、enabled、thinking 等任务相关配置；一致才视为目标已满足并复用现有 id，不一致则在授权范围内修正。
+
+超时或断连后写入结果可能未知，先读回状态再决定是否重试，尤其 Provider 名称不唯一，不能盲目重复创建。明确未执行的参数错误可修正后继续，不限定统一重试次数；相同原因反复出现且没有新依据时停止该操作，报告缺少的条件，继续其他不受影响的工作。排障发现禁用状态不等于获得启用授权。
 
 ## 工作流：接入新 Provider
 
-1. `GET /api/providers` 查重名；必要时 `POST /api/provider-groups` 建分组。
-2. `POST /api/providers` 创建（protocol 决定后续一切协议行为，确认无误再建）。
-   - **base_url 只填到版本前缀的上一级，不要带尾部 `/v1`**：网关会无条件拼 `/v1/models`、`/v1/chat/completions` 且不去重，带尾 `/v1` 会拼成 `/v1/v1/...` → 404。如上游真实路径是 `https://host/api/v1`，base_url 填 `https://host/api`。
-3. `POST /api/providers/:id/test` 测连通；401/403 判认证失败，**其余 HTTP 响应（含 404/502）判网络可达**——某些渠道不提供 `/v1/models` 端点会返回非 2xx，但只要不是 401/403 就说明网络通了，代理转发不受影响。认证失败时和用户核对 Key 后 `PUT /api/providers/:id` 更新 auth。
-4. `POST /api/providers/:id/upstream-models` 拉列表给用户看，确认后 `POST /api/providers/:id/import-models` 导入——已启用的 Provider 会自动建同名映射。
-   - 若上游不提供 `/v1/models` 端点（拉列表失败/502），改用 chat 口实测探测模型名，或直接向用户索取模型名；`import-models` 按 model_id 落库，**不校验模型是否在上游列表中**，只要上游真实支持即可。
+1. 按参考第 2 节核对 protocol、base_url 与 auth。已有查询结果可复用；名称不唯一，结合协议、地址和用户目标识别现有 Provider，再决定复用、更新或新建，必要时创建分组。
+2. 接入任务可调用连通性测试。401/403 判认证失败，其他 HTTP 响应只证明网络可达，不能证明模型或代理调用可用；认证失败先检查已有配置，确实缺少正确凭据时再询问。
+3. 用户已指定模型或导入集合时直接按范围导入；需要发现模型时先拉上游列表，再导入任务涵盖的集合。列表接口不可用时使用已知模型 ID，缺少 ID 才询问；不改用推理遍历探测。导入不校验模型是否在上游列表中，会启用导入模型并默认按规则创建同名映射或追加候选；只需登记真实模型时传 `create_alias:false`。
 
 ## 工作流：配置映射与验证
 
-1. `POST /api/aliases` 建映射（首个目标即 active）；需要固定思考等级就带 `thinking`（形状校验规则见 references 第 8 节）。
-2. （仅在用户明确要求测活时）`POST /api/models/test` 测活目标模型（可带同款 thinking）确认端到端可用；默认不带 thinking。
-3. 已有映射加备用路线：`POST /api/alias-targets`（新候选默认 inactive，不影响现网流量）。
-4. 切换流量：`PATCH /api/alias-targets` 把候选设为 active，切完用测活复核。
+按参考第 4、5、8 节创建或调整映射、分组、候选和 thinking。创建映射的首个目标为 active；已有 active 时新增候选为 inactive，切换使用 `PATCH /api/alias-targets`。合并多个映射的候选用 `POST /api/aliases/merge`：并入已有映射不切流量；带 `delete_sources:true` 的合并会删除源映射，属删除类操作，需确认授权覆盖。
+
+| 验证目标 | 操作与结论 |
+| :--- | :--- |
+| 配置已生效 | 读回映射、active 目标、Provider 和真实模型的 enabled 及相关配置；必要时查询代理模型列表。不产生推理，也不证明上游能完成推理 |
+| 真实模型能推理 | 授权范围内调用 `POST /api/models/test`；它不经过映射层，仅验证指定真实模型和所带 thinking 配置 |
+| 映射链路可用 | 用户要求该验证时，用映射名向对应协议代理入口发起最小必要请求，结合响应与访问日志核对实际目标；沿用协议原生请求字段 |
 
 ## 工作流：排障
 
-1. `GET /api/logs?model=<映射名>` 看最近请求的 status / provider_name / resolved_model / latency_ms。
-2. 按 references 第 9 节路由语义定位断点（常见：Provider 或真实模型被禁用 → 503；没建映射 → 404）。
-3. `GET /api/audit-logs` 追溯是谁改的配置。
-4. 测活返回上游 4xx（402/404 等）时，**直连上游同端点甄别**：网关透传上游状态码，4xx 通常反映上游账户/模型问题（402=额度不足、404=模型未开通或后端函数缺失），不是网关问题。
-5. **禁用 Provider/模型会触发 active 自动修复**（迁到 priority 最小且可用的候选）；若所有候选都不可用时 active 保持原样、访问 503。排障时若发现 active 停在已禁用 Provider 上，先检查其他候选是否也全部不可用。
+1. 按映射名查询最近访问日志，关注 status、provider_name、resolved_model、latency_ms；需要追溯配置变化时查询审计日志。
+2. 按参考第 9 节区分网关路由错误与上游响应：Provider 禁用为 503，真实模型禁用或未建映射为 404。active 不可用时同时检查其他候选的启用状态。
+3. 上游 4xx 可能来自账户、模型或端点配置，结合错误内容定位；直连上游推理复核仍需符合已有推理授权范围。配置修复依用户目标执行，不能由只读排障自动扩大为启用或切换流量。
 
 ## 工作流：备份与恢复
 
-- 导出：`GET /api/backup` 存文件，提醒用户产物含明文密钥。
-- 导入：**危险操作**，先复述「全量替换所有 Provider/分组/模型/映射配置」，获确认后再 `POST /api/backup`；成功后旧 Token 作废，需用备份内 token 重新引导。
+- 导出：`GET /api/backup` 保存到约定位置，告知文件含明文 Key 与 Token，不将内容输出到上下文。
+- 导入：读取指定备份，准备具体替换范围与 Token 影响；确认已有授权覆盖全量替换后执行 `POST /api/backup`，授权不足时再询问。完整格式与引用关系由现有 API 校验，成功后在事务内全量替换配置。恢复包含设置与 Token，不清空已有日志；成功后使用备份 Token 重新验证连接并读回关键配置，Token 值变化时旧凭据失效。
+
+## 完成标准
+
+用户指定对象已达到目标状态，写操作结果已通过响应或必要的读回核对，验证结论与实际执行范围一致。配置任务不以额外推理作为完成门槛；请求返回 `ok` 或 `*_exists` 本身也不能替代目标达成。交付变更摘要、验证结果以及剩余阻塞，已授权且能继续完成的步骤不留作反复确认的下一轮任务。

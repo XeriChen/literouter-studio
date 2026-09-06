@@ -1,12 +1,12 @@
-# AGENTS.md — 项目开发约定（AI 助手必读）
+# AGENTS.md — 项目开发约定
 
-本文件为参与本仓库的 AI 助手提供上下文与硬性约定。**先读本文件，再读 `ARCHITECTURE.md`。**
+本文件保留项目特有的约束、资料入口和完成标准。先确定任务范围，再按第 5 节读取相关资料；本会话已读且未变化的内容可以复用，无需每次改动前通读文档。
 
 ## 1. 权威设计文档
 
-- `ARCHITECTURE.md` 是**唯一权威设计指南**，实现必须以其为准（架构、数据模型、代理管线、红线、已知陷阱）。
-- `README.md` 面向部署与使用者，`AGENTS.md` 面向参与开发的 AI 助手；实现行为变化时先更新 `ARCHITECTURE.md`，再同步另外两份文档中受影响的说明。
-- 遇到文档未覆盖的细节时，遵循核心原则推断：**最小可用、原生透传、不修改请求体**。
+- [ARCHITECTURE.md](ARCHITECTURE.md) 是**唯一权威设计指南**，按任务查阅架构、数据模型、API、代理管线和边界行为。
+- 设计或对外行为变化时，更新架构文档的相关章节，并在同一任务中同步 [README.md](README.md) 和项目 Skill 中受影响的说明；开发约定变化才需要更新本文件。
+- 遇到文档未覆盖的细节时，遵循核心原则推断：**最小可用、原生透传、仅定点改写允许的请求字段**。文档与实现不一致时，结合用户目标和相关代码、测试定位差异，修正受影响的说明或实现。
 
 ## 2. 红线（绝对不可违背）
 
@@ -25,7 +25,7 @@
 | `pnpm typecheck` | `tsc --noEmit` 类型检查 |
 | `pnpm test` | Node 原生单元测试（由 tsx 执行） |
 | `pnpm test:e2e` | Playwright 浏览器冒烟测试（先确保 `web/dist` 已构建） |
-| `pnpm check` | 类型检查 + 单元测试 + 前端生产构建（提交前必须通过） |
+| `pnpm check` | 类型检查 + 单元测试 + 前端生产构建（适用范围见第 8 节） |
 | `pnpm build:web` | 前端构建到 `web/dist` |
 | `pnpm start` | 生产模式：Hono 托管 API + 前端静态文件 |
 
@@ -37,22 +37,21 @@
 - 前端：React 19、Vite 8、Tailwind CSS 4、shadcn/ui、TanStack Query、react-markdown、react-router 8
 - 单包结构，`web/dist` 由 Hono 托管
 
-## 5. 目录职责
+## 5. 按任务读取
 
-| 路径 | 职责 |
-| :--- | :--- |
-| `src/server.ts` | 入口；监听配置按数据库 settings > env > 默认值解析，启动时清日志并处理优雅关闭 |
-| `src/app.ts` | Hono 实例，挂载 `/api`、`/openai`、`/anthropic`，错误中间件，SPA fallback（生产） |
-| `src/db/index.ts` | SQLite 初始化：WAL + 外键，当前 schema v8 基线（开发期可删库重建，仅保留 v6→v7、v7→v8 守卫式加列），settings 读写助手 |
-| `src/middlewares/` | 认证（token 提取校验）/ 错误处理 |
-| `src/proxy/` | 请求体限流/定点替换（model + 思考字段）、undici 上游请求、dispatcher 按 `(proxy_url, timeout)` 缓存、路径 v1 归一化（path.ts） |
-| `src/providers/` | OpenAI / Anthropic 请求头与 URL 构造 |
-| `src/routes/` | 管理 API 装配与领域路由、代理入口流水线 |
-| `src/services/` | 业务层：providers / models / logs（代理访问日志）/ audit（配置操作日志）/ settings / backup / liveness |
-| `src/types/` | 行类型：ProviderGroup / Provider / ProviderModel / ModelAliasGroup / ModelAlias / ModelAliasTarget / Log / Audit / Env |
-| `web/src/api/` | 前端 API client，Token 存 `localStorage['llm_gateway_token']`，401 自动登出回 `/login` |
-| `web/src/pages/` | Login / Home / Providers / Models（映射 + 真实模型）/ Logs / Settings / Playground |
-| `skills/literouter/` | agent 管理网关配置的 Skill 规范：SKILL.md（引导/安全分级/工作流）+ references/api.md（端点操作目录），经 `.opencode/opencode.json` 的 `skills.paths` 注册，危险操作须用户确认 |
+按受影响的行为选择资料和代码入口，跨模块任务扩大范围。下表中的架构章节均指 [ARCHITECTURE.md](ARCHITECTURE.md)；纯文档审查只核对相关文档和配置。
+
+| 任务 | 代码或配置入口 | 相关资料 |
+| :--- | :--- | :--- |
+| 代理、路由、请求体、认证头、流式传输 | `src/routes/proxy.ts`、`src/proxy/`、`src/providers/`、`src/middlewares/` | 架构第 5、6、8 节中的相关约定 |
+| Provider、模型映射或管理 API | `src/routes/api/`、`src/services/`、`src/types/` | 架构第 4、5 节；错误码见第 5 节 |
+| schema、备份与恢复 | `src/db/index.ts`、`src/services/backup.ts` | 架构第 4 节及第 8 节备份边界；本文件第 11 节 |
+| 启动、部署与生产托管 | `src/server.ts`、`src/app.ts`、`vite.config.ts` | 架构第 2、6、8 节中的相关约定；README 配置说明 |
+| 前端页面、交互与 SSE 展示 | `web/src/pages/`、`web/src/components/`、`web/src/api/`、`web/src/lib/sse.ts` | 架构第 7 节；涉及 API 时再查第 5 节 |
+| 开发命令与验证配置 | `package.json`、`tsconfig.json`、`playwright.config.ts`、`test/` | 本文件第 8 节；README 浏览器验证说明 |
+| 实际操作网关配置 | `skills/literouter/` | [SKILL.md](skills/literouter/SKILL.md) 及当前任务涉及的 API 参考章节 |
+
+`skills/literouter/` 是项目 Skill 的维护源；工具的本地安装入口和副本同步方式见 README。开发或规则审查不会自动触发网关引导、读取 Token 或发起管理请求。
 
 ## 6. 硬性约定
 
@@ -72,50 +71,36 @@
 - `host`/`port` 保存后需重启；`global_timeout_ms` 对后续代理请求生效；`log_retention_days` 在下次启动清理时生效。
 - 严禁把泄漏密钥/Token 的代码或常量提交进仓库。
 
-## 8. 代理实现陷阱（提交前逐项核对）
+## 8. 按风险验证
 
-- [ ] undici `bodyTimeout` 显式设为 `0`（防流式长连接被掐断）；`connectTimeout`/`headersTimeout` = timeout；timeout 为 0 时三者都为 0
-- [ ] 映射路由走 `model_aliases.enabled + model_alias_targets.active`（协议隔离），请求期绝不尝试其他候选；模型未启用 404 / Provider 禁用 503；未建映射 404
-- [ ] `custom_headers` 禁止覆盖 `authorization` / `x-api-key` / `api-key` / `accept-encoding`
-- [ ] 透传保留了客户端 Query String；`base_url` 拼接前去除尾部 `/`
-- [ ] 客户端断连（`c.req.raw.signal`）立即 abort 上游请求
-- [ ] 日志在收到上游响应头时立即写入，`latency_ms` = 网关收请求到收响应头耗时（首包）；日志记录请求映射名（model）与实际路由的提供商名（provider_name）/真实模型名（resolved_model）；上游 5xx 的日志 status 保留上游状态码
-- [ ] 上游 3xx/4xx（400/401/429 等）原样透传不重新包装；5xx 才包 `upstream_error`（502）；超时 `upstream_timeout`（504）
-- [ ] `accept-encoding: identity` 防止上游压缩破坏 SSE
-- [ ] 生产环境 Hono 配 SPA fallback；仅**非 API、非静态资源的 GET** 回 `index.html`；`/api` 未匹配返回 404 JSON
-- [ ] 代理请求须用 undici v8 实测口径：超时配置在 Agent/ProxyAgent 构造参数（按 proxy_url+timeout 缓存 dispatcher），`bodyTimeout: 0`；响应 body 为 Node Readable（`dump()` 排空 / `new Response(readable)` 透传）
-- [ ] `GET */v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名；其他非 POST 代理请求返回 405
-- [ ] 思考等级仅按映射配置改写顶层 `thinking`（Anthropic）/`reasoning_effort`（OpenAI）：override 无条件替换/注入，default 仅客户端未携带时注入；value 入库前按协议校验（Anthropic enabled 要求 budget_tokens 为 ≥1024 整数）
-- [ ] 模型测活：提示词黑名单（"hi/hello/你好/测试/test/1"），trim 后 ≥4 字符，默认提示词"现在的美国总统是谁"，30s 硬超时；可携带映射同款 `thinking` 配置，value 校验后注入测活请求体
-- [ ] Provider 连通性测试：401/403 判认证失败，其他 HTTP 响应判网络可达；配置超时为 0 时仍有 30s AbortSignal 兜底
+验证范围取决于受影响的行为和依赖，不只看文件数量。代理陷阱、API 错误码及数据边界以架构文档的对应章节为准，相关改动核对相关条目；跨模块改动扩大覆盖范围。
 
-## 9. 错误码速查
+| 改动类型 | 默认验证 |
+| :--- | :--- |
+| 只读审查、文档、规则、纯整理 | 核对内容、链接、命令和引用的一致性；有修改时运行 `git diff --check`；Skill 变更再检查 frontmatter 与安装副本，无需构建或应用测试 |
+| 局部 TypeScript 逻辑 | `pnpm typecheck` 与相关现有测试；按回归风险补充有意义的测试 |
+| 局部 UI | 涉及 TS 时类型检查，运行 `pnpm build:web` 并验证受影响的交互；布局变化检查相关桌面和移动视口 |
+| 核心代理、鉴权、数据库、共享逻辑、依赖或构建配置 | `pnpm check` 加受影响的边界验证；涉及浏览器行为或生产托管时运行适用 E2E |
 
-| HTTP | code | 触发 |
-| :--- | :--- | :--- |
-| 400 | `invalid_request_body` | body 非 JSON、参数非法或代理请求缺少有效 model |
-| 413 | `invalid_request_body` | 请求体超过 50 MiB |
-| 400 | `invalid_test_prompt` | 测活提示词命中黑名单或过短 |
-| 400 | `invalid_backup` | 备份内部引用、协议或候选关系不合法 |
-| 401 | `invalid_api_key` | 网关 Token 校验失败 |
-| 404 | `model_not_found` | 模型不存在、未启用或未建映射 |
-| 404 | `provider_not_found` / `provider_group_not_found` / `alias_not_found` / `alias_group_not_found` / `alias_target_not_found` | 管理 API 目标不存在 |
-| 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 同协议 Provider 分组名、映射名/分组名或映射候选重复 |
-| 404 | `not_found` | `/api` 未匹配（代理端点路径已自动归一化，缺失/多重 v1 均允许） |
-| 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
-| 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
-| 502 | `upstream_error` | 代理上游不可达/拒绝连接/5xx，或管理侧上游调用失败 |
-| 504 | `upstream_timeout` | 代理连接/响应头阶段或管理侧上游调用超时 |
-| 500 | `internal_error` | 未处理的网关内部异常 |
+- 单元测试可按文件运行，例如 `pnpm exec tsx --test test/path.test.ts`；E2E 可用 `pnpm exec playwright test --grep '<用例名>'` 选择相关场景。现有用例未覆盖变更风险时补充针对性验证。
+- E2E 前确认 `web/dist` 已按当前前端构建、目标服务对应当前修改，并核对所需 Token 和测试数据；实际启动、复用服务和 Token 回退行为见 README。相关关键用例跳过不算验证完成，模拟 API 的 UI 用例也不证明真实后端链路可用。
+- 同一代码、依赖及相关配置下已通过的验证可以复用。只在新改动、失败或未解决的疑点影响结论时扩大或重跑；提交动作本身不触发重复验证。
 
-## 10. 完成定义
+## 9. 授权与推进
 
-- `pnpm check` 通过；涉及浏览器行为或生产托管时再运行 `pnpm test:e2e`
-- 第 8 节代理陷阱清单逐项核对通过
-- 行为与 `ARCHITECTURE.md` 中 API、错误码、边界行为一致
+- 用户已明确的目标、范围和授权在本任务中持续有效。常规实现、可逆修正和验证在授权范围内推进；需要用户输入的是尚不明确且会影响结果或操作后果的信息。
+- 需要澄清或确认时，先完成不依赖该信息的工作，并准备好可审阅的对象、差异和影响说明。已有明确授权不重复索取；实际网关操作按 Skill 中的影响与授权规则执行。
+- 遇到失败先定位原因，能在任务范围内修复就继续；没有新依据时不盲目重复操作。只有缺少必要信息、权限或外部条件且无法继续的部分才标为阻塞，不因一次失败停止其余可完成工作。
+
+## 10. 完成、提交与整理
+
+- 用户要求的结果已实现或审查意见已交付，相关行为符合架构约定，受影响文档已同步；通过检查命令本身不能替代目标达成。
+- 第 8 节适用的验证已完成。交付时说明实际验证结果；未运行、跳过、失败或受阻的必要验证明确列出，不能表述为全部通过。真实阻塞时交代已完成工作、缺少的条件与受影响结论。
+- 有文件修改时审阅本任务 diff，核对范围和敏感信息。只暂存、提交已授权且属于本任务的改动；提交、推送按用户已有授权执行，无需为了交付强制产生 commit 或要求工作树干净。
+- 整理限本任务产生的临时文件、测试产物和不再需要的进程；保留用户改动与已有运行服务。为用户保留的预览服务交代地址，不执行无关重构、全仓清理或默认删库。
 
 ## 11. 开发阶段数据策略（当前有效）
 
-- 当前仍处于开发阶段、没有正式用户数据；允许破坏性 schema 变更、删除 `data/gateway.db` 后重建。
+- 当前仍处于开发阶段、没有正式用户数据；相关 schema 开发任务中允许破坏性变更、删除 `data/gateway.db` 后重建。该许可不作为日常整理或排障的默认步骤。
 - 不为历史 v1–v5 数据库保留运行时迁移兼容路径；当前 schema 直接作为全新基线维护。
 - 备份格式也以当前开发版为准，不需要兼容正式部署前的旧备份；恢复必须保持“配置全量替换”语义，不能因未分组映射不受分组级联删除而残留旧配置。若未来进入正式部署，由用户另行确认迁移与兼容策略。
