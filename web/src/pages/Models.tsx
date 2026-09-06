@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, ListChecks, Loader2, Plus, Search, Trash2, X, Box } from 'lucide-react'
+import { Activity, Box, ChevronDown, ChevronRight, ListChecks, Loader2, Plus, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
@@ -70,6 +70,7 @@ function RealModelsList() {
   const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState(false)
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -190,6 +191,22 @@ function RealModelsList() {
   }, [filtered, selected])
   const allFilteredSelected = filtered.length > 0 && selectedModels.length === filtered.length
 
+  // 分组默认折叠；搜索或筛选到具体 Provider 时自动展开，避免"筛了却看不见"
+  const forceExpand = debouncedSearch.trim().length > 0 || providerId !== 'all'
+
+  const modelGroups = useMemo(() => {
+    const byProvider = new Map<string, ProviderModel[]>()
+    for (const row of filtered) {
+      const list = byProvider.get(row.provider_id) ?? []
+      list.push(row)
+      byProvider.set(row.provider_id, list)
+    }
+    const order = new Map((providers.data ?? []).map((p, index) => [p.id, index]))
+    return [...byProvider.entries()]
+      .sort((a, b) => (order.get(a[0]) ?? 0) - (order.get(b[0]) ?? 0))
+      .map(([pid, rows]) => ({ provider: (providers.data ?? []).find((p) => p.id === pid), rows }))
+  }, [filtered, providers.data])
+
   const runTest = useMutation({
     mutationFn: ({ model, prompt }: { model: ProviderModel; prompt: string }) =>
       api<{ reply: string; latency_ms: number }>('/api/models/test', {
@@ -210,6 +227,115 @@ function RealModelsList() {
         },
         onError: (err) => setTestResult(`测试失败：${err instanceof Error ? err.message : 'unknown'}`),
       },
+    )
+  }
+
+  function toggleRows(keys: string[]) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (keys.every((key) => next.has(key))) keys.forEach((key) => next.delete(key))
+      else keys.forEach((key) => next.add(key))
+      return next
+    })
+  }
+
+  function renderModelTable(rows: ProviderModel[]) {
+    return (
+      <Table className="data-table">
+        <TableHeader>
+          <TableRow>
+            {selectionMode && <TableHead className="w-10 pl-4"><span className="sr-only">选择</span></TableHead>}
+            <TableHead>Model</TableHead>
+            <TableHead>来源</TableHead>
+            <TableHead>启用</TableHead>
+            <TableHead>测活</TableHead>
+            <TableHead className="pr-6 text-right">操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((m) => {
+            const rowKey = modelKey(m)
+            return (
+              <TableRow key={rowKey} className={selected.has(rowKey) ? 'bg-muted/50' : ''}>
+                {selectionMode && <TableCell className="pl-4">
+                  <Checkbox checked={selected.has(rowKey)} onCheckedChange={() => toggleSelect(rowKey)} aria-label={`选择 ${m.model_id}`} />
+                </TableCell>}
+                <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
+                <TableCell><Badge variant="secondary">{m.source}</Badge></TableCell>
+                <TableCell>
+                  <Switch
+                    checked={!!m.enabled}
+                    disabled={!m.provider_enabled}
+                    onCheckedChange={() => toggleMutation.mutate(m)}
+                  />
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
+                      <Activity className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="sm" disabled={quickTestId === rowKey}
+                      onClick={() => {
+                        setQuickTestId(rowKey)
+                        runTest.mutate(
+                          { model: m, prompt: '现在的美国总统是谁' },
+                          {
+                            onSuccess: (data) => addToast(true, `${m.model_id}: ${data.reply}`, data.latency_ms),
+                            onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),
+                            onSettled: () => setQuickTestId(null),
+                          },
+                        )
+                      }}>
+                      {quickTestId === rowKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '快速测试'}
+                    </Button>
+                  </div>
+                </TableCell>
+                <TableCell className="pr-6">
+                  <div className="flex justify-end">
+                    <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除模型「${m.model_id}」？`)) delMutation.mutate(m) }}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    )
+  }
+
+  function renderProviderGroup(entry: { provider: Provider | undefined; rows: ProviderModel[] }) {
+    const { provider, rows } = entry
+    const pid = rows[0]?.provider_id ?? provider?.id ?? ''
+    const isOpen = forceExpand || expandedProviders.has(pid)
+    const name = provider?.name ?? pid
+    const keys = rows.map((m) => modelKey(m))
+    const selectedCount = keys.filter((key) => selected.has(key)).length
+    const allSelected = rows.length > 0 && selectedCount === rows.length
+    return (
+      <Card key={pid} className="console-surface shadow-none">
+        <CardHeader className="items-stretch justify-between gap-2 space-y-0 border-b border-foreground/10 px-5 py-3 sm:flex-row sm:items-center">
+          <button className="flex min-w-0 flex-wrap items-center gap-2 text-left" onClick={() => setExpandedProviders((prev) => { const next = new Set(prev); if (next.has(pid)) next.delete(pid); else next.add(pid); return next })} aria-expanded={isOpen}>
+            {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+            <CardTitle className="truncate text-sm font-medium">{name}</CardTitle>
+            <Badge variant={provider?.protocol === 'openai' ? 'outline' : 'secondary'}>{provider?.protocol}</Badge>
+            <Badge variant="secondary">{rows.length}</Badge>
+            <Badge variant="outline">{rows.filter((m) => m.enabled).length} 已启用</Badge>
+          </button>
+          {selectionMode && (
+            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={allSelected ? true : selectedCount > 0 ? 'indeterminate' : false}
+                onCheckedChange={() => toggleRows(keys)}
+                aria-label={`选择 ${name} 的全部模型`}
+              />
+              <span>全选本组</span>
+            </div>
+          )}
+        </CardHeader>
+        {isOpen && <CardContent className="p-0">{renderModelTable(rows)}</CardContent>}
+      </Card>
     )
   }
 
@@ -309,102 +435,41 @@ function RealModelsList() {
             <Button size="sm" variant={selectionMode ? 'secondary' : 'ghost'} onClick={() => { if (selectionMode) setSelected(new Set()); setSelectionMode(!selectionMode) }}>
               <ListChecks className="h-4 w-4" /> 多选
             </Button>
+            {selectionMode && (
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={allFilteredSelected ? true : selectedModels.length > 0 ? 'indeterminate' : false}
+                  onCheckedChange={selectAll}
+                  aria-label="全选当前筛选下的全部模型"
+                />
+                <span>全选筛选</span>
+              </label>
+            )}
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <Table className="data-table">
-            <TableHeader>
-              <TableRow>
-                {selectionMode && <TableHead className="w-10 pl-4">
-                  <Checkbox
-                    checked={allFilteredSelected ? true : selectedModels.length > 0 ? 'indeterminate' : false}
-                    onCheckedChange={selectAll}
-                    aria-label="全选当前筛选下的全部模型"
-                  />
-                </TableHead>}
-                <TableHead>Provider</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>协议</TableHead>
-                <TableHead>来源</TableHead>
-                <TableHead>启用</TableHead>
-                <TableHead>测活</TableHead>
-                <TableHead className="pr-6 text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((m) => {
-                const rowKey = modelKey(m)
-                return (
-                  <TableRow key={rowKey} className={selected.has(rowKey) ? 'bg-muted/50' : ''}>
-                    {selectionMode && <TableCell className="pl-4">
-                      <Checkbox checked={selected.has(rowKey)} onCheckedChange={() => toggleSelect(rowKey)} aria-label={`选择 ${m.model_id}`} />
-                    </TableCell>}
-                    <TableCell>{m.provider_name}</TableCell>
-                    <TableCell className="max-w-[220px] truncate font-mono text-xs">{m.model_id}</TableCell>
-                    <TableCell><Badge variant={m.protocol === 'openai' ? 'outline' : 'secondary'}>{m.protocol}</Badge></TableCell>
-                    <TableCell><Badge variant="secondary">{m.source}</Badge></TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={!!m.enabled}
-                        disabled={!m.provider_enabled}
-                        onCheckedChange={() => toggleMutation.mutate(m)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
-                          <Activity className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="sm" disabled={quickTestId === rowKey}
-                          onClick={() => {
-                            setQuickTestId(rowKey)
-                            runTest.mutate(
-                              { model: m, prompt: '现在的美国总统是谁' },
-                              {
-                                onSuccess: (data) => addToast(true, `${m.model_id}: ${data.reply}`, data.latency_ms),
-                                onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),
-                                onSettled: () => setQuickTestId(null),
-                              },
-                            )
-                          }}>
-                          {quickTestId === rowKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '快速测试'}
-                        </Button>
-                      </div>
-                    </TableCell>
-                    <TableCell className="pr-6">
-                      <div className="flex justify-end">
-                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除模型「${m.model_id}」？`)) delMutation.mutate(m) }}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-              {!filtered.length && !models.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={selectionMode ? 8 : 7} className="h-32 text-center">
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <Box className="h-8 w-8" />
-                      <p className="text-sm">{(models.data ?? []).length === 0 ? '还没有模型' : '当前筛选条件下无模型'}</p>
-                      {(models.data ?? []).length === 0 && (
-                        <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
-                          <Plus className="h-4 w-4" /> 手动添加
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-              {models.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={selectionMode ? 8 : 7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
       </Card>
+
+      <section aria-label="真实模型分组" className="space-y-4">
+        {modelGroups.map((entry) => renderProviderGroup(entry))}
+        {!filtered.length && !models.isLoading && (
+          <Card className="console-surface">
+            <CardContent className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">
+              <Box className="h-8 w-8" />
+              <p className="text-sm">{(models.data ?? []).length === 0 ? '还没有模型' : '当前筛选条件下无模型'}</p>
+              {(models.data ?? []).length === 0 && (
+                <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
+                  <Plus className="h-4 w-4" /> 手动添加
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+        {models.isLoading && (
+          <Card className="console-surface">
+            <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">加载中...</CardContent>
+          </Card>
+        )}
+      </section>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
