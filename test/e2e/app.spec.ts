@@ -397,3 +397,142 @@ test('merges selected aliases into a new alias from the bulk bar', async ({ page
   })
   await expect(page.getByText(/合并完成（新建映射）.*新增 2 个候选/)).toBeVisible()
 })
+
+test('imports aliases into a group and cleans up invalid aliases', async ({ page }) => {
+  const ts = '2026-09-06T00:00:00.000Z'
+  const target = (id: number, aliasName: string) => ({
+    id,
+    protocol: 'openai',
+    alias_name: aliasName,
+    provider_id: 'p1',
+    model_id: 'mm-x',
+    priority: 0,
+    active: 1,
+    created_at: ts,
+    updated_at: ts,
+    provider_name: 'Primary',
+    provider_protocol: 'openai',
+    provider_enabled: 1,
+    target_enabled: 1,
+  })
+  const alias = (aliasName: string, groupId: string | null, targets: unknown[]) => ({
+    protocol: 'openai',
+    alias_name: aliasName,
+    group_id: groupId,
+    group_name: groupId ? 'Production' : null,
+    enabled: 1,
+    thinking_json: null,
+    provider_id: targets.length ? 'p1' : null,
+    model_id: targets.length ? 'mm-x' : null,
+    created_at: ts,
+    updated_at: ts,
+    provider_name: targets.length ? 'Primary' : null,
+    provider_protocol: targets.length ? ('openai' as const) : null,
+    provider_enabled: 1,
+    target_enabled: 1,
+    targets,
+  })
+  const aliases = [
+    alias('alias-a', 'g1', [target(1, 'alias-a')]),
+    alias('alias-b', null, [target(2, 'alias-b')]),
+    alias('dead-alias', null, []),
+  ]
+  const imported: Array<{ alias_name: string; group_id: string | null }> = []
+  const deleted: string[] = []
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [{ protocol: 'openai', id: 'g1', name: 'Production', created_at: ts, updated_at: ts, alias_count: 1, enabled_count: 1 }] }) }))
+  await page.route('**/api/providers', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/models', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/aliases', async (route) => {
+    const method = route.request().method()
+    if (method === 'PATCH') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { alias_name: string; group_id: string | null }
+      imported.push(body)
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { protocol: 'openai', alias_name: body.alias_name } }) })
+      return
+    }
+    if (method === 'DELETE') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { alias_name: string }
+      deleted.push(body.alias_name)
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: {} }) })
+      return
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: aliases }) })
+  })
+
+  await page.goto('/models')
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  await page.locator('section button[aria-expanded]').first().click()
+  await expect(page.getByText('alias-a')).toBeVisible()
+
+  // 分组编辑：导入映射名，支持模糊搜索
+  await page.getByRole('button', { name: '向分组 Production 导入映射' }).click()
+  const importDialog = page.getByRole('dialog')
+  await expect(importDialog.getByText('导入映射到分组「Production」')).toBeVisible()
+  // 已在目标分组内的映射不出现在候选里
+  await expect(importDialog.getByLabel('选择 alias-a')).toHaveCount(0)
+  await expect(importDialog.getByLabel('选择 alias-b')).toBeVisible()
+  await expect(importDialog.getByLabel('选择 dead-alias')).toBeVisible()
+  await importDialog.getByPlaceholder('模糊搜索映射名…').fill('dead')
+  await expect(importDialog.getByLabel('选择 alias-b')).toHaveCount(0)
+  await importDialog.getByLabel('选择 dead-alias').check()
+  await importDialog.getByRole('button', { name: /^导入 1 个$/ }).click()
+  await expect.poll(() => imported).toEqual([{ protocol: 'openai', alias_name: 'dead-alias', group_id: 'g1' }])
+  await expect(page.getByText('已导入 1 个映射至分组「Production」')).toBeVisible()
+
+  // 一键删除无效映射（无候选目标）
+  const cleanup = page.getByRole('button', { name: /清理无效映射（1）/ })
+  await expect(cleanup).toBeVisible()
+  page.on('dialog', (confirmDialog) => confirmDialog.accept())
+  await cleanup.click()
+  await expect.poll(() => deleted).toEqual(['dead-alias'])
+  await expect(page.getByText('已清理 1 个无效映射')).toBeVisible()
+})
+
+test('creates an alias via searchable model selection and real-model name fill', async ({ page }) => {
+  const ts = '2026-09-06T00:00:00.000Z'
+  let createBody: Record<string, unknown> | null = null
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/aliases', async (route) => {
+    if (route.request().method() === 'POST') {
+      createBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { protocol: 'openai', alias_name: createBody.alias_name } }) })
+      return
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) })
+  })
+  await page.route('**/api/providers', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [{ id: 'p1', name: 'Primary', protocol: 'openai', group_id: null, base_url: 'https://api.example.test', auth: {}, custom_headers: {}, enabled: 1, created_at: ts, updated_at: ts }] }) }))
+  await page.route('**/api/models', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [
+    { provider_id: 'p1', model_id: 'gpt-4o', display_name: 'GPT-4o Omni', enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Primary', provider_enabled: 1, created_at: ts, updated_at: ts },
+    { provider_id: 'p1', model_id: 'gpt-4o-mini', display_name: null, enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Primary', provider_enabled: 1, created_at: ts, updated_at: ts },
+    { provider_id: 'p1', model_id: 'o3', display_name: null, enabled: 1, source: 'manual', protocol: 'openai', provider_name: 'Primary', provider_enabled: 1, created_at: ts, updated_at: ts },
+  ] }) }))
+
+  await page.goto('/models')
+  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  await page.getByRole('button', { name: /新建映射/ }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: '新建模型映射' })).toBeVisible()
+
+  // 选择 Provider（下拉顺序：协议、分组、Provider）
+  await dialog.getByRole('combobox').nth(2).click()
+  await page.getByRole('option', { name: 'Primary' }).click()
+
+  // 模糊搜索真实模型并选择；映射名为空时自动填入真实模型名
+  await dialog.getByRole('combobox', { name: '当前目标' }).click()
+  await dialog.getByPlaceholder('模糊搜索真实模型…').fill('mini')
+  await dialog.getByRole('option', { name: 'gpt-4o-mini' }).click()
+  await expect(dialog.getByPlaceholder('my-brain')).toHaveValue('gpt-4o-mini')
+
+  // 改选其他模型后，可用按钮直接把真实模型名填为映射名
+  await dialog.getByRole('combobox', { name: '当前目标' }).click()
+  await dialog.getByPlaceholder('模糊搜索真实模型…').fill('o3')
+  await dialog.getByRole('option', { name: 'o3' }).click()
+  await expect(dialog.getByPlaceholder('my-brain')).toHaveValue('gpt-4o-mini')
+  await dialog.getByRole('button', { name: '填入真实模型名' }).click()
+  await expect(dialog.getByPlaceholder('my-brain')).toHaveValue('o3')
+
+  await dialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect.poll(() => createBody).toMatchObject({ protocol: 'openai', alias_name: 'o3', provider_id: 'p1', model_id: 'o3' })
+})

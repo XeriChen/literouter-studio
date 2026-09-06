@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
+import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, Eraser, FolderInput, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, TextCursorInput, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, ThinkingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
+import { SearchableSelect } from '@/components/searchable-select'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -224,10 +225,21 @@ function TargetPanel({
         </div>
         <div className="min-w-0 flex-1 space-y-1">
           <Label className="text-xs">模型</Label>
-          <Select value={modelId} onValueChange={setModelId} disabled={!providerId}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="选择模型" /></SelectTrigger>
-            <SelectContent>{availableModels.map((model) => <SelectItem key={model.model_id} value={model.model_id} disabled={existing.has(`${model.provider_id}/${model.model_id}`)}>{model.display_name || model.model_id}</SelectItem>)}</SelectContent>
-          </Select>
+          <SearchableSelect
+            value={modelId}
+            onValueChange={setModelId}
+            disabled={!providerId}
+            className="h-8 text-xs"
+            placeholder={providerId ? '搜索并选择模型' : '先选择 Provider'}
+            searchPlaceholder="模糊搜索真实模型…"
+            emptyText="没有匹配的真实模型"
+            options={availableModels.map((model) => ({
+              value: model.model_id,
+              label: model.display_name || model.model_id,
+              keywords: [model.model_id, ...(model.display_name ? [model.display_name] : [])],
+              disabled: existing.has(`${model.provider_id}/${model.model_id}`),
+            }))}
+          />
         </div>
         <Button size="sm" variant="outline" disabled={!providerId || !modelId || existing.has(`${providerId}/${modelId}`)} onClick={() => { onAdd(providerId, modelId); setModelId('') }}><Plus className="h-3.5 w-3.5" /> 添加</Button>
       </div>
@@ -265,6 +277,9 @@ export default function ModelAliases() {
   const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null)
   const [dragAliasKey, setDragAliasKey] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState<Set<string>>(new Set())
+  const [importOpen, setImportOpen] = useState<AliasGroup | null>(null)
+  const [importSearch, setImportSearch] = useState('')
+  const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
   const toastId = useRef(0)
   const chromeInset = useBottomInset()
 
@@ -411,11 +426,53 @@ export default function ModelAliases() {
     },
     onError: (error) => toast(false, error instanceof Error ? error.message : '合并失败'),
   })
+  const importToGroupMutation = useMutation({
+    mutationFn: async ({ group, names }: { group: AliasGroup; names: string[] }) => {
+      await Promise.all(names.map((name) =>
+        api('/api/aliases', { method: 'PATCH', body: JSON.stringify({ protocol: group.protocol, alias_name: name, group_id: group.id }) })
+      ))
+    },
+    onSuccess: (_data, { group, names }) => {
+      setImportOpen(null)
+      setExpandedGroups((previous) => new Set(previous).add(`${group.protocol}/${group.id}`))
+      invalidate()
+      toast(true, `已导入 ${names.length} 个映射至分组「${group.name}」`)
+    },
+    onError: (error) => { invalidate(); toast(false, error instanceof Error ? error.message : '导入映射失败') },
+  })
+  const cleanupInvalidMutation = useMutation({
+    mutationFn: async (items: ModelAlias[]) => {
+      await Promise.all(items.map((a) =>
+        api('/api/aliases', { method: 'DELETE', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name }) })
+      ))
+    },
+    onSuccess: (_data, items) => { invalidate(); toast(true, `已清理 ${items.length} 个无效映射`) },
+    onError: (error) => { invalidate(); toast(false, error instanceof Error ? error.message : '清理无效映射失败') },
+  })
 
   const filteredGroups = (groups.data ?? []).filter((group) => protocol === 'all' || group.protocol === protocol)
   function rowsFor(protocolValue: Protocol, groupId: string | null) {
     return filteredRows.filter((row) => row.protocol === protocolValue && row.group_id === groupId)
   }
+
+  // 无效映射：没有任何候选目标（或候选全部指向已删除的真实模型/Provider），已不可调用
+  const invalidAliases = useMemo(
+    () => rows.filter((row) => (protocol === 'all' || row.protocol === protocol) && row.targets.length === 0),
+    [rows, protocol],
+  )
+
+  const importCandidates = useMemo(() => {
+    if (!importOpen) return []
+    return rows.filter((row) => row.protocol === importOpen.protocol && row.group_id !== importOpen.id)
+  }, [importOpen, rows])
+  const importFiltered = useMemo(() => {
+    const query = importSearch.trim().toLowerCase()
+    if (!query) return importCandidates
+    return importCandidates.filter((row) =>
+      row.alias_name.toLowerCase().includes(query) ||
+      (row.group_name ?? '').toLowerCase().includes(query)
+    )
+  }, [importCandidates, importSearch])
 
   function openMerge() {
     if (!selectedProtocol) return
@@ -425,6 +482,21 @@ export default function ModelAliases() {
     setMergeGroup('')
     setMergeDeleteSources(false)
     setMergeOpen(true)
+  }
+
+  function openImport(group: AliasGroup) {
+    setImportOpen(group)
+    setImportSearch('')
+    setImportSelected(new Set())
+  }
+
+  function toggleImportSelected(aliasName: string) {
+    setImportSelected((previous) => {
+      const next = new Set(previous)
+      if (next.has(aliasName)) next.delete(aliasName)
+      else next.add(aliasName)
+      return next
+    })
   }
 
   function openRename(protocolValue: Protocol, id: string, name: string) {
@@ -517,6 +589,7 @@ export default function ModelAliases() {
               <ListChecks className="h-4 w-4" />
             </Button>
             {group && <>
+              <Button size="sm" variant="ghost" aria-label={`向分组 ${group.name} 导入映射`} title="导入映射" onClick={() => openImport(group)}><FolderInput className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 导入映射</span></Button>
               <Button size="sm" variant="ghost" aria-label={`清空分组 ${group.name} 内的映射`} onClick={() => { if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) groupActionMutation.mutate({ action: 'clear', group }) }}><Trash2 className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 清空映射</span></Button>
               <Button size="sm" variant="ghost" onClick={() => openRename(group.protocol, group.id, group.name)}><Pencil className="h-3.5 w-3.5" /></Button>
               <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -603,7 +676,12 @@ export default function ModelAliases() {
       <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button size="sm" variant="outline" title="删除所有没有任何候选目标（已不可调用）的映射" onClick={() => {
+          if (!invalidAliases.length) { toast(true, '没有无效映射'); return }
+          const preview = invalidAliases.slice(0, 8).map((alias) => alias.alias_name).join('、')
+          const suffix = invalidAliases.length > 8 ? ` 等 ${invalidAliases.length} 个` : ''
+          if (window.confirm(`删除 ${invalidAliases.length} 个无效映射（${preview}${suffix}）？无效指没有任何候选目标，已不可调用且无法自行恢复。`)) cleanupInvalidMutation.mutate(invalidAliases)
+        }} disabled={cleanupInvalidMutation.isPending}><Eraser className="h-4 w-4" /> 清理无效映射{invalidAliases.length ? `（${invalidAliases.length}）` : ''}</Button><Button size="sm" variant="outline" onClick={() => setGroupOpen(true)}><Plus className="h-4 w-4" /> 新建分组</Button><Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> 新建映射</Button></div></div>
       {visibleProtocols.map((protocolValue) => {
         const protocolGroups = filteredGroups.filter((group) => group.protocol === protocolValue)
         const hasSearch = debouncedSearch.trim().length > 0
@@ -616,7 +694,39 @@ export default function ModelAliases() {
 
     <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>新建映射分组</DialogTitle><DialogDescription>分组只用于管理和列表展示，不参与代理路由。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={groupForm.protocol} onValueChange={(value) => setGroupForm({ ...groupForm, protocol: value as Protocol })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>分组名称</Label><Input value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} placeholder="生产环境" /></div></div><DialogFooter><Button variant="outline" onClick={() => setGroupOpen(false)}>取消</Button><Button disabled={!groupForm.name.trim() || addGroupMutation.isPending} onClick={() => addGroupMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
 
-    <Dialog open={addOpen} onOpenChange={setAddOpen}><DialogContent><DialogHeader><DialogTitle>新建模型映射</DialogTitle><DialogDescription>首个目标必须是当前已启用的 Provider 和真实模型。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={addForm.protocol} onValueChange={(value) => setAddForm({ ...addForm, protocol: value as Protocol, group_id: '', provider_id: '', model_id: '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>映射名</Label><Input value={addForm.alias_name} onChange={(event) => setAddForm({ ...addForm, alias_name: event.target.value })} placeholder="my-brain" /></div><div className="space-y-1.5"><Label>分组（可选）</Label><Select value={addForm.group_id || 'none'} onValueChange={(value) => setAddForm({ ...addForm, group_id: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{addGroups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Provider</Label><Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}><SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger><SelectContent>{addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>当前目标</Label><Select value={addForm.model_id} onValueChange={(value) => setAddForm({ ...addForm, model_id: value })} disabled={!addForm.provider_id}><SelectTrigger><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{addModels.map((model) => <SelectItem key={model.model_id} value={model.model_id}>{model.display_name || model.model_id}</SelectItem>)}</SelectContent></Select></div><ThinkingFields protocol={addForm.protocol} form={addThinking} onChange={setAddThinking} /></div><DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>取消</Button><Button disabled={addAliasMutation.isPending || !addForm.alias_name.trim() || !addForm.provider_id || !addForm.model_id} onClick={() => addAliasMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={importOpen !== null} onOpenChange={(open) => !open && setImportOpen(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>导入映射到分组「{importOpen?.name}」</DialogTitle>
+          <DialogDescription>把当前协议下已有映射（未分组或其他分组）移入该分组；不改变映射的候选目标与启用状态。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input autoFocus value={importSearch} onChange={(event) => setImportSearch(event.target.value)} placeholder="模糊搜索映射名…" />
+          </div>
+          <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1.5">
+            {importFiltered.map((alias) => (
+              <label key={alias.alias_name} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+                <Checkbox checked={importSelected.has(alias.alias_name)} onCheckedChange={() => toggleImportSelected(alias.alias_name)} aria-label={`选择 ${alias.alias_name}`} />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{alias.alias_name}</span>
+                <Badge variant="secondary" className="shrink-0">{alias.group_name ?? '未分组'}</Badge>
+              </label>
+            ))}
+            {!importFiltered.length && <p className="py-6 text-center text-xs text-muted-foreground">没有可导入的映射。</p>}
+          </div>
+          {importSelected.size > 0 && <p className="text-xs text-muted-foreground">已选 {importSelected.size} 个映射，导入后会从原分组移出。</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setImportOpen(null)}>取消</Button>
+          <Button disabled={!importSelected.size || importToGroupMutation.isPending} onClick={() => importOpen && importToGroupMutation.mutate({ group: importOpen, names: [...importSelected] })}>
+            {importToGroupMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入{importSelected.size ? ` ${importSelected.size} 个` : ''}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={addOpen} onOpenChange={setAddOpen}><DialogContent><DialogHeader><DialogTitle>新建模型映射</DialogTitle><DialogDescription>首个目标必须是当前已启用的 Provider 和真实模型。</DialogDescription></DialogHeader><div className="space-y-4 py-2"><div className="space-y-1.5"><Label>协议</Label><Select value={addForm.protocol} onValueChange={(value) => setAddForm({ ...addForm, protocol: value as Protocol, group_id: '', provider_id: '', model_id: '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label>映射名</Label>{addForm.model_id && <button type="button" className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground" title={`映射名填入 ${addForm.model_id}`} onClick={() => setAddForm((form) => ({ ...form, alias_name: form.model_id }))}><TextCursorInput className="h-3 w-3" /> 填入真实模型名</button>}</div><Input value={addForm.alias_name} onChange={(event) => setAddForm({ ...addForm, alias_name: event.target.value })} placeholder="my-brain" /></div><div className="space-y-1.5"><Label>分组（可选）</Label><Select value={addForm.group_id || 'none'} onValueChange={(value) => setAddForm({ ...addForm, group_id: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{addGroups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Provider</Label><Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}><SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger><SelectContent>{addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>当前目标</Label><SearchableSelect value={addForm.model_id} onValueChange={(value) => setAddForm((form) => ({ ...form, model_id: value, alias_name: form.alias_name.trim() ? form.alias_name : value }))} disabled={!addForm.provider_id} ariaLabel="当前目标" placeholder={addForm.provider_id ? '搜索并选择模型' : '先选择 Provider'} searchPlaceholder="模糊搜索真实模型…" emptyText="没有匹配的真实模型" options={addModels.map((model) => ({ value: model.model_id, label: model.display_name || model.model_id, keywords: [model.model_id, ...(model.display_name ? [model.display_name] : [])] }))} /></div><ThinkingFields protocol={addForm.protocol} form={addThinking} onChange={setAddThinking} /></div><DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>取消</Button><Button disabled={addAliasMutation.isPending || !addForm.alias_name.trim() || !addForm.provider_id || !addForm.model_id} onClick={() => addAliasMutation.mutate()}>创建</Button></DialogFooter></DialogContent></Dialog>
 
     <Dialog open={thinkingFor !== null} onOpenChange={(open) => !open && setThinkingFor(null)}>
       <DialogContent>
