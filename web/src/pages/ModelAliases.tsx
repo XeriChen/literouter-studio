@@ -577,14 +577,14 @@ export default function ModelAliases() {
           patchAliasMutation.mutate({ protocol: dragProtocol, alias_name: dragAliasName, group_id: group?.id ?? null })
         }}
       >
-        <CardHeader className="flex-row items-center justify-between gap-2 border-b border-foreground/10 px-5 py-3">
-          <button className="flex min-w-0 items-center gap-2 text-left" onClick={toggle} aria-expanded={isOpen}>
+        <CardHeader className="items-stretch justify-between gap-2 space-y-0 border-b border-foreground/10 px-5 py-3 sm:flex-row sm:items-center">
+          <button className="flex min-w-0 flex-wrap items-center gap-2 text-left" onClick={toggle} aria-expanded={isOpen}>
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{group?.name ?? '未分组'}</CardTitle>
             <Badge variant="secondary" className="shrink-0 whitespace-nowrap">{groupRows.length}</Badge>
             {group && <Badge variant="outline" className="shrink-0 whitespace-nowrap">{group.enabled_count} 已启用</Badge>}
           </button>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <Button size="icon" variant={isActive ? 'secondary' : 'ghost'} className="h-8 w-8" aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`} onClick={() => {
               if (selectionMode.has(groupKey)) {
                 setSelectionMode((prev) => { const next = new Set(prev); next.delete(groupKey); return next })
