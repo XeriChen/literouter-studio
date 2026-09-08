@@ -252,6 +252,99 @@ test('shows base64 decode feedback above the provider editor overlay', async ({ 
   await page.screenshot({ path: testInfo.outputPath('provider-decode-notice.png') })
 })
 
+test('import dialog marks imported models and supports cancel and cleanup', async ({ page }, testInfo) => {
+  const browserErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => browserErrors.push(error.message))
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  // window.confirm 自动接受
+  page.on('dialog', (dialog) => dialog.accept())
+
+  const createdAt = '2026-08-17T00:00:00.000Z'
+  const mockRow = (modelId: string, source: 'fetched' | 'manual') => ({
+    provider_id: 'provider-primary',
+    model_id: modelId,
+    display_name: null,
+    enabled: 1,
+    source,
+    fetched_at: source === 'fetched' ? createdAt : null,
+    created_at: createdAt,
+    updated_at: createdAt,
+    provider_name: 'Primary',
+    protocol: 'openai' as const,
+    provider_enabled: 1,
+  })
+  let models = [mockRow('gpt-4o', 'fetched'), mockRow('gpt-4o-mini', 'fetched'), mockRow('manual-only', 'manual')]
+  const deletedModels: Array<{ provider_id: string; model_id: string }> = []
+  let cleanupCalls = 0
+  let importedBody: unknown = null
+
+  await page.route('**/api/provider-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/providers', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, data: [{ id: 'provider-primary', name: 'Primary', protocol: 'openai', group_id: null, base_url: 'https://api.example.test', auth: { api_key: 'k' }, custom_headers: {}, proxy_url: null, timeout_ms: null, model_filter: null, enabled: 1, created_at: createdAt, updated_at: createdAt }] }),
+  }))
+  await page.route('**/api/providers/provider-primary/upstream-models', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, data: { model_ids: ['gpt-4o', 'gpt-4o-mini', 'manual-only'] } }),
+  }))
+  await page.route('**/api/providers/provider-primary/cleanup-imported-models', (route) => {
+    cleanupCalls++
+    models = models.filter((item) => item.source !== 'fetched')
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { deleted: 1 } }) })
+  })
+  await page.route('**/api/providers/provider-primary/import-models', (route) => {
+    importedBody = JSON.parse(route.request().postData() ?? '{}')
+    models = [...models, mockRow('gpt-4o-mini', 'fetched')]
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { added: 1, updated: 0 } }) })
+  })
+  await page.route('**/api/models', (route) => {
+    if (route.request().method() === 'DELETE') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { provider_id?: string; model_id?: string }
+      deletedModels.push({ provider_id: body.provider_id ?? '', model_id: body.model_id ?? '' })
+      models = models.filter((item) => !(item.provider_id === body.provider_id && item.model_id === body.model_id))
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: {} }) })
+      return
+    }
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: models }) })
+  })
+
+  await page.goto('/providers')
+  await page.getByRole('button', { name: '拉取 Primary 的模型' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: '选择要导入的模型' })).toBeVisible()
+
+  // 已入库状态标记：fetched → 已导入，manual → 已添加
+  await expect(dialog.getByText('已导入', { exact: true })).toHaveCount(2)
+  await expect(dialog.getByText('已添加', { exact: true })).toHaveCount(1)
+  await expect(dialog.getByText(/已导入 2 个/)).toBeVisible()
+  await dialog.getByRole('button', { name: /一键清理已导入（2）/ }).waitFor()
+  await page.screenshot({ path: testInfo.outputPath('import-dialog-markers.png') })
+
+  // 单个取消导入：确认后 DELETE /api/models，并移除该模型的选择
+  await dialog.getByRole('button', { name: '取消导入 gpt-4o', exact: true }).click()
+  await expect.poll(() => deletedModels).toEqual([{ provider_id: 'provider-primary', model_id: 'gpt-4o' }])
+  await expect(dialog.getByText('已导入', { exact: true })).toHaveCount(1)
+  await expect(dialog.getByRole('button', { name: /一键清理已导入（1）/ })).toBeVisible()
+
+  // 一键清理全部导入模型：只删 fetched，manual 保留
+  await dialog.getByRole('button', { name: /一键清理已导入/ }).click()
+  await expect.poll(() => cleanupCalls).toBe(1)
+  await expect(dialog.getByText('已导入', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText('已添加', { exact: true })).toHaveCount(1)
+  await expect(dialog.getByRole('button', { name: /一键清理已导入/ })).toHaveCount(0)
+
+  // 清理后可重新导入同一模型
+  await dialog.getByRole('checkbox', { name: '选择 gpt-4o-mini' }).check()
+  await dialog.getByRole('button', { name: '导入 1 个模型' }).click()
+  await expect(page.getByText('导入成功：新增 1，刷新 0')).toBeVisible()
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+  expect(importedBody).toEqual({ model_ids: ['gpt-4o-mini'], create_alias: true })
+  expect(browserErrors).toEqual([])
+})
+
 test('aligns models table headers with row content', async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
   await page.route('**/api/alias-groups', async (route) => {

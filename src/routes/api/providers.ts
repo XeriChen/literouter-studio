@@ -21,6 +21,7 @@ import {
   updateProviderGroup,
 } from '../../services/providers'
 import type { Env, ProviderProtocol } from '../../types'
+import { cleanupImportedModels } from '../../services/models'
 import { fail, nonEmptyText, ok, providerGroupRefSchema, providerOut, providerPatchSchema, providerSchema, readJson } from './shared'
 
 export function registerProviderRoutes(api: Hono<Env>): void {
@@ -207,6 +208,15 @@ export function registerProviderRoutes(api: Hono<Env>): void {
       writeAuditLog({ resource: 'model', action: 'fetch', target: provider.name, detail: `拉取上游模型 ${provider.name} 失败: ${message}`, status })
       return fail(c, status, message, timeout ? 'upstream_timeout' : 'upstream_error')
     }
+  })
+
+  api.post('/providers/:id/cleanup-imported-models', (c) => {
+    const provider = getProvider(c.req.param('id'))
+    if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
+
+    const deleted = cleanupImportedModels(provider.id)
+    writeAuditLog({ resource: 'model', action: 'batch_delete', target: provider.name, detail: `一键清理 ${provider.name} 已导入模型: ${deleted} 个（不含手动添加）`, status: 200 })
+    return ok(c, { deleted })
   })
 
   api.post('/providers/:id/import-models', async (c) => {

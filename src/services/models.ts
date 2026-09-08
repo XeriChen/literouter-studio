@@ -198,6 +198,15 @@ export function deleteModel(input: { provider_id: string; model_id: string }): v
   })()
 }
 
+/** 一键清理 Provider 全部导入模型（source='fetched'）；手动添加的模型不受影响。同名映射与备份语义不变，仅候选目标随引用修复，可能留下无候选的无效映射。 */
+export function cleanupImportedModels(providerId: string): number {
+  return db.transaction(() => {
+    const result = db.prepare("DELETE FROM provider_models WHERE provider_id = ? AND source = 'fetched'").run(providerId)
+    repairAliasTargetsInTransaction()
+    return Number(result.changes)
+  })()
+}
+
 export function importModels(
   providerId: string,
   modelIds: string[],

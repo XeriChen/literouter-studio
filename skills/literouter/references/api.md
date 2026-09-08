@@ -51,6 +51,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其余 HTTP 响应（含 404/502）判网络可达；结果不证明模型推理或映射链路可用 |
 | 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 |
 | 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组，可选 `create_alias`（默认 true）；启用导入模型，已启用的 Provider 自动建同名映射（同名已存在只追加 inactive 候选，不切 active）；传 `create_alias:false` 只登记模型 |
+| 一键清理导入模型 | `POST /api/providers/:id/cleanup-imported-models` | 无 body；事务内删除该 Provider 全部 `source='fetched'` 模型（手动添加不受影响），返回 `{deleted}`；同名映射保留、候选随引用修复，可能留下无候选的无效映射（用映射页「清理无效映射」清理） |
 | 新建分组 | `POST /api/provider-groups` | `{protocol, name}`；同协议组名唯一 |
 | 重命名分组 | `PATCH /api/provider-groups` | `{protocol, group_id, name}` |
 | 删除分组 | `DELETE /api/provider-groups` | `{protocol, group_id}`；删除分组并解除成员归属到「未分组」，不删除 Provider |
