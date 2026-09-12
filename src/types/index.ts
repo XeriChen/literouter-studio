@@ -103,8 +103,13 @@ export interface LogRow {
   /** 实际路由到的真实模型名（冗余存储） */
   resolved_model: string | null
   status: number | null
+  /** 上游首包耗时（收到响应头为止），非整个响应时长 */
   latency_ms: number | null
   error_code: string | null
+  /** 客户端请求体字节数（原始 body，未改写前） */
+  request_bytes: number | null
+  /** 实际转发给客户端的响应体字节数；流未正常结束（如客户端断开）时为 null */
+  response_bytes: number | null
 }
 
 export interface AuditRow {

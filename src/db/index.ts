@@ -146,7 +146,7 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'resolved_
   db.prepare('ALTER TABLE logs ADD COLUMN resolved_model TEXT').run()
 }
 
-// v8 → v9：密钥加密 + 轮询模式（守卫式）
+// v8 → v9：密钥加密 + 路由模式（守卫式）
 if (!db.prepare("SELECT 1 FROM pragma_table_info('providers') WHERE name = 'auth_json_encrypted'").get()) {
   db.prepare('ALTER TABLE providers ADD COLUMN auth_json_encrypted TEXT').run()
 }
@@ -160,6 +160,14 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('model_alias_targets') WHERE na
 // v9 → v10：New API / Sub2API 上游类型支持（守卫式）
 if (!db.prepare("SELECT 1 FROM pragma_table_info('providers') WHERE name = 'upstream_type'").get()) {
   db.prepare("ALTER TABLE providers ADD COLUMN upstream_type TEXT CHECK (upstream_type IN ('newapi', 'sub2api') OR upstream_type IS NULL)").run()
+}
+
+// 日志补充请求/响应字节数：用于把内存增长与具体请求体/响应体大小对应起来
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'request_bytes'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN request_bytes INTEGER').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'response_bytes'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN response_bytes INTEGER').run()
 }
 
 db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (10)').run()

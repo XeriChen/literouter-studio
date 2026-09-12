@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   parseProxyBody,
   readRequestBody,
+  releaseProxyBody,
   replaceProxyModel,
   rewriteProxyBody,
   RequestBodyTooLargeError,
@@ -98,4 +99,47 @@ test('without thinking config, rewrite equals a plain model replacement', () => 
   const body = parseProxyBody(encode('{"model":"a","thinking":null}'))!
 
   assert.equal(decode(rewriteProxyBody(body, 'real', null)), '{"model":"real","thinking":null}')
+})
+
+test('byte splice is exact when non-ASCII content precedes the model field', () => {
+  const source = '{"messages":[{"role":"user","content":"你好，世界！这是一段中文测试"}],"model":"alias"}'
+  const body = parseProxyBody(encode(source))!
+
+  assert.equal(
+    decode(replaceProxyModel(body, 'real')),
+    '{"messages":[{"role":"user","content":"你好，世界！这是一段中文测试"}],"model":"real"}',
+  )
+})
+
+test('byte splice handles surrogate pairs (emoji) before the model field', () => {
+  const source = '{"note":"😀🎉🚀","model":"alias"}'
+  const body = parseProxyBody(encode(source))!
+
+  assert.equal(decode(replaceProxyModel(body, 'real')), '{"note":"😀🎉🚀","model":"real"}')
+})
+
+test('thinking injection after non-ASCII content keeps surrounding bytes intact', () => {
+  const source = '{"messages":[{"content":"中文内容"}],"model":"a"}'
+  const body = parseProxyBody(encode(source))!
+
+  assert.equal(
+    decode(rewriteProxyBody(body, 'real', anthropicThinking)),
+    '{"thinking":{"type":"enabled","budget_tokens":2048},"messages":[{"content":"中文内容"}],"model":"real"}',
+  )
+})
+
+test('preserves a leading UTF-8 BOM rather than dropping it', () => {
+  const body = parseProxyBody(encode('\uFEFF{"model":"a"}'))!
+  const out = replaceProxyModel(body, 'real')
+
+  // 逐字节比较（默认 TextDecoder 会吞掉 BOM，不能用来断言）
+  assert.deepEqual(Array.from(out), Array.from(encode('\uFEFF{"model":"real"}')))
+})
+
+test('releaseProxyBody drops the retained raw body', () => {
+  const body = parseProxyBody(encode('{"model":"a"}'))!
+  assert.ok(body.bytes.length > 0)
+
+  releaseProxyBody(body)
+  assert.equal(body.bytes.length, 0)
 })

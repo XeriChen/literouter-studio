@@ -1,5 +1,6 @@
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const encoder = new TextEncoder()
+const EMPTY_BYTES = new Uint8Array(0)
 
 /** Maximum request size accepted by both proxy and management endpoints. */
 export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
@@ -20,10 +21,15 @@ export class RequestBodyTooLargeError extends Error {
 
 export interface ParsedProxyBody {
   model: string
-  source: string
+  /**
+   * 原始请求体字节。所有区间都是该缓冲区内的 UTF-8 字节偏移（而非字符串下标），
+   * 这样改写时无需保留整份解码后的字符串，等待上游期间的内存占用约为 body 的 1 倍。
+   * 改写完成后可调用 releaseProxyBody 释放该引用。
+   */
+  bytes: Uint8Array
   modelValueStart: number
   modelValueEnd: number
-  /** 顶层对象开括号 `{` 之后的位置，用于注入新顶层字段 */
+  /** 顶层对象开括号 `{` 之后的字节偏移，用于注入新顶层字段 */
   contentStart: number
   /** 顶层 thinking / reasoning_effort 最后一次出现的值区间（重复键沿用 JSON.parse 最后生效语义） */
   extraRanges: Partial<Record<'thinking' | 'reasoning_effort', { valueStart: number; valueEnd: number }>>
@@ -93,9 +99,38 @@ function valueEnd(source: string, start: number): number {
 }
 
 /**
- * Parses a proxy request while retaining the exact source range of the top-level
- * `model` value. Replacing that range avoids reserializing or otherwise changing
- * unrelated request fields.
+ * 把解码后字符串下标换算成原始字节偏移。请求体含非 ASCII 时下标与字节位置不同，
+ * 必须按 UTF-8 长度累计（并正确处理代理对与 BOM）。所需下标一次升序扫描完成，避免重复遍历整份 body。
+ */
+function charToByteOffsets(source: string, indices: number[], base: number): number[] {
+  const unique = Array.from(new Set(indices)).sort((a, b) => a - b)
+  const offsets = new Map<number, number>()
+  let byte = base
+  let cursor = 0
+  for (const index of unique) {
+    while (cursor < index) {
+      const code = source.charCodeAt(cursor)
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = source.charCodeAt(cursor + 1)
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          byte += 4
+          cursor += 2
+          continue
+        }
+      }
+      byte += code < 0x80 ? 1 : code < 0x800 ? 2 : 3
+      cursor++
+    }
+    offsets.set(index, byte)
+  }
+  return indices.map((index) => offsets.get(index)!)
+}
+
+/**
+ * Parses a proxy request while retaining the exact byte ranges of the top-level
+ * `model` value (and optional thinking fields). Replacing those ranges avoids
+ * reserializing or otherwise changing unrelated request fields, and keeps the
+ * held representation to a single copy of the raw body instead of a decoded string.
  */
 export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
   let source: string
@@ -118,7 +153,7 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
     const contentStart = index
 
     let match: { model: string; modelValueStart: number; modelValueEnd: number } | null = null
-    const extraRanges: ParsedProxyBody['extraRanges'] = {}
+    const charRanges: ParsedProxyBody['extraRanges'] = {}
     while (true) {
       index = skipWhitespace(source, index)
       if (source[index] === '}') break
@@ -138,7 +173,7 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
         }
       }
       if (key === 'thinking' || key === 'reasoning_effort') {
-        extraRanges[key] = { valueStart: modelValueStart, valueEnd: modelValueEnd }
+        charRanges[key] = { valueStart: modelValueStart, valueEnd: modelValueEnd }
       }
 
       index = skipWhitespace(source, modelValueEnd)
@@ -151,7 +186,28 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
     }
 
     // JSON.parse uses the final duplicate key, so the located value must match it.
-    return match?.model === parsedModel ? { ...match, source, contentStart, extraRanges } : null
+    if (match?.model !== parsedModel) return null
+
+    // TextDecoder 默认丢弃前导 UTF-8 BOM；字节偏移需相应平移。
+    const base = body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf ? 3 : 0
+    const [modelValueStart, modelValueEnd] = charToByteOffsets(source, [match.modelValueStart, match.modelValueEnd], base)
+    const contentByteStart = charToByteOffsets(source, [contentStart], base)[0]!
+    const extraRanges: ParsedProxyBody['extraRanges'] = {}
+    for (const key of ['thinking', 'reasoning_effort'] as const) {
+      const range = charRanges[key]
+      if (!range) continue
+      const [valueStart, valueEnd] = charToByteOffsets(source, [range.valueStart, range.valueEnd], base)
+      extraRanges[key] = { valueStart: valueStart!, valueEnd: valueEnd! }
+    }
+
+    return {
+      model: match.model,
+      bytes: body,
+      modelValueStart: modelValueStart!,
+      modelValueEnd: modelValueEnd!,
+      contentStart: contentByteStart,
+      extraRanges,
+    }
   } catch {
     return null
   }
@@ -160,25 +216,36 @@ export function parseProxyBody(body: Uint8Array): ParsedProxyBody | null {
 interface BodyEdit {
   start: number
   end: number
-  replacement: string
+  replacement: Uint8Array
 }
 
-/** 按原文区间做定点替换/插入，不重新序列化 JSON，其余字节原样保留。 */
-function applyEdits(source: string, edits: BodyEdit[]): Uint8Array {
+/**
+ * 按原始字节区间做定点替换/插入：只新建一个输出缓冲区，不生成解码字符串或整份字符串副本。
+ * 除被替换的区间外，其余字节原样拷贝，保证不改变非目标字段的任何字节。
+ */
+function spliceBytes(bytes: Uint8Array, edits: BodyEdit[]): Uint8Array {
   edits.sort((a, b) => a.start - b.start)
-  let output = ''
+  let size = bytes.length
+  for (const edit of edits) size += edit.replacement.length - (edit.end - edit.start)
+
+  const output = new Uint8Array(size)
   let position = 0
+  let cursor = 0
   for (const edit of edits) {
-    output += source.slice(position, edit.start) + edit.replacement
-    position = edit.end
+    const untouched = bytes.subarray(cursor, edit.start)
+    output.set(untouched, position)
+    position += untouched.length
+    output.set(edit.replacement, position)
+    position += edit.replacement.length
+    cursor = edit.end
   }
-  output += source.slice(position)
-  return encoder.encode(output)
+  output.set(bytes.subarray(cursor), position)
+  return output
 }
 
 export function replaceProxyModel(body: ParsedProxyBody, model: string): Uint8Array {
-  return applyEdits(body.source, [
-    { start: body.modelValueStart, end: body.modelValueEnd, replacement: JSON.stringify(model) },
+  return spliceBytes(body.bytes, [
+    { start: body.modelValueStart, end: body.modelValueEnd, replacement: encoder.encode(JSON.stringify(model)) },
   ])
 }
 
@@ -188,18 +255,26 @@ export function replaceProxyModel(body: ParsedProxyBody, model: string): Uint8Ar
  */
 export function rewriteProxyBody(body: ParsedProxyBody, model: string, thinking: ThinkingRewrite | null): Uint8Array {
   const edits: BodyEdit[] = [
-    { start: body.modelValueStart, end: body.modelValueEnd, replacement: JSON.stringify(model) },
+    { start: body.modelValueStart, end: body.modelValueEnd, replacement: encoder.encode(JSON.stringify(model)) },
   ]
   if (thinking) {
     const range = body.extraRanges[thinking.key]
     if (!range || thinking.mode === 'override') {
       const serialized = JSON.stringify(thinking.value)
       edits.push(range
-        ? { start: range.valueStart, end: range.valueEnd, replacement: serialized }
-        : { start: body.contentStart, end: body.contentStart, replacement: `${JSON.stringify(thinking.key)}:${serialized},` })
+        ? { start: range.valueStart, end: range.valueEnd, replacement: encoder.encode(serialized) }
+        : { start: body.contentStart, end: body.contentStart, replacement: encoder.encode(`${JSON.stringify(thinking.key)}:${serialized},`) })
     }
   }
-  return applyEdits(body.source, edits)
+  return spliceBytes(body.bytes, edits)
+}
+
+/**
+ * 释放解析结果对原始请求体的引用。转发时只需保留改写后的 outBody，
+ * 因此在等待上游响应（可能长达数十秒）期间不应继续持有整份原始 body。
+ */
+export function releaseProxyBody(body: ParsedProxyBody): void {
+  body.bytes = EMPTY_BYTES
 }
 
 /** Reads a Fetch request body without ever buffering more than maxBytes. */

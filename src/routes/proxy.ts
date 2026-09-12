@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import { Readable } from 'node:stream'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
@@ -7,12 +8,13 @@ import { normalizeUpstreamPath } from '../proxy/path'
 import {
   parseProxyBody,
   readRequestBody,
+  releaseProxyBody,
   rewriteProxyBody,
   MAX_REQUEST_BODY_BYTES,
   RequestBodyTooLargeError,
 } from '../proxy/body'
 import { findRoute, listAliasNames } from '../services/models'
-import { writeLog } from '../services/logs'
+import { writeLog, updateLogResponseBytes } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
 import type { Env, ProviderRow } from '../types'
 
@@ -20,6 +22,32 @@ export const proxyRoutes = new Hono<Env>()
 
 function proxyError(c: Context, status: number, message: string, code: string) {
   return c.json({ error: { message, type: code, code } }, status as ContentfulStatusCode)
+}
+
+/** 客户端 IP：优先 x-forwarded-for，回退到直连 socket 地址（无反向代理时也能归因）。 */
+function clientIp(c: Context): string | null {
+  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+  if (forwarded) return forwarded
+  const env = c.env as unknown as { incoming?: { socket?: { remoteAddress?: string } } } | undefined
+  return env?.incoming?.socket?.remoteAddress ?? null
+}
+
+/**
+ * 统计转发给客户端的响应字节数，并在流正常结束时回填日志。
+ * 用 TransformStream（而非 for-await + enqueue 的手写循环）以保证背压语义不被破坏。
+ */
+function countResponseBytes(body: Readable, logId: number): ReadableStream<Uint8Array> {
+  let total = 0
+  const counted = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      total += chunk.byteLength
+      controller.enqueue(chunk)
+    },
+    flush() {
+      updateLogResponseBytes(logId, total)
+    },
+  })
+  return (Readable.toWeb(body) as unknown as ReadableStream<Uint8Array>).pipeThrough(counted)
 }
 
 async function forward(
@@ -32,6 +60,7 @@ async function forward(
   protocol: 'openai' | 'anthropic',
   requestedModel: string,
   resolvedModel: string,
+  requestBytes: number,
 ) {
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -49,8 +78,8 @@ async function forward(
 
   // 收到上游响应头，立即写日志（latency = 首包耗时）
   const headerAt = Date.now()
-  writeLog({
-    client_ip: c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || null,
+  const logId = writeLog({
+    client_ip: clientIp(c),
     protocol,
     method,
     path: c.req.path,
@@ -60,6 +89,7 @@ async function forward(
     resolved_model: resolvedModel,
     status: res.status,
     latency_ms: headerAt - startedAt,
+    request_bytes: requestBytes,
   })
 
   // 上游 5xx：包装为 502 upstream_error；4xx：原样透传
@@ -76,7 +106,7 @@ async function forward(
   })
   if (!headers['content-type']) headers['content-type'] = 'application/json'
 
-  return new Response(res.body as unknown as BodyInit, { status: res.status, headers })
+  return new Response(countResponseBytes(res.body, logId) as unknown as BodyInit, { status: res.status, headers })
 }
 
 async function logAndFail(
@@ -91,7 +121,7 @@ async function logAndFail(
   message: string,
 ) {
   writeLog({
-    client_ip: c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || null,
+    client_ip: clientIp(c),
     protocol,
     method,
     path,
@@ -128,23 +158,28 @@ proxyRoutes.all('*', async (c) => {
       )
     }
 
-    const body = parseProxyBody(await readRequestBody(c.req.raw, MAX_REQUEST_BODY_BYTES))
-    if (!body) {
+    const parsed = parseProxyBody(await readRequestBody(c.req.raw, MAX_REQUEST_BODY_BYTES))
+    if (!parsed) {
       return logAndFail(c, protocol, path, 'POST', null, startedAt, 400, 'invalid_request_body', 'invalid request body: missing model')
     }
-    const model = body.model
+    const requestBytes = parsed.bytes.length
+    const model = parsed.model
     requestedModel = model
 
     const route = findRoute(protocol, model)
     if (route.kind !== 'ok') {
+      // 请求即将失败返回，先释放持有的原始 body
+      releaseProxyBody(parsed)
       const disabled = route.kind === 'provider_disabled'
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
     // 映射名 -> 真实模型名，并按映射配置定点改写思考等级字段，其余字节原样保留
-    const outBody = rewriteProxyBody(body, route.model.model_id, route.thinking)
+    const outBody = rewriteProxyBody(parsed, route.model.model_id, route.thinking)
+    // 等待上游响应可能长达数十秒，期间只保留改写后的 outBody，不再持有原始请求体
+    releaseProxyBody(parsed)
 
-    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model, route.model.model_id)
+    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model, route.model.model_id, requestBytes)
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err
