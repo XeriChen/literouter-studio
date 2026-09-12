@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS logs (
   resolved_model TEXT,
   status INTEGER,
   latency_ms INTEGER,
-  error_code TEXT
+  error_code TEXT,
+  request_bytes INTEGER,
+  response_bytes INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -144,6 +146,13 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'provider_
 }
 if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'resolved_model'").get()) {
   db.prepare('ALTER TABLE logs ADD COLUMN resolved_model TEXT').run()
+}
+// 日志补充请求/响应字节数：用于把内存增长与具体请求体/响应体大小对应起来
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'request_bytes'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN request_bytes INTEGER').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'response_bytes'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN response_bytes INTEGER').run()
 }
 db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (8)').run()
 

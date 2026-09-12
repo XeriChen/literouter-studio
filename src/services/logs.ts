@@ -50,10 +50,10 @@ export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] }
   return { total, rows }
 }
 
-export function writeLog(row: Partial<LogRow>): void {
-  db.prepare(
-    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, provider_name, resolved_model, status, latency_ms, error_code)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+export function writeLog(row: Partial<LogRow>): number {
+  const result = db.prepare(
+    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, provider_name, resolved_model, status, latency_ms, error_code, request_bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.created_at ?? new Date().toISOString(),
     row.client_ip ?? null,
@@ -67,7 +67,15 @@ export function writeLog(row: Partial<LogRow>): void {
     row.status ?? null,
     row.latency_ms ?? null,
     row.error_code ?? null,
+    row.request_bytes ?? null,
   )
+  return Number(result.lastInsertRowid)
+}
+
+/** 流式响应结束后回填实际转发给客户端的响应字节数。 */
+export function updateLogResponseBytes(id: number, bytes: number): void {
+  if (!Number.isInteger(id) || id <= 0) return
+  db.prepare('UPDATE logs SET response_bytes = ? WHERE id = ?').run(bytes, id)
 }
 
 export function clearLogs(): void {

@@ -59,9 +59,11 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 
 // RSS 看门狗：周期性采样内存占用，越过高水位时手动写堆快照，便于事后定位泄漏点。
 // 与 node --heapsnapshot-near-heap-limit 互为冗余——即便未加该 flag 也能留快照。
-// 阈值通过环境变量 GATEWAY_RSS_SNAPSHOT_BYTES 配置，默认 1.5 GiB；设 0 关闭。
+// 阈值通过环境变量 GATEWAY_RSS_SNAPSHOT_BYTES 配置，默认 512MiB；设 0 关闭。
+// 注意：定时器只在事件循环仍能调度时才触发，因此阈值要显著低于“卡死”水位；
+// 历史事故中网关涨到 GB 级后事件循环已饥饿，1.5GiB 的旧默认值根本来不及抓现场。
 function startRssWatchdog() {
-  const threshold = Number(process.env.GATEWAY_RSS_SNAPSHOT_BYTES ?? 1.5 * 1024 * 1024 * 1024)
+  const threshold = Number(process.env.GATEWAY_RSS_SNAPSHOT_BYTES ?? 512 * 1024 * 1024)
   if (!Number.isFinite(threshold) || threshold <= 0) return
   let lastShot = 0
   const snapshotDir = join(process.cwd(), 'data')
