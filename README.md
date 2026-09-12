@@ -26,11 +26,11 @@
 | :--- | :--- |
 | 后端 | Node.js ≥ 24 · TypeScript strict · Hono 4 · better-sqlite3 13 · undici 8 · zod 4 |
 | 前端 | React 19 · React Router 8 · Vite 8 · Tailwind CSS 4 · shadcn/ui · TanStack Query · react-markdown |
-| 包管理 | pnpm 11.22.0（`packageManager` 已固定；registry 为 `registry.npmmirror.com`） |
+| 包管理 | pnpm 11.26.0（`packageManager` 已固定；registry 为 `registry.npmmirror.com`） |
 
 ## 快速开始
 
-准备 Node.js ≥ 24 与 pnpm 11.22.0，然后在项目根目录执行：
+准备 Node.js ≥ 24 与 pnpm 11.26.0，然后在项目根目录执行：
 
 ```bash
 pnpm install

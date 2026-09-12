@@ -25,7 +25,7 @@
 | 后端 | Node ≥ 24、TypeScript strict、Hono 4、better-sqlite3 13、undici 8、zod 4 |
 | 前端 | React 19、Vite 8、Tailwind 4、shadcn/ui、TanStack Query、react-router 8 |
 
-- 单包仓库；Node ≥ 24，包管理器固定为 pnpm 11.22.0；`web/dist` 由 Hono 托管（生产 `pnpm start`）。
+- 单包仓库；Node ≥ 24，包管理器固定为 pnpm 11.26.0；`web/dist` 由 Hono 托管（生产 `pnpm start`）。
 - 开发：`pnpm dev` = 后端 3000（tsx watch）+ 前端 5173（Vite，`/api`、`/openai`、`/anthropic` 已代理到 3000）。
 - 强制 `tsx` 直接跑 TS，禁止编译后端到 JS 再跑。
 - `pnpm test` 运行 Node 原生测试；`pnpm test:e2e` 用 Playwright 启动或复用生产服务执行浏览器冒烟测试，构建、服务与 Token 前提见 [README.md](README.md) 的浏览器验证说明。

@@ -29,7 +29,7 @@
 | `pnpm build:web` | 前端构建到 `web/dist` |
 | `pnpm start` | 生产模式：Hono 托管 API + 前端静态文件 |
 
-环境约束：Node ≥ 24，统一使用 **pnpm 11.22.0**（见 `packageManager`），必须用 `tsx` 直接运行后端 TS 源码。
+环境约束：Node ≥ 24，统一使用 **pnpm 11.26.0**（见 `packageManager`），必须用 `tsx` 直接运行后端 TS 源码。
 
 ## 4. 技术栈
 
