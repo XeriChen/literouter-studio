@@ -60,30 +60,47 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 // RSS 看门狗：周期性采样内存占用，越过高水位时手动写堆快照，便于事后定位泄漏点。
 // 与 node --heapsnapshot-near-heap-limit 互为冗余——即便未加该 flag 也能留快照。
 // 阈值通过环境变量 GATEWAY_RSS_SNAPSHOT_BYTES 配置，默认 512MiB；设 0 关闭。
-// 注意：定时器只在事件循环仍能调度时才触发，因此阈值要显著低于“卡死”水位；
-// 历史事故中网关涨到 GB 级后事件循环已饥饿，1.5GiB 的旧默认值根本来不及抓现场。
+//
+// 重要：writeHeapSnapshot 会令 RSS 近似翻倍，且是同步阻塞事件循环的。若 RSS 已经很高才触发，
+// 快照自身就可能把进程顶到 cgroup 上限被 OOM kill（表现为：没有快照文件、没有日志、请求无响应、
+// 内存缓慢上涨）。因此这里：① 阈值要明显低于“卡死”水位；② 超过 ceiling 后不再尝试写快照，
+// 只记录一条跳过日志；③ 记录写快照耗时，便于判断它是否在拖慢事件循环。
 function startRssWatchdog() {
   const threshold = Number(process.env.GATEWAY_RSS_SNAPSHOT_BYTES ?? 512 * 1024 * 1024)
-  if (!Number.isFinite(threshold) || threshold <= 0) return
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    console.log('[gateway] RSS watchdog disabled (GATEWAY_RSS_SNAPSHOT_BYTES <= 0)')
+    return
+  }
+  const ceiling = Number(process.env.GATEWAY_RSS_SNAPSHOT_CEILING_BYTES ?? threshold * 2)
   let lastShot = 0
+  let lastSkipLog = 0
   const snapshotDir = join(process.cwd(), 'data')
+  const mib = (bytes: number) => Math.round(bytes / 1024 / 1024)
+  console.log(`[gateway] RSS watchdog: snapshot threshold=${mib(threshold)}MiB ceiling=${mib(ceiling)}MiB`)
   setInterval(() => {
     const rss = process.memoryUsage().rss
-    if (rss > threshold) {
-      const now = Date.now()
-      // 至少间隔 5 分钟，避免内存高位期疯狂刷快照
-      if (now - lastShot > 5 * 60 * 1000) {
-        lastShot = now
-        try {
-          if (!existsSync(snapshotDir)) mkdirSync(snapshotDir, { recursive: true })
-          const file = writeHeapSnapshot(join(snapshotDir, `gateway-rss-${now}.heapsnapshot`))
-          console.error(`[gateway] RSS ${Math.round(rss / 1024 / 1024)}MiB exceeded watchdog threshold, heap snapshot written to ${file}`)
-        } catch (err) {
-          console.error('[gateway] failed to write heap snapshot:', err)
-        }
+    if (rss <= threshold) return
+    const now = Date.now()
+    // 快照需要额外内存（近似再分配一份堆），RSS 过高时跳过，交给 MemoryMax/SIGUSR2 兜底
+    if (ceiling > 0 && rss > ceiling) {
+      if (now - lastSkipLog > 5 * 60 * 1000) {
+        lastSkipLog = now
+        console.error(`[gateway] RSS ${mib(rss)}MiB above snapshot ceiling ${mib(ceiling)}MiB, skipping heap snapshot to avoid OOM`)
       }
+      return
     }
-  }, 30_000).unref()
+    // 至少间隔 5 分钟，避免内存高位期疯狂刷快照
+    if (now - lastShot <= 5 * 60 * 1000) return
+    lastShot = now
+    try {
+      if (!existsSync(snapshotDir)) mkdirSync(snapshotDir, { recursive: true })
+      const startedAt = Date.now()
+      const file = writeHeapSnapshot(join(snapshotDir, `gateway-rss-${now}.heapsnapshot`))
+      console.error(`[gateway] RSS ${mib(rss)}MiB exceeded watchdog threshold, heap snapshot written to ${file} in ${Date.now() - startedAt}ms`)
+    } catch (err) {
+      console.error('[gateway] failed to write heap snapshot:', err)
+    }
+  }, 2_000).unref()
 }
 
 startRssWatchdog()
