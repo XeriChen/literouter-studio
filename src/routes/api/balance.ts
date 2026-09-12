@@ -45,12 +45,12 @@ app.get('/:id/balance', async (c) => {
       )
     }
 
-    if (message.includes('not a New API instance')) {
+    if (message.includes('not a New API or Sub2API instance')) {
       return c.json(
         {
           ok: false,
           error: {
-            message: 'Provider is not a New API instance',
+            message: 'Provider is not a New API or Sub2API instance',
             type: 'invalid_upstream_type',
             code: 'invalid_upstream_type',
           },

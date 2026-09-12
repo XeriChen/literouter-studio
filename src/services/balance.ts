@@ -12,18 +12,24 @@ interface NewApiUserResponse {
   quota?: number
 }
 
+interface Sub2ApiUserResponse {
+  balance?: number
+}
+
 export async function fetchNewApiBalance(providerId: string): Promise<BalanceResult> {
   const provider = getProvider(providerId)
   if (!provider) {
     throw new Error('Provider not found')
   }
 
-  if (provider.upstream_type !== 'newapi') {
-    throw new Error('Provider is not a New API instance')
+  if (provider.upstream_type !== 'newapi' && provider.upstream_type !== 'sub2api') {
+    throw new Error('Provider is not a New API or Sub2API instance')
   }
 
   const baseUrl = provider.base_url.replace(/\/+$/, '')
-  const url = `${baseUrl}/api/user/self`
+  const url = provider.upstream_type === 'newapi'
+    ? `${baseUrl}/api/user/self`
+    : `${baseUrl}/api/v1/users/profile`
 
   const auth = JSON.parse(provider.auth_json)
   const headers: Record<string, string> = {
@@ -57,10 +63,16 @@ export async function fetchNewApiBalance(providerId: string): Promise<BalanceRes
       throw new Error(`Upstream returned ${response.statusCode}`)
     }
 
-    const data = (await response.body.json()) as NewApiUserResponse
+    let balanceUsd: number
 
-    const quota = data.quota ?? 0
-    const balanceUsd = quota / 500000
+    if (provider.upstream_type === 'newapi') {
+      const data = (await response.body.json()) as NewApiUserResponse
+      const quota = data.quota ?? 0
+      balanceUsd = quota / 500000
+    } else {
+      const data = (await response.body.json()) as Sub2ApiUserResponse
+      balanceUsd = data.balance ?? 0
+    }
 
     return {
       balance: balanceUsd,

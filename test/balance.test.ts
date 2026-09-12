@@ -5,7 +5,7 @@ import { createProvider } from '../src/services/providers'
 import { db } from '../src/db'
 
 describe('balance service', () => {
-  it('should reject non-newapi provider', async () => {
+  it('should reject non-newapi/sub2api provider', async () => {
     db.exec('DELETE FROM providers')
     const provider = createProvider({
       name: 'Standard OpenAI',
@@ -22,7 +22,7 @@ describe('balance service', () => {
 
     await assert.rejects(
       () => fetchNewApiBalance(provider.id),
-      /not a New API instance/,
+      /not a New API or Sub2API instance/,
     )
   })
 
