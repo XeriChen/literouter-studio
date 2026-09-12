@@ -1,0 +1,9 @@
+web/dist
+node_modules
+data
+*.db
+*.log
+.claude
+.agents
+.pi
+.opencode
