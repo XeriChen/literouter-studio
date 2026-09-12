@@ -10,8 +10,8 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 /**
- * 开发阶段当前 schema 基线（v8）。旧数据库允许直接删除 data/gateway.db 后重建，
- * 因此这里不保留历史 v1-v5 迁移分支；仅保留 v6 → v7、v7 → v8 的两步守卫式加列。
+ * 开发阶段当前 schema 基线（v10）。旧数据库允许直接删除 data/gateway.db 后重建，
+ * 因此这里不保留历史 v1-v5 迁移分支；仅保留 v6 → v7、v7 → v8、v8 → v9、v9 → v10 的守卫式加列。
  */
 db.exec(`
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -145,7 +145,24 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'provider_
 if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'resolved_model'").get()) {
   db.prepare('ALTER TABLE logs ADD COLUMN resolved_model TEXT').run()
 }
-db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (8)').run()
+
+// v8 → v9：密钥加密 + 轮询模式（守卫式）
+if (!db.prepare("SELECT 1 FROM pragma_table_info('providers') WHERE name = 'auth_json_encrypted'").get()) {
+  db.prepare('ALTER TABLE providers ADD COLUMN auth_json_encrypted TEXT').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('model_aliases') WHERE name = 'routing_config_json'").get()) {
+  db.prepare('ALTER TABLE model_aliases ADD COLUMN routing_config_json TEXT').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('model_alias_targets') WHERE name = 'weight'").get()) {
+  db.prepare('ALTER TABLE model_alias_targets ADD COLUMN weight INTEGER NOT NULL DEFAULT 100').run()
+}
+
+// v9 → v10：New API / Sub2API 上游类型支持（守卫式）
+if (!db.prepare("SELECT 1 FROM pragma_table_info('providers') WHERE name = 'upstream_type'").get()) {
+  db.prepare("ALTER TABLE providers ADD COLUMN upstream_type TEXT CHECK (upstream_type IN ('newapi', 'sub2api') OR upstream_type IS NULL)").run()
+}
+
+db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (10)').run()
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

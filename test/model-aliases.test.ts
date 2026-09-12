@@ -27,9 +27,9 @@ after(async () => {
   }
 })
 
-test('initializes schema v7 and keeps exactly one priority-routed active target', () => {
+test('initializes schema v10 and keeps exactly one priority-routed active target', () => {
   const version = db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  assert.equal(version.version, 8)
+  assert.equal(version.version, 10)
 
   const now = new Date().toISOString()
   const insertProvider = db.prepare(

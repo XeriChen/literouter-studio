@@ -72,6 +72,7 @@ export const providerSchema = z.object({
   proxy_url: httpUrl.nullable().optional(),
   timeout_ms: z.number().int().min(0).nullable().optional(),
   model_filter: z.string().nullable().optional(),
+  upstream_type: z.enum(['newapi', 'sub2api']).nullable().optional(),
 })
 
 export const providerPatchSchema = providerSchema
@@ -84,6 +85,7 @@ export const providerPatchSchema = providerSchema
     // patch 场景必须显式声明为无 default 的 optional。
     auth: authSchema.optional(),
     custom_headers: authSchema.optional(),
+    upstream_type: z.enum(['newapi', 'sub2api']).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'provider patch cannot be empty')
 
@@ -179,6 +181,7 @@ export function providerOut(provider: ProviderRow) {
     timeout_ms: provider.timeout_ms,
     model_filter: provider.model_filter,
     enabled: provider.enabled,
+    upstream_type: provider.upstream_type,
     created_at: provider.created_at,
     updated_at: provider.updated_at,
   }

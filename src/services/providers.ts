@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
+import { encrypt, decrypt } from '../crypto'
 import { isTimeoutError, sendToUpstream, getDispatcher, drainBody, invalidateAllDispatchers } from '../proxy'
 import { MAX_UPSTREAM_MODELS_BODY_BYTES } from '../proxy/body'
 import { buildAnthropicModelsUrl } from '../providers/anthropic'
@@ -81,11 +82,35 @@ export function deleteGroupProviders(input: { protocol: ProviderProtocol; group_
 }
 
 export function listProviders(): ProviderRow[] {
-  return db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as ProviderRow[]
+  const rows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
+  return rows.map((row) => ({
+    ...row,
+    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted),
+  }))
 }
 
 export function getProvider(id: string): ProviderRow | undefined {
-  return db.prepare('SELECT * FROM providers WHERE id = ?').get(id) as ProviderRow | undefined
+  const row = db.prepare('SELECT * FROM providers WHERE id = ?').get(id) as (ProviderRow & { auth_json_encrypted: string | null }) | undefined
+  if (!row) return undefined
+  return {
+    ...row,
+    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted),
+  }
+}
+
+/**
+ * 解密 auth_json：优先使用 auth_json_encrypted，回退到 auth_json（迁移期兼容）
+ */
+function decryptAuthJson(plaintext: string, encrypted: string | null): string {
+  if (encrypted) {
+    try {
+      return decrypt(encrypted)
+    } catch (err) {
+      console.error('Failed to decrypt auth_json:', err)
+      return plaintext
+    }
+  }
+  return plaintext
 }
 
 export function createProvider(input: {
@@ -98,24 +123,37 @@ export function createProvider(input: {
   proxy_url: string | null
   timeout_ms: number | null
   model_filter: string | null
+  upstream_type?: 'newapi' | 'sub2api' | null
 }): ProviderRow {
   const id = randomUUID()
   const now = new Date().toISOString()
+  const encrypted = encrypt(input.auth_json)
   db.prepare(
-    `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.protocol, input.group_id, input.base_url, input.auth_json, input.custom_headers_json, input.proxy_url, input.timeout_ms, input.model_filter, now, now)
+    `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, auth_json_encrypted, custom_headers_json, proxy_url, timeout_ms, model_filter, upstream_type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.name, input.protocol, input.group_id, input.base_url, '', encrypted, input.custom_headers_json, input.proxy_url, input.timeout_ms, input.model_filter, input.upstream_type ?? null, now, now)
   return getProvider(id)!
 }
 
 export function updateProvider(id: string, patch: Partial<ProviderRow>): ProviderRow {
-  const allowed = ['name', 'group_id', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled'] as const
+  const allowed = ['name', 'group_id', 'base_url', 'auth_json', 'custom_headers_json', 'proxy_url', 'timeout_ms', 'model_filter', 'enabled', 'upstream_type'] as const
   const sets = allowed.filter((k) => patch[k] !== undefined)
   db.transaction(() => {
     if (sets.length > 0) {
-      db.prepare(
-        `UPDATE providers SET ${sets.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
-      ).run(...sets.map((k) => patch[k]), new Date().toISOString(), id)
+      const values: unknown[] = []
+      const setClauses: string[] = []
+      for (const k of sets) {
+        if (k === 'auth_json' && patch[k]) {
+          setClauses.push('auth_json_encrypted = ?', 'auth_json = ?')
+          values.push(encrypt(patch[k] as string), '')
+        } else {
+          setClauses.push(`${k} = ?`)
+          values.push(patch[k])
+        }
+      }
+      setClauses.push('updated_at = ?')
+      values.push(new Date().toISOString(), id)
+      db.prepare(`UPDATE providers SET ${setClauses.join(', ')} WHERE id = ?`).run(...values)
     }
     if (sets.includes('enabled')) repairAliasTargetsInTransaction()
   })()

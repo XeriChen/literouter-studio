@@ -28,6 +28,7 @@ export interface ProviderRow {
   timeout_ms: number | null
   model_filter: string | null
   enabled: number
+  upstream_type: 'newapi' | 'sub2api' | null
   created_at: string
   updated_at: string
 }
@@ -58,6 +59,8 @@ export interface ModelAliasRow {
   enabled: number
   /** 思考等级配置 JSON：{"mode":"override"|"default","value":协议原生值} */
   thinking_json: string | null
+  /** 路由配置 JSON：{"mode":"single"|"weighted"|"failover","affinity_seconds"?:number,"max_attempts"?:number,"cooldown_seconds"?:number} */
+  routing_config_json: string | null
   created_at: string
   updated_at: string
 }
@@ -81,6 +84,7 @@ export interface ModelAliasTargetRow {
   model_id: string
   priority: number
   active: number
+  weight: number
   created_at: string
   updated_at: string
 }

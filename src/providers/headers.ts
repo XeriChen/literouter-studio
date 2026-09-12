@@ -35,9 +35,9 @@ export function parseCustomHeaders(provider: ProviderRow): Record<string, string
 }
 
 /** 由 Provider 配置构造上游请求头（认证 + anthropic-version + 自定义头） */
-export function buildProviderHeaders(provider: ProviderRow): Record<string, string> {
+export function buildProviderHeaders(provider: ProviderRow, customOverride?: Record<string, string>): Record<string, string> {
   const auth = parseAuth(provider)
-  const custom = parseCustomHeaders(provider)
+  const custom = customOverride ?? parseCustomHeaders(provider)
   const headers: Record<string, string> = {}
   if (provider.protocol === 'openai') {
     if (auth.api_key) headers['authorization'] = `Bearer ${auth.api_key}`

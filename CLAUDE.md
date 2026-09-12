@@ -33,6 +33,7 @@ LiteRouter Studio is a lightweight LLM provider aggregation gateway for OpenAI/A
 1. **No protocol conversion**: Never convert request formats between OpenAI/Anthropic
 2. **Only replace model + thinking level fields**: After routing succeeds, only replace top-level `model` field with real model name; if mapping has thinking config, only rewrite/inject top-level `thinking` (Anthropic) or `reasoning_effort` (OpenAI) fields per config. Never modify any other fields.
 3. **HTTP plaintext only**: Trusted network only, no encryption
+4. **Development-first verification**: All changes must be developed, tested, and reviewed in development mode (`pnpm dev` on non-3000 ports) before touching the production gateway on port 3000. Never modify the running production service until changes pass dev verification.
 
 ## Code Conventions
 

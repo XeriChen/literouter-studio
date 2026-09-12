@@ -10,6 +10,7 @@ import type {
   ProviderRow,
   ThinkingConfig,
 } from '../types'
+import { selectTarget, type RoutingConfig } from './routing'
 
 export interface ModelWithProvider extends ProviderModelRow {
   provider_name: string
@@ -135,17 +136,19 @@ function insertAliasTargetInTransaction(input: {
   model_id: string
   active: number
   priority?: number
+  weight?: number
 }): ModelAliasTargetRow {
   const now = new Date().toISOString()
   const priority = input.priority ?? nextPriority(input.protocol, input.alias_name)
+  const weight = input.weight ?? 100
   if (input.active) {
     db.prepare('UPDATE model_alias_targets SET active = 0, updated_at = ? WHERE protocol = ? AND alias_name = ?').run(now, input.protocol, input.alias_name)
   }
   db.prepare(
     `INSERT INTO model_alias_targets
-      (protocol, alias_name, provider_id, model_id, priority, active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(input.protocol, input.alias_name, input.provider_id, input.model_id, priority, input.active, now, now)
+      (protocol, alias_name, provider_id, model_id, priority, active, weight, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(input.protocol, input.alias_name, input.provider_id, input.model_id, priority, input.active, weight, now, now)
   return db.prepare('SELECT * FROM model_alias_targets WHERE id = last_insert_rowid()').get() as ModelAliasTargetRow
 }
 
@@ -327,6 +330,7 @@ export function listAliases(): AliasWithTarget[] {
     group_name: row.group_name,
     enabled: row.enabled,
     thinking_json: row.thinking_json,
+    routing_config_json: row.routing_config_json,
     provider_id: row.active_provider_id,
     model_id: row.active_model_id,
     provider_name: row.active_provider_name,
@@ -351,18 +355,20 @@ export function addAlias(input: {
   group_id?: string | null
   enabled?: number
   thinking?: ThinkingConfig | null
+  routing_config?: RoutingConfig | null
 }): ModelAliasRow {
   const now = new Date().toISOString()
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, thinking_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO model_aliases (protocol, alias_name, group_id, enabled, thinking_json, routing_config_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       input.protocol,
       input.alias_name,
       input.group_id ?? null,
       input.enabled ?? 1,
       input.thinking ? JSON.stringify(input.thinking) : null,
+      input.routing_config ? JSON.stringify(input.routing_config) : null,
       now,
       now,
     )
@@ -381,6 +387,8 @@ export function updateAlias(input: {
   model_id?: string
   /** undefined = 不变；null = 清除；对象 = 设置/更新 */
   thinking?: ThinkingConfig | null
+  /** undefined = 不变；null = 清除；对象 = 设置/更新 */
+  routing_config?: RoutingConfig | null
 }): ModelAliasRow {
   const targetName = input.new_alias_name ?? input.alias_name
   db.transaction(() => {
@@ -389,6 +397,7 @@ export function updateAlias(input: {
     if (input.group_id !== undefined) { sets.push('group_id = ?'); values.push(input.group_id) }
     if (input.enabled !== undefined) { sets.push('enabled = ?'); values.push(input.enabled) }
     if (input.thinking !== undefined) { sets.push('thinking_json = ?'); values.push(input.thinking ? JSON.stringify(input.thinking) : null) }
+    if (input.routing_config !== undefined) { sets.push('routing_config_json = ?'); values.push(input.routing_config ? JSON.stringify(input.routing_config) : null) }
     values.push(input.protocol, input.alias_name)
     db.prepare(`UPDATE model_aliases SET ${sets.join(', ')} WHERE protocol = ? AND alias_name = ?`).run(...values)
 
@@ -622,6 +631,7 @@ interface RouteRow {
   timeout_ms: number | null
   model_filter: string | null
   provider_enabled: number
+  upstream_type: 'newapi' | 'sub2api' | null
   provider_created_at: string
   provider_updated_at: string
 }
@@ -649,6 +659,7 @@ const findRouteStatement = db.prepare(
      p.timeout_ms,
      p.model_filter,
      p.enabled AS provider_enabled,
+     p.upstream_type,
      p.created_at AS provider_created_at,
      p.updated_at AS provider_updated_at
    FROM model_aliases a
@@ -675,6 +686,7 @@ export function findRoute(protocol: ProviderProtocol, aliasName: string): RouteR
     timeout_ms: row.timeout_ms,
     model_filter: row.model_filter,
     enabled: row.provider_enabled,
+    upstream_type: row.upstream_type,
     created_at: row.provider_created_at,
     updated_at: row.provider_updated_at,
   }

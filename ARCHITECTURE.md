@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 本文是项目设计的唯一权威指南。按任务从 [AGENTS.md](AGENTS.md) 的阅读索引定位相关章节；部署与使用说明见 [README.md](README.md)，无需每次改动前通读三份文档。
-> 实现核对记录：2026-08-24（已与 schema v8、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 实现核对记录：2026-09-12（已与 schema v9、密钥加密、路由模式（single/weighted/failover）、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -39,14 +39,15 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  db/index.ts      SQLite 初始化 + 当前 schema v8 基线（开发期允许删库重建，v6→v7、v7→v8 保留守卫式加列）
+  crypto.ts        AES-256-GCM 加密/解密：Provider auth_json 加密存储，环境变量 ENCRYPTION_KEY 或启动时生成
+  db/index.ts      SQLite 初始化 + 当前 schema v9 基线（开发期允许删库重建，v6→v7、v7→v8、v8→v9 保留守卫式加列）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher；path.ts 做 v1 路径归一化
   routes/api.ts    管理 API 装配入口（领域路由位于 routes/api/*）
   routes/api/*     auth、providers、models、settings、logs、backup 领域路由
   routes/proxy.ts  代理入口流水线（路由、透传、日志）
-  services/        providers / models（含映射层）/ logs / audit / settings / backup / liveness / auth
+  services/        providers / models（含映射层）/ logs / audit / settings / backup / liveness / auth / routing（候选目标选择）
   types/           行类型
 web/src/
   api/             fetch client（Token 存 localStorage['llm_gateway_token']，401 自动登出）
@@ -60,21 +61,23 @@ skills/literouter/ agent 管理 Skill 的维护源：SKILL.md（按任务引导�
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v8）
+## 4. 数据模型（schema v9）
 
 | 表 | 说明 |
 | :--- | :--- |
 | `provider_groups` | Provider 管理分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
-| `providers` | 上游 Provider：可选归组，protocol(openai/anthropic)、base_url、auth_json、custom_headers_json、proxy_url、timeout_ms、model_filter、enabled |
+| `providers` | 上游 Provider：可选归组，protocol(openai/anthropic)、base_url、auth_json_encrypted（AES-256-GCM 加密存储）、custom_headers_json、proxy_url、timeout_ms、model_filter、enabled |
 | `provider_models` | 真实模型：PK(provider_id, model_id)，display_name、enabled、source(fetched/manual)、fetched_at |
 | `model_alias_groups` | 映射分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
-| `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关；`thinking_json` 为可选思考等级配置（`{mode:override/default, value:协议原生值}`） |
-| `model_alias_targets` | 映射候选：指向真实模型，带 priority/active；每个映射最多一个 active |
+| `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关；`thinking_json` 为可选思考等级配置（`{mode:override/default, value:协议原生值}`）；`routing_config_json` 为路由配置（`{mode:'single'|'weighted'|'failover', ...}`，默认 single） |
+| `model_alias_targets` | 映射候选：指向真实模型，带 priority/active/weight（默认 100）；single 模式只用 active，weighted 按 weight 加权随机，failover 按 priority 故障转移 |
 | `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days |
 | `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读） |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-当前处于无正式用户的开发阶段，schema v8 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8 的守卫式加列）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
+当前处于无正式用户的开发阶段，schema v9 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8、v8→v9 的守卫式加列）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
+
+**密钥加密（schema v9 新增）：** Provider 的 `auth_json` 使用 AES-256-GCM 加密存储为 `auth_json_encrypted`。加密密钥由环境变量 `ENCRYPTION_KEY`（64 位十六进制字符串）提供；若缺失则启动时自动生成并在控制台显著提示保存（丢失密钥导致已存储的 Provider 认证数据不可恢复）。v8→v9 迁移时，已有 Provider 的明文 `auth_json` 自动加密并迁移到新列。备份导出/导入仍使用明文 JSON 格式（`auth_json` 字段），导入时自动加密存储。
 
 ## 5. 核心概念：模型映射（路由键）
 
@@ -83,16 +86,19 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 客户端请求到网关时，`model` 字段的值是**映射名**，不是真实模型名。
 
 - 映射名按 `(protocol, alias_name)` 唯一，两协议各自独立命名空间；分组也按协议隔离，创建/归组本身不改变调用。
-- 映射可绑定多个真实模型候选，`priority` 越小越优先，但请求只读取唯一 `active=1` 目标；严禁按请求轮询、随机或故障转移。
-- 映射有独立 `enabled` 开关；`GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回映射、active 目标、Provider 与真实模型均启用的映射名。
+- 映射可绑定多个真实模型候选，支持三种路由模式（`routing_config_json`）：
+  - **single**（默认）：只使用 `active=1` 的唯一目标，保持当前行为
+  - **weighted**：按候选的 `weight` 字段（默认 100）加权随机选择，适用于流量分配与灰度
+  - **failover**：按 `priority` 升序选择首个可用候选，适用于主备故障转移（故障检测与切换由外部触发）
+- 映射有独立 `enabled` 开关；`GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回映射、当前可用目标、Provider 与真实模型均启用的映射名。
 - 未建立映射的模型（或直接写真实模型名）→ `404 model_not_found`。
 - 映射指向的 Provider 被禁用 → `503 provider_disabled`；目标模型被禁用 → `404`。
-- 自动建映射：启用的 Provider 新增/导入模型时自动生成同名映射；已有同名映射时只追加 inactive 候选，不切换 active。导入会启用新模型，也会重新启用已存在的目标模型。导入可传 `create_alias:false` 只登记真实模型、不动映射。
+- 自动建映射：启用的 Provider 新增/导入模型时自动生成同名映射（默认 single 模式）；已有同名映射时只追加 inactive 候选，不切换 active。导入会启用新模型，也会重新启用已存在的目标模型。导入可传 `create_alias:false` 只登记真实模型、不动映射。
 - 删除/禁用 active 真实模型或 Provider 时，在配置事务内按 priority 选择首个可用候选；重新启用旧目标不回切。没有可用候选则映射保留但不可调用。
-- 合并映射（`POST /aliases/merge`）：把多个映射的候选按 (provider_id, model_id) 去重后追加到目标映射（先到先得，重复计入 `skipped`）；并入已有映射不改其 active（不切流量），新建映射以第一个源（按 sources 顺序）的当前目标为 active，thinking 仅在新建时继承第一个非空源；`delete_sources:true` 删除源映射并可能留下空分组。合并后调用修复逻辑，仅当目标 active 已失效时才提升首个可用候选。
-- 删除分组会级联删除组内映射；“清空组内映射”批量操作可保留空分组。
+- 合并映射（`POST /aliases/merge`）：把多个映射的候选按 (provider_id, model_id) 去重后追加到目标映射（先到先得，重复计入 `skipped`）；并入已有映射不改其 active（不切流量），新建映射以第一个源（按 sources 顺序）的当前目标为 active，thinking 与 routing_config 仅在新建时继承第一个非空源；`delete_sources:true` 删除源映射并可能留下空分组。合并后调用修复逻辑，仅当目标 active 已失效时才提升首个可用候选。
+- 删除分组会级联删除组内映射；”清空组内映射”批量操作可保留空分组。
 - 手动添加模型默认 enabled=1（开箱即用）。
-- 映射可选配**思考等级**（`thinking`）：`{mode, value}`，`value` 是协议原生值 —— Anthropic 为 `thinking` 对象（如 `{"type":"enabled","budget_tokens":2048}` 或 `{"type":"disabled"}`），OpenAI 为 `reasoning_effort` 字符串（如 `"high"`）。`override` = 无条件替换/注入对应顶层字段；`default` = 仅在客户端未携带该字段时注入；不配置 = 原样透传。管理 API 的 `POST/PATCH /aliases` 用 `thinking` 字段配置（PATCH 传 `null` 清除），value 形状在入库前按协议校验。
+- 映射可选配**思考等级**（`thinking`）：`{mode, value}`，`value` 是协议原生值 —— Anthropic 为 `thinking` 对象（如 `{“type”:”enabled”,”budget_tokens”:2048}` 或 `{“type”:”disabled”}`），OpenAI 为 `reasoning_effort` 字符串（如 `”high”`）。`override` = 无条件替换/注入对应顶层字段；`default` = 仅在客户端未携带该字段时注入；不配置 = 原样透传。管理 API 的 `POST/PATCH /aliases` 用 `thinking` 字段配置（PATCH 传 `null` 清除），value 形状在入库前按协议校验。
 
 ### 管理 API（前缀 `/api`，请求体传参，不用路径参数 —— model_id 可能含 `/`）
 
@@ -108,8 +114,8 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `POST /providers/:id/import-models` | body `{model_ids:[...], create_alias?:boolean}`（默认 true），落库 + 自动建同名映射；`create_alias:false` 只落库不建/不追加映射 |
 | `POST /providers/:id/cleanup-imported-models` | 一键清理该 Provider 全部拉取导入的模型（`source='fetched'`，手动添加不受影响）；同名映射保留，候选随引用修复，可能留下无候选的无效映射（用「清理无效映射」清理）；返回 `{deleted}` |
 | `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
-| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段与思考等级（PATCH 传 null 清除） |
-| `POST /aliases/merge` | 合并映射：body `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加（`added`/`skipped`），并入已有映射不改其 active，新建映射以第一个源的当前目标为 active、thinking 继承第一个非空源；`delete_sources:true` 时删除源映射（FK 级联候选） |
+| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段、思考等级（PATCH 传 null 清除）与路由配置（`routing_config` 字段，PATCH 传 null 清除） |
+| `POST /aliases/merge` | 合并映射：body `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加（`added`/`skipped`），并入已有映射不改其 active，新建映射以第一个源的当前目标为 active、thinking 与 routing_config 继承第一个非空源；`delete_sources:true` 时删除源映射（FK 级联候选） |
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
 | `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
 | `POST/PATCH/DELETE /alias-targets`、`POST /alias-targets/reorder` | 候选新增、设为 active、删除与 priority 重排 |
@@ -148,12 +154,19 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 
 ```text
 POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 model
-     → model 查已启用映射 + 唯一 active 候选 → 找到 → 校验 provider.enabled
+     → model 查已启用映射 + 按路由模式选择候选 → 找到 → 校验 provider.enabled
      → 构造上游 URL(保留 query string, base_url 去尾部 '/')
      → undici 请求(dispatcher 按 proxy_url+timeout 缓存)
      → 收到响应头 → 立即写日志(latency = 收请求→响应头)
      → 原样透传(3xx/4xx 透传；5xx 包装 502 丢弃 body；超时 504)
 ```
+
+路由模式（`src/services/routing.ts`）：
+- **single**：返回唯一 `active=1` 的候选（保持 v8 及之前的行为）
+- **weighted**：按每个候选的 `weight` 字段（默认 100）加权随机选择，总权重为 0 时回退到第一个候选
+- **failover**：按 `priority` 升序（同优先级按 `id` 升序）选择首个候选，故障检测与切换由外部触发
+
+映射路由配置存储在 `model_aliases.routing_config_json`（可选，默认 `{mode:'single'}`）；管理 API 的 `POST/PATCH /aliases` 接受 `routing_config` 字段（PATCH 传 `null` 清除并回退默认）。
 
 ### 请求体与响应边界
 
@@ -210,3 +223,5 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
 9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
 10. **路径归一化的边界**：代理端点 v1 段归一化后，未知 POST 路径会原样转发上游、由上游回 4xx，网关不再本地判 `not_found`；非模型列表的 GET 按「只接受 POST」规则返回 405。路径中任何 `v1` 段（忽略大小写）都会被剔除——若未来上游真有含字面 `v1` 段的端点会被误伤（当前两协议端点集不存在）。
+11. **加密密钥管理（schema v9 新增）**：Provider 认证数据使用 AES-256-GCM 加密存储。加密密钥由环境变量 `ENCRYPTION_KEY`（64 位十六进制字符串）提供；若未设置，启动时自动生成并在控制台显著提示（红色警告）保存到环境变量。丢失密钥导致已存储的 Provider 认证数据永久不可恢复；备份导出为明文 JSON（便于迁移和审查），导入时自动加密存储。
+12. **路由模式边界（schema v9 新增）**：weighted 模式的随机选择在每次请求时独立执行，不保证严格按权重比例分配（短期流量可能偏离预期比例）；failover 模式只选择 priority 最低的首个候选，故障检测与实际切换由外部触发（当前未实现自动故障转移）；single 模式保持 v8 行为，只使用唯一 active 目标。路由配置缺失或非法时回退到 single 模式。

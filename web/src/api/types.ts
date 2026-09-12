@@ -28,8 +28,15 @@ export interface Provider {
   timeout_ms: number | null
   model_filter: string | null
   enabled: number
+  upstream_type: 'newapi' | 'sub2api' | null
   created_at: string
   updated_at: string
+}
+
+export interface BalanceResult {
+  balance: number
+  currency: string
+  last_checked: string
 }
 
 export interface ProviderGroup {

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
   ChevronRight,
+  CircleDollarSign,
   Copy,
   Eraser,
   ExternalLink,
@@ -26,7 +27,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '@/api/client'
-import type { Provider, ProviderGroup, ProviderModel } from '@/api/types'
+import type { Provider, ProviderGroup, ProviderModel, BalanceResult } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -61,6 +62,7 @@ interface ProviderForm {
   timeout_ms: string
   custom_headers: string
   model_filter: string
+  upstream_type: string
 }
 
 const EMPTY_FORM: ProviderForm = {
@@ -74,6 +76,7 @@ const EMPTY_FORM: ProviderForm = {
   timeout_ms: '',
   custom_headers: '{}',
   model_filter: '',
+  upstream_type: '',
 }
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic']
@@ -141,6 +144,7 @@ export default function Providers() {
       timeout_ms: provider.timeout_ms == null ? '' : String(provider.timeout_ms),
       custom_headers: JSON.stringify(provider.custom_headers ?? {}, null, 2),
       model_filter: provider.model_filter ?? '',
+      upstream_type: provider.upstream_type ?? '',
     }
   }
 
@@ -218,6 +222,7 @@ export default function Providers() {
         timeout_ms: form.timeout_ms.trim() ? Number(form.timeout_ms) : null,
         model_filter: form.model_filter.trim() || null,
         custom_headers,
+        upstream_type: form.upstream_type || null,
       }
       if (editing) return api(`/api/providers/${editing.id}`, { method: 'PUT', body: JSON.stringify(body) })
       return api('/api/providers', { method: 'POST', body: JSON.stringify(body) })
@@ -322,6 +327,12 @@ export default function Providers() {
     mutationFn: (id: string) => api<{ ok: boolean; status?: number; message: string }>(`/api/providers/${id}/test`, { method: 'POST' }),
     onSuccess: (data) => setResult({ message: data.message, ok: data.ok }),
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '测试失败', ok: false }),
+  })
+
+  const balanceMutation = useMutation({
+    mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance`, { method: 'GET' }),
+    onSuccess: (data) => setResult({ message: `余额：${data.balance.toFixed(2)} ${data.currency}`, ok: true }),
+    onError: (error) => setResult({ message: error instanceof Error ? error.message : '余额查询失败', ok: false }),
   })
 
   async function openFetchDialog(id: string, name: string) {
@@ -458,6 +469,7 @@ export default function Providers() {
               <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
               <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
               <TableCell className="pr-6"><div className="flex items-center justify-end gap-1">
+                {provider.upstream_type === 'newapi' && <Button variant="ghost" size="icon" className="icon-button" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
@@ -650,6 +662,7 @@ export default function Providers() {
             <div className="space-y-1.5"><Label>Base URL</Label><Input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
             <div className="space-y-1.5"><Label>API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." aria-label="API Key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
             {form.protocol === 'anthropic' && <div className="space-y-1.5"><Label>Anthropic Version（可选）</Label><Input value={form.anthropic_version} onChange={(event) => setForm({ ...form, anthropic_version: event.target.value })} placeholder="2023-06-01（留空使用默认值）" /></div>}
+            <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户余额</p></div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>代理 URL（可选）</Label><Input value={form.proxy_url} onChange={(event) => setForm({ ...form, proxy_url: event.target.value })} placeholder="http://127.0.0.1:7890" /></div><div className="space-y-1.5"><Label>超时毫秒</Label><Input value={form.timeout_ms} onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })} placeholder="120000（0 表示不超时）" /></div></div>
             <div className="space-y-1.5"><Label>自定义请求头</Label><Textarea value={form.custom_headers} onChange={(event) => setForm({ ...form, custom_headers: event.target.value })} rows={3} className="font-mono text-xs" placeholder='{"X-Custom": "value"}' /><p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p></div>
             <div className="space-y-1.5"><Label>模型过滤规则（可选）</Label><Input value={form.model_filter} onChange={(event) => setForm({ ...form, model_filter: event.target.value })} placeholder="grok-*,mimo-*" /><p className="text-xs text-muted-foreground">逗号分隔的前缀匹配规则，拉取时只入库匹配的模型。留空不过滤。例：gpt-*,claude-*</p></div>
