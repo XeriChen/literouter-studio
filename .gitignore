@@ -24,3 +24,5 @@ playwright-report/
 /mobile-*.png
 .pi/
 .opencode/
+.codebuddy/
+.zcode/
