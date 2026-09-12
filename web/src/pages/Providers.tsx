@@ -485,25 +485,85 @@ export default function Providers() {
           <button className="flex min-w-0 flex-wrap items-center gap-2 text-left" onClick={() => toggleGroup(key)} aria-expanded={isOpen}>
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{group?.name ?? '未分组'}</CardTitle>
-            <Badge variant="outline">{protocol}</Badge><Badge variant="secondary">{rows.length}</Badge>
-            {group && <Badge variant="outline">{rows.filter((provider) => provider.enabled).length} 已启用</Badge>}
+            <Badge variant="outline">{protocol}</Badge>
+            <Badge
+              variant="secondary"
+              className="shrink-0 font-mono whitespace-nowrap"
+              title={group ? `已启用 ${enabledCount} / 共 ${rows.length}` : `共 ${rows.length} 个 Provider`}
+            >
+              {group ? `${enabledCount}/${rows.length}` : rows.length}
+            </Badge>
           </button>
           <div className="flex flex-wrap items-center justify-end gap-1">
-            <Button size="icon" variant={isActive ? 'secondary' : 'ghost'} className="h-8 w-8" aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`} onClick={() => {
-              if (selectionMode.has(key)) {
-                setSelectionMode((prev) => { const next = new Set(prev); next.delete(key); return next })
-                setSelectedProviderIds((prev) => { const next = new Set(prev); rows.forEach((provider) => next.delete(provider.id)); return next })
-              } else {
-                setSelectionMode((prev) => new Set(prev).add(key))
-              }
-            }}>
+            <Button
+              size="icon"
+              variant={isActive ? 'secondary' : 'ghost'}
+              className="h-8 w-8"
+              aria-label={`切换 ${group?.name ?? '未分组'} 多选模式`}
+              title={`切换 ${group?.name ?? '未分组'} 多选模式`}
+              onClick={() => {
+                if (selectionMode.has(key)) {
+                  setSelectionMode((prev) => { const next = new Set(prev); next.delete(key); return next })
+                  setSelectedProviderIds((prev) => { const next = new Set(prev); rows.forEach((provider) => next.delete(provider.id)); return next })
+                } else {
+                  setSelectionMode((prev) => new Set(prev).add(key))
+                }
+              }}
+            >
               <ListChecks className="h-4 w-4" />
             </Button>
             {group && <>
-              <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground"><span>{enabledCount === rows.length && rows.length > 0 ? '全部启用' : enabledCount > 0 ? '部分启用' : '全部禁用'}</span><Switch checked={groupSwitchChecked} disabled={!rows.length || groupActionMutation.isPending} onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })} aria-label={`切换 ${group.name} 内全部 Provider 启用状态`} title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'} /></div>
-              <Button size="sm" variant="ghost" disabled={!rows.length || groupActionMutation.isPending} aria-label={`清空分组 ${group.name} 内的 Provider`} onClick={() => { if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) groupActionMutation.mutate({ action: 'clear', group }) }} title="删除组内全部 Provider"><Trash2 className="h-3.5 w-3.5" /><span className="hidden sm:inline"> 清空 Provider</span></Button>
-              <Button variant="ghost" size="icon" className="icon-button" aria-label={`重命名分组 ${group.name}`} title="重命名分组" onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}><Pencil className="h-3.5 w-3.5" /></Button>
-              <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除分组 ${group.name}`} title="删除分组" onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) groupActionMutation.mutate({ action: 'delete', group }) }}><Trash2 className="h-3.5 w-3.5" /></Button>
+              <div
+                className="flex items-center px-1"
+                title={groupSwitchChecked ? '全部已启用（点击禁用组内全部 Provider）' : enabledCount > 0 ? `部分已启用 ${enabledCount}/${rows.length}（点击启用组内全部 Provider）` : '全部已禁用（点击启用组内全部 Provider）'}
+              >
+                <Switch
+                  checked={groupSwitchChecked}
+                  disabled={!rows.length || groupActionMutation.isPending}
+                  onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })}
+                  aria-label={`切换 ${group.name} 内全部 Provider 启用状态（当前 ${enabledCount}/${rows.length}）`}
+                  title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'}
+                />
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                disabled={!rows.length || groupActionMutation.isPending}
+                aria-label={`清空分组 ${group.name} 内的 Provider`}
+                title="清空 Provider"
+                onClick={() => {
+                  if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) {
+                    groupActionMutation.mutate({ action: 'clear', group })
+                  }
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label={`重命名分组 ${group.name}`}
+                title="重命名分组"
+                onClick={() => setRenaming({ protocol: group.protocol, id: group.id, name: group.name })}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 hover:text-destructive"
+                aria-label={`删除分组 ${group.name}`}
+                title="删除分组"
+                onClick={() => {
+                  if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) {
+                    groupActionMutation.mutate({ action: 'delete', group })
+                  }
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
             </>}
           </div>
         </CardHeader>
@@ -598,10 +658,100 @@ export default function Providers() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>选择要导入的模型</DialogTitle><DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription></DialogHeader>
-        {upstreamLoading ? <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...</div> : <div className="space-y-3"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} /></div><div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>已选 {selectedModels.size} / {upstreamModels.length}{modelSearch.trim() ? `（筛选 ${filteredUpstream.length} 个）` : ''}{importedFetchedIds.length > 0 && <>，已导入 {importedFetchedIds.length} 个</>}</span><div className="flex items-center gap-2">{importedFetchedIds.length > 0 && <Button size="sm" variant="outline" className="h-7 text-xs" disabled={cleanupImportedMutation.isPending} title="删除该 Provider 全部拉取导入的模型（手动添加的模型不受影响）" onClick={() => { if (window.confirm(`确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`)) cleanupImportedMutation.mutate({ providerId: fetchDialog!.providerId }) }}><Eraser className="h-3.5 w-3.5" />{cleanupImportedMutation.isPending ? '清理中...' : `一键清理已导入（${importedFetchedIds.length}）`}</Button>}<button className="hover:underline" onClick={() => setSelectedModels(new Set([...selectedModels, ...filteredUpstream]))}>全选</button><button className="hover:underline" onClick={() => { const filtered = new Set(filteredUpstream); setSelectedModels(new Set([...selectedModels].filter((id) => !filtered.has(id)))) }}>全不选</button></div></div><div className="h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">{filteredUpstream.map((id) => { const imported = importedById.get(id); const isFetched = imported?.source === 'fetched'; return <div key={id} className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${isFetched ? 'bg-muted/40' : 'hover:bg-muted'}`}><Checkbox checked={selectedModels.has(id)} onCheckedChange={() => toggleUpstreamModel(id)} aria-label={`选择 ${id}`} /><span className="min-w-0 flex-1 truncate font-mono text-xs" title={id}>{id}</span>{imported && <Badge variant={isFetched ? 'secondary' : 'outline'} className="shrink-0">{isFetched ? '已导入' : '已添加'}</Badge>}{isFetched && <Button variant="ghost" size="icon" className="icon-button h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive" disabled={cancelImportMutation.isPending} title="取消导入（删除该导入模型，可重新导入）" aria-label={`取消导入 ${id}`} onClick={() => { if (window.confirm(`取消导入「${id}」？将从该 Provider 删除此模型。`)) cancelImportMutation.mutate({ providerId: fetchDialog!.providerId, modelId: id }) }}><Undo2 className="h-3.5 w-3.5" /></Button>}</div> })}{!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}</div><label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs"><Checkbox checked={createAlias} onCheckedChange={(checked) => setCreateAlias(checked === true)} className="mt-0.5" /><span><span className="font-medium">同时创建同名映射</span><span className="block text-muted-foreground">取消勾选只登记模型，不创建同名映射；未建映射的模型无法被代理请求。</span></span></label></div>}
-        <DialogFooter><Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button><Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>{importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型</Button></DialogFooter>
-      </DialogContent></Dialog>
+      <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>选择要导入的模型</DialogTitle>
+            <DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription>
+          </DialogHeader>
+          {upstreamLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain py-1 pr-1">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input className="pl-8 text-sm" placeholder="搜索模型..." value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>
+                  已选 {selectedModels.size} / {upstreamModels.length}
+                  {modelSearch.trim() ? `（筛选 ${filteredUpstream.length} 个）` : ''}
+                  {importedFetchedIds.length > 0 && <>，已导入 {importedFetchedIds.length} 个</>}
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {importedFetchedIds.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={cleanupImportedMutation.isPending}
+                      title="删除该 Provider 全部拉取导入的模型（手动添加的模型不受影响）"
+                      onClick={() => {
+                        if (window.confirm(`确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`)) {
+                          cleanupImportedMutation.mutate({ providerId: fetchDialog!.providerId })
+                        }
+                      }}
+                    >
+                      <Eraser className="h-3.5 w-3.5" />
+                      {cleanupImportedMutation.isPending ? '清理中...' : `一键清理已导入（${importedFetchedIds.length}）`}
+                    </Button>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button className="hover:underline" onClick={() => setSelectedModels(new Set([...selectedModels, ...filteredUpstream]))}>全选</button>
+                    <button className="hover:underline" onClick={() => { const filtered = new Set(filteredUpstream); setSelectedModels(new Set([...selectedModels].filter((id) => !filtered.has(id)))) }}>全不选</button>
+                  </div>
+                </div>
+              </div>
+              <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">
+                {filteredUpstream.map((id) => {
+                  const imported = importedById.get(id)
+                  const isFetched = imported?.source === 'fetched'
+                  return (
+                    <div key={id} className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${isFetched ? 'bg-muted/40' : 'hover:bg-muted'}`}>
+                      <Checkbox checked={selectedModels.has(id)} onCheckedChange={() => toggleUpstreamModel(id)} aria-label={`选择 ${id}`} />
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs" title={id}>{id}</span>
+                      {imported && <Badge variant={isFetched ? 'secondary' : 'outline'} className="shrink-0">{isFetched ? '已导入' : '已添加'}</Badge>}
+                      {isFetched && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="icon-button h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          disabled={cancelImportMutation.isPending}
+                          title="取消导入（删除该导入模型，可重新导入）"
+                          aria-label={`取消导入 ${id}`}
+                          onClick={() => {
+                            if (window.confirm(`取消导入「${id}」？将从该 Provider 删除此模型。`)) {
+                              cancelImportMutation.mutate({ providerId: fetchDialog!.providerId, modelId: id })
+                            }
+                          }}
+                        >
+                          <Undo2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })}
+                {!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}
+              </div>
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs">
+                <Checkbox checked={createAlias} onCheckedChange={(checked) => setCreateAlias(checked === true)} className="mt-0.5" />
+                <span>
+                  <span className="font-medium">同时创建同名映射</span>
+                  <span className="block text-muted-foreground">取消勾选只登记模型，不创建同名映射；未建映射的模型无法被代理请求。</span>
+                </span>
+              </label>
+            </div>
+          )}
+          <DialogFooter className="shrink-0 border-t pt-2 sm:border-t-0">
+            <Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button>
+            <Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>
+              {importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </>
   )

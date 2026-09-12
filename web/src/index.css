@@ -189,6 +189,13 @@
   .console-toolbar { @apply px-5; }
 }
 
+@media (max-height: 520px) {
+  .page-heading { @apply pb-3 pt-0 gap-2; }
+  .page-title { @apply text-2xl; }
+  .page-description { @apply mt-0.5 text-xs; }
+  .console-toolbar { @apply py-2 px-3; }
+}
+
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes signal-sweep { 0%, 35% { transform: translateX(0); opacity: 0; } 55% { opacity: 1; } 85%, 100% { transform: translateX(420%); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {

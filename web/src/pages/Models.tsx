@@ -313,6 +313,7 @@ function RealModelsList() {
     const keys = rows.map((m) => modelKey(m))
     const selectedCount = keys.filter((key) => selected.has(key)).length
     const allSelected = rows.length > 0 && selectedCount === rows.length
+    const enabledCount = rows.filter((m) => m.enabled).length
     return (
       <Card key={pid} className="console-surface shadow-none">
         <CardHeader className="items-stretch justify-between gap-2 space-y-0 border-b border-foreground/10 px-5 py-3 sm:flex-row sm:items-center">
@@ -320,17 +321,25 @@ function RealModelsList() {
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{name}</CardTitle>
             <Badge variant={provider?.protocol === 'openai' ? 'outline' : 'secondary'}>{provider?.protocol}</Badge>
-            <Badge variant="secondary">{rows.length}</Badge>
-            <Badge variant="outline">{rows.filter((m) => m.enabled).length} 已启用</Badge>
+            <Badge
+              variant="secondary"
+              className="shrink-0 font-mono whitespace-nowrap"
+              title={`已启用 ${enabledCount} / 共 ${rows.length}`}
+            >
+              {enabledCount}/{rows.length}
+            </Badge>
           </button>
           {selectionMode && (
-            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            <div
+              className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"
+              title="全选本组"
+            >
               <Checkbox
                 checked={allSelected ? true : selectedCount > 0 ? 'indeterminate' : false}
                 onCheckedChange={() => toggleRows(keys)}
                 aria-label={`选择 ${name} 的全部模型`}
+                title="全选本组"
               />
-              <span>全选本组</span>
             </div>
           )}
         </CardHeader>
@@ -509,25 +518,29 @@ function RealModelsList() {
       </Dialog>
 
       <Dialog open={!!testTarget} onOpenChange={(open) => !open && setTestTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle>模型测活</DialogTitle>
             <DialogDescription>
               {testTarget ? `${testTarget.provider_name} / ${testTarget.model_id}` : ''}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5 py-2">
-            <Label>提示词</Label>
-            <Textarea value={testPrompt} onChange={(e) => setTestPrompt(e.target.value)} rows={3} placeholder="留空使用默认提示词" />
-            <p className="text-xs text-muted-foreground">禁止使用 "hi/hello/你好/测试/test/1" 等无意义短词</p>
-          </div>
-          {testResult !== null && (
-            <div className="rounded-md border p-3">
-              {testLatency !== null && <p className="mb-1.5 text-xs text-muted-foreground">耗时 {testLatency}ms</p>}
-              <MarkdownRenderer content={testResult} />
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain py-2 pr-1">
+            <div className="space-y-1.5">
+              <Label>提示词</Label>
+              <Textarea value={testPrompt} onChange={(e) => setTestPrompt(e.target.value)} rows={3} placeholder="留空使用默认提示词" />
+              <p className="text-xs text-muted-foreground">禁止使用 "hi/hello/你好/测试/test/1" 等无意义短词</p>
             </div>
-          )}
-          <DialogFooter>
+            {testResult !== null && (
+              <div className="rounded-md border p-3">
+                {testLatency !== null && <p className="mb-1.5 text-xs text-muted-foreground">耗时 {testLatency}ms</p>}
+                <div className="max-h-72 overflow-y-auto">
+                  <MarkdownRenderer content={testResult} />
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="shrink-0 border-t pt-2 sm:border-t-0">
             <Button variant="outline" onClick={() => setTestTarget(null)}>关闭</Button>
             <Button onClick={() => testTarget && doTest(testTarget, testPrompt)} disabled={!testTarget || runTest.isPending}>
               {runTest.isPending ? '测试中...' : '开始测试'}

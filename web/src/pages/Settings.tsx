@@ -115,7 +115,7 @@ export default function Settings() {
           <CardDescription>监听地址与端口修改后需重启后端生效；全局超时设为 0 表示不超时</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid max-w-lg grid-cols-3 gap-4">
+          <div className="grid max-w-lg grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>监听地址</Label>
               <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
@@ -154,14 +154,15 @@ export default function Settings() {
           <CardDescription>网关管理 API 与代理入口的统一校验 Token</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex items-center gap-2">
-            <code className="max-w-md truncate rounded bg-muted px-2 py-1 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 max-w-full flex-1 truncate rounded bg-muted px-2 py-1 text-xs sm:max-w-md sm:flex-initial">
               {meQuery.isLoading ? '加载中...' : meQuery.data?.token ?? '（空）'}
             </code>
-            <Badge variant="secondary">admin</Badge>
+            <Badge variant="secondary" className="shrink-0">admin</Badge>
             <Button
               variant="outline"
               size="sm"
+              className="shrink-0"
               onClick={() => {
                 if (meQuery.data?.token) void navigator.clipboard.writeText(meQuery.data.token)
               }}
