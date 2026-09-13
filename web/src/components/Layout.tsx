@@ -52,7 +52,7 @@ export function Layout() {
   return (
     <div className="surface-grid flex min-h-screen bg-background text-foreground">
       {sidebarOpen && <button aria-label="关闭导航" className="fixed inset-0 z-40 cursor-default bg-foreground/55 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-[240px] max-w-[80vw] flex-col border-r border-foreground/15 bg-card/95 backdrop-blur-xl transition-transform duration-300 sm:w-[256px] lg:static lg:w-[256px] lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-[256px] max-w-[80vw] flex-col border-r border-foreground/15 bg-card/95 backdrop-blur-xl transition-transform duration-300 sm:w-[288px] lg:static lg:w-[288px] lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-14 shrink-0 items-center gap-3 border-b border-foreground/10 px-4 sm:h-16 sm:px-5 lg:h-[84px]">
           <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_0_28px_hsl(var(--accent)/.18)] sm:h-9 sm:w-9 lg:h-10 lg:w-10">
             <Activity className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.5} />

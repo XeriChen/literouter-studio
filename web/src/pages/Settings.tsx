@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
 import { api, clearToken, setToken } from '@/api/client'
 import type { BackupData } from '@/api/types'
+import { copyText } from '@/lib/clipboard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -174,7 +175,9 @@ export default function Settings() {
               size="sm"
               className="shrink-0"
               onClick={() => {
-                if (meQuery.data?.token) void navigator.clipboard.writeText(meQuery.data.token)
+                const token = meQuery.data?.token
+                if (!token) return
+                void copyText(token).then((ok) => setNotice({ message: ok ? 'Token 已复制到剪贴板' : '复制失败，请手动选择复制', ok }))
               }}
             >
               复制
