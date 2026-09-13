@@ -44,7 +44,7 @@ function createProvider(name: string, protocol: 'openai' | 'anthropic', groupId:
 
 test('provider groups remain routing-neutral and support atomic group operations and backup restore', () => {
   const version = db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  assert.equal(version.version, 10)
+  assert.equal(version.version, 11)
 
   const openaiGroup = providers.createProviderGroup({ protocol: 'openai', name: 'Production' })
   const anthropicGroup = providers.createProviderGroup({ protocol: 'anthropic', name: 'Production' })
@@ -76,7 +76,7 @@ test('provider groups remain routing-neutral and support atomic group operations
   assert.equal(providers.getProvider(primary.id)?.group_id, null)
   const routeAfterUngroup = models.findRoute('openai', 'grouped-route')
   assert.equal(routeAfterUngroup.kind, 'ok')
-  if (routeAfterUngroup.kind === 'ok') assert.equal(routeAfterUngroup.provider.id, primary.id)
+  if (routeAfterUngroup.kind === 'ok') assert.equal(routeAfterUngroup.candidates.find((c) => c.target.active === 1)?.provider.id, primary.id)
 
   const cleanupGroup = providers.createProviderGroup({ protocol: 'openai', name: 'Cleanup' })
   providers.updateProvider(primary.id, { group_id: cleanupGroup.id })
@@ -88,11 +88,11 @@ test('provider groups remain routing-neutral and support atomic group operations
   assert.equal(providers.getProvider(secondary.id)?.enabled, 0)
   const routeAfterGroupDisable = models.findRoute('openai', 'grouped-route')
   assert.equal(routeAfterGroupDisable.kind, 'ok')
-  if (routeAfterGroupDisable.kind === 'ok') assert.equal(routeAfterGroupDisable.provider.id, fallback.id)
+  if (routeAfterGroupDisable.kind === 'ok') assert.equal(routeAfterGroupDisable.candidates.find((c) => c.target.active === 1)?.provider.id, fallback.id)
   assert.equal(providers.setGroupProvidersEnabled({ protocol: 'openai', group_id: cleanupGroup.id }, 1), 2)
   const routeAfterGroupEnable = models.findRoute('openai', 'grouped-route')
   assert.equal(routeAfterGroupEnable.kind, 'ok')
-  if (routeAfterGroupEnable.kind === 'ok') assert.equal(routeAfterGroupEnable.provider.id, fallback.id)
+  if (routeAfterGroupEnable.kind === 'ok') assert.equal(routeAfterGroupEnable.candidates.find((c) => c.target.active === 1)?.provider.id, fallback.id)
 
   const exported = backup.exportBackup()
   assert.equal(exported.provider_groups.length, 2)
@@ -107,5 +107,5 @@ test('provider groups remain routing-neutral and support atomic group operations
   assert.equal(providers.listProviderGroups().find((group) => group.id === cleanupGroup.id)?.provider_count, 0)
   const routeAfterBatchDelete = models.findRoute('openai', 'grouped-route')
   assert.equal(routeAfterBatchDelete.kind, 'ok')
-  if (routeAfterBatchDelete.kind === 'ok') assert.equal(routeAfterBatchDelete.provider.id, fallback.id)
+  if (routeAfterBatchDelete.kind === 'ok') assert.equal(routeAfterBatchDelete.candidates.find((c) => c.target.active === 1)?.provider.id, fallback.id)
 })

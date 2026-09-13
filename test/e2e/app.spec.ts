@@ -147,7 +147,7 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   await expect(groupSwitch).toBeVisible()
   await groupSwitch.click()
   await expect.poll(() => groupToggleEnabled).toBe(0)
-  await expect(page.getByTitle('删除组内全部 Provider').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '清空分组 Production 内的 Provider' })).toBeVisible()
 
   await page.getByRole('button', { name: '复制 Primary' }).click()
   const copyDialog = page.getByRole('dialog')
@@ -515,6 +515,7 @@ test('imports aliases into a group and cleans up invalid aliases', async ({ page
     group_name: groupId ? 'Production' : null,
     enabled: 1,
     thinking_json: null,
+    routing_config_json: null,
     provider_id: targets.length ? 'p1' : null,
     model_id: targets.length ? 'mm-x' : null,
     created_at: ts,
@@ -574,7 +575,7 @@ test('imports aliases into a group and cleans up invalid aliases', async ({ page
   await expect(page.getByText('已导入 1 个映射至分组「Production」')).toBeVisible()
 
   // 一键删除无效映射（无候选目标）
-  const cleanup = page.getByRole('button', { name: /清理无效映射（1）/ })
+  const cleanup = page.getByRole('button', { name: /清理无效映射与无效候选/ })
   await expect(cleanup).toBeVisible()
   page.on('dialog', (confirmDialog) => confirmDialog.accept())
   await cleanup.click()
@@ -676,7 +677,7 @@ test('adds a candidate target by searching models across providers', async ({ pa
   await expect(page.getByText('alias-a')).toBeVisible()
   // 展开候选面板
   await page.locator('table button[aria-expanded]').first().click()
-  await expect(page.getByText('候选目标（按优先级排序，当前只使用一个）')).toBeVisible()
+  await expect(page.getByText('候选目标（仅使用当前激活目标）')).toBeVisible()
 
   // 不选 Provider 直接模糊搜索，可命中其他 Provider 的真实模型
   await page.getByRole('combobox', { name: '模型' }).click()

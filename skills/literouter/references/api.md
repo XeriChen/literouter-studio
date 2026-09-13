@@ -30,7 +30,7 @@
 | 真实模型列表 | `GET /api/models` | 含 enabled/source/display_name |
 | 映射列表 | `GET /api/aliases` | 含 targets 数组（priority/active）及内联 provider_name/provider_enabled/target_enabled，可直接判断可路由性 |
 | 映射分组列表 | `GET /api/alias-groups` | |
-| 读设置 | `GET /api/settings` | host/port/global_timeout_ms/log_retention_days |
+| 读设置 | `GET /api/settings` | host/port/global_timeout_ms/log_retention_days/health_check_interval_seconds |
 | 代理访问日志 | `GET /api/logs?page=&page_size=&protocol=&provider_id=&model=&status=` | model=映射名；provider_name/resolved_model=实际路由 |
 | 配置操作日志 | `GET /api/audit-logs?page=&page_size=&resource=` | resource 可选 provider/model/alias/… |
 
@@ -49,6 +49,8 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` |
 | 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 |
 | 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其余 HTTP 响应（含 404/502）判网络可达；结果不证明模型推理或映射链路可用 |
+| 查余额 | `GET /api/providers/:id/balance` | 仅 upstream_type 为 newapi/sub2api 的 Provider 支持；返回归一化结果 `{success, balance, currency, balances[], available, status_code, fetched_at, error}`；60s TTL 缓存 + 在途去重，`?force=1` 直连上游；不支持时 400 `balance_unsupported` |
+| 余额日快照 | `GET /api/providers/:id/balance/snapshots` | 当地时区每天一条（后写覆盖），默认返回最近 90 天 |
 | 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 |
 | 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组，可选 `create_alias`（默认 true）；启用导入模型，已启用的 Provider 自动建同名映射（同名已存在只追加 inactive 候选，不切 active）；传 `create_alias:false` 只登记模型 |
 | 一键清理导入模型 | `POST /api/providers/:id/cleanup-imported-models` | 无 body；事务内删除该 Provider 全部 `source='fetched'` 模型（手动添加不受影响），返回 `{deleted}`；同名映射保留、候选随引用修复，可能留下无候选的无效映射（用映射页「清理无效映射」清理） |
@@ -70,18 +72,25 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 
 ## 4. 模型映射与候选（路由核心）
 
-映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。请求只路由到唯一 `active=1` 候选。
+映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。路由模式由映射的 `routing_config` 决定（默认 single）：
+
+- **single**（默认）：只使用 `active=1` 候选，失败不换目标。
+- **weighted**：全候选按 `weight` 加权随机分配；weight 0 仅作末位备选，全 0 均匀随机。
+- **failover**：按 priority 升序尝试，失败自动切换下一候选。
+
+weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选路时跳过；全部冷却时仅放行一个探测请求（其余立即 503）；探测/切换成功后可按配置进入短时亲和期。
 
 | 操作 | 端点 | Body / 说明 |
 | :--- | :--- | :--- |
 | 建映射 | `POST /api/aliases` | `{protocol, alias_name, provider_id, model_id, group_id?, enabled?, thinking?}`；目标 Provider 与真实模型必须已启用且协议一致；首个目标即 active |
-| 改映射 | `PATCH /api/aliases` | `{protocol, alias_name, new_alias_name?/group_id?/enabled?/(provider_id+model_id 成对出现=换当前目标)/thinking?}`；`thinking:null` 清除思考配置 |
+| 改映射 | `PATCH /api/aliases` | `{protocol, alias_name, new_alias_name?/group_id?/enabled?/(provider_id+model_id 成对出现=换当前目标)/thinking?/routing_config?}`；`thinking:null` 清除思考配置；`routing_config` 形如 `{mode, max_attempts?/cooldown_seconds?/affinity_seconds?}`（mode ∈ single/weighted/failover，max_attempts 1-10，cooldown/affinity 0-3600 秒，null 清除回退 single） |
 | 删映射 | `DELETE /api/aliases` | `{protocol, alias_name}` |
 | 合并映射 | `POST /api/aliases/merge` | `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加；**并入已有映射不改其 active（不切流量）**，新建映射以第一个源的当前目标为 active、thinking 继承第一个非空源；`delete_sources:true` 删除源映射（属删除类操作，需确认授权） |
 | 加候选 | `POST /api/alias-targets` | `{protocol, alias_name, provider_id, model_id}`；已有 active 时新候选为 inactive，**不切换流量** |
 | 设为当前目标 | `PATCH /api/alias-targets` | 同上 body；原子切换 active（迁移流量用这个） |
 | 删候选 | `DELETE /api/alias-targets` | 同上 body；若删的是 active 自动按 priority 修复到首个可用候选 |
 | 重排优先级 | `POST /api/alias-targets/reorder` | `{protocol, alias_name, targets:[{provider_id, model_id},…]}`；targets 必须是完整候选集按新顺序排列 |
+| 设候选权重 | `POST /api/alias-targets/weight` | `{protocol, alias_name, provider_id, model_id, weight(0-10000)}`；weighted 模式的分配权重，0 = 仅末位备选 |
 
 注意：候选新增/设 active 的前置校验相同——Provider 与真实模型都存在且 enabled、协议一致，否则 400。
 
@@ -99,7 +108,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 
 | 操作 | 端点 | Body / 说明 |
 | :--- | :--- | :--- |
-| 改设置 | `PUT /api/settings` | `{host?/port?/global_timeout_ms?/log_retention_days?}`（字符串数字）；host/port 需重启，超时对后续代理请求生效，日志保留天数在下次启动清理时生效 |
+| 改设置 | `PUT /api/settings` | `{host?/port?/global_timeout_ms?/log_retention_days?/health_check_interval_seconds?}`（字符串数字）；host/port 需重启，超时对后续代理请求生效，日志保留天数在下次启动清理时生效；健康探针间隔（秒，默认 0=关闭）对冷却中的候选发最小请求探活，成功则提前恢复冷却 |
 | 重置 Token | `POST /api/token/reset` | 无 body；旧 Token 全部失效，新 Token 在请求进程内保存和使用，不原样输出 |
 | 清空代理日志 | `DELETE /api/logs` | 不可恢复 |
 | 清空审计日志 | `DELETE /api/audit-logs` | 不可恢复 |
@@ -120,6 +129,9 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 404 | `not_found` | 路径错误 |
 | 405 | `method_not_allowed` | 方法用错 |
 | 503 | `provider_disabled` | 核对 Provider 启用状态和任务目标；已有授权涵盖启用或恢复服务时再修正，查询排障不自动启用 |
+| 503 | `no_available_target` | weighted/failover 模式下全部候选冷却且探测位被占用；稍后重试或检查候选健康状态 |
+| 400 | `balance_unsupported` | 该 Provider 的 upstream_type 不提供余额端点 |
+| 400 | `outbound_url_invalid` | 上游 URL 形状非法（协议/凭据/控制字符），核对 base_url |
 | 502 | `upstream_error` | 上游不可达/5xx/管理侧上游失败 |
 | 504 | `upstream_timeout` | 上游超时 |
 
@@ -141,8 +153,9 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 ## 9. 关键路由语义（路由排障时查阅）
 
 1. 客户端请求的 `model` 必须是**映射名**；直写真实模型名 → 代理返回 `404 model_not_found`。
-2. 映射可路由要求「映射 enabled + 目标候选 active + Provider enabled + 真实模型 enabled」。路由到禁用的 Provider 返回 `503 provider_disabled`；真实模型禁用、映射不存在或禁用等返回 `404 model_not_found`。
+2. 映射可路由要求「映射 enabled + 至少一个可用候选（其 Provider enabled + 真实模型 enabled）」。全部候选不可用时返回 `503 provider_disabled`；映射不存在或禁用返回 `404 model_not_found`。single 模式使用 active 候选；weighted/failover 使用全部可用候选。
 3. 代理入口：OpenAI `/openai/v1/*`、Anthropic `/anthropic/v1/*`，除 `GET */v1/models` 外只收 POST。
-4. 删除 active 候选、或删除/禁用其 Provider 与真实模型时，在配置事务内按 priority 选择首个可用候选修复 active。没有可用候选时映射保留但不可调用，按实际路由状态返回 404/503；重新启用旧目标不会替换已经可用的 active。请求期不会尝试其他候选。
-5. 已启用的 Provider 导入/新增真实模型会自动建同名映射，但同名映射已存在时只追加 inactive 候选，不切 active。
-6. 上游 4xx 原样透传给客户端，5xx 包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是首包耗时。
+4. 删除 active 候选、或删除/禁用其 Provider 与真实模型时，在配置事务内按 priority 选择首个可用候选修复 active。没有可用候选时映射保留但不可调用，按实际路由状态返回 404/503；重新启用旧目标不会替换已经可用的 active。
+5. weighted/failover 模式的失败重试只发生在「首个响应字节写给客户端之前」；候选连续失败达 max_attempts 次后冷却 cooldown_seconds（默认 60），全部冷却时其余请求立即 503 `no_available_target`。健康状态纯进程内，重启即清空。
+6. 上游 4xx 原样透传给客户端（401/403/408/429 视为候选故障会在首字节前换候选），5xx 包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是本次尝试的首包耗时，`attempt` 是第几次尝试。
+7. 已启用的 Provider 导入/新增真实模型会自动建同名映射，但同名映射已存在时只追加 inactive 候选，不切 active。

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { exportBackup, importBackup } from '../../services/backup'
 import { writeAuditLog } from '../../services/audit'
 import { getAdminToken } from '../../services/auth'
+import { clearHealthState } from '../../services/health'
 import type { Env } from '../../types'
 import { fail, nonEmptyText, ok, providerSchema, readJson, settingsSchema, thinkingConfigSchema } from './shared'
 
@@ -39,11 +40,13 @@ const backupSchema = z.object({
     group_id: nonEmptyText.nullable().default(null),
     enabled: z.union([z.literal(0), z.literal(1)]).default(1),
     thinking: thinkingConfigSchema.nullable().default(null),
+    routing_config: z.any().nullable().optional(),
     targets: z.array(z.object({
       provider_id: nonEmptyText,
       model_id: nonEmptyText,
       priority: z.number().int().min(0).default(0),
       active: z.union([z.literal(0), z.literal(1)]).default(0),
+      weight: z.number().int().min(0).max(10000).default(100),
     })),
   })).default([]),
 })
@@ -88,8 +91,12 @@ export function registerBackupRoutes(api: Hono<Env>): void {
         models: data.models.map((model) => ({ ...model, display_name: model.display_name ?? null })),
         provider_groups: data.provider_groups,
         groups: data.groups,
-        aliases: data.aliases,
+        aliases: data.aliases.map((alias) => ({
+          ...alias,
+          routing_config: alias.routing_config ?? null,
+        })),
       })
+      clearHealthState()
       writeAuditLog({
         resource: 'backup',
         action: 'import',

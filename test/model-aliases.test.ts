@@ -27,9 +27,9 @@ after(async () => {
   }
 })
 
-test('initializes schema v10 and keeps exactly one priority-routed active target', () => {
+test('initializes schema v11 and keeps exactly one priority-routed active target', () => {
   const version = db.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number }
-  assert.equal(version.version, 10)
+  assert.equal(version.version, 11)
 
   const now = new Date().toISOString()
   const insertProvider = db.prepare(
@@ -73,12 +73,12 @@ test('initializes schema v10 and keeps exactly one priority-routed active target
   models.setModelEnabled({ provider_id: 'p1', model_id: 'model-a', enabled: 0 })
   const switched = models.findRoute('openai', 'managed-alias')
   assert.equal(switched.kind, 'ok')
-  if (switched.kind === 'ok') assert.equal(switched.provider.id, 'p2')
+  if (switched.kind === 'ok') assert.equal(switched.candidates.find((c) => c.target.active === 1)?.provider.id, 'p2')
 
   models.setModelEnabled({ provider_id: 'p1', model_id: 'model-a', enabled: 1 })
   const noSwitchBack = models.findRoute('openai', 'managed-alias')
   assert.equal(noSwitchBack.kind, 'ok')
-  if (noSwitchBack.kind === 'ok') assert.equal(noSwitchBack.provider.id, 'p2')
+  if (noSwitchBack.kind === 'ok') assert.equal(noSwitchBack.candidates.find((c) => c.target.active === 1)?.provider.id, 'p2')
 
   models.updateAlias({ protocol: 'openai', alias_name: 'managed-alias', enabled: 0 })
   assert.equal(models.findRoute('openai', 'managed-alias').kind, 'not_found')
@@ -87,7 +87,7 @@ test('initializes schema v10 and keeps exactly one priority-routed active target
   models.deleteAliasTarget({ protocol: 'openai', alias_name: 'managed-alias', provider_id: 'p2', model_id: 'model-b' })
   const fallback = models.findRoute('openai', 'managed-alias')
   assert.equal(fallback.kind, 'ok')
-  if (fallback.kind === 'ok') assert.equal(fallback.provider.id, 'p1')
+  if (fallback.kind === 'ok') assert.equal(fallback.candidates.find((c) => c.target.active === 1)?.provider.id, 'p1')
 
   models.updateAlias({ protocol: 'openai', alias_name: 'managed-alias', new_alias_name: 'renamed-alias' })
   assert.equal(models.findRoute('openai', 'managed-alias').kind, 'not_found')
@@ -215,7 +215,7 @@ test('merges alias candidates into a new or existing alias without switching tra
   assert.equal(activeTarget?.model_id, 'mm1')
   const route = models.findRoute('openai', 'merged-new')
   assert.equal(route.kind, 'ok')
-  if (route.kind === 'ok') assert.equal(route.provider.id, 'mp1')
+  if (route.kind === 'ok') assert.equal(route.candidates[0]?.provider.id, 'mp1')
 
   // 2. 并入已有映射：不改其 active（不切流量），只追加缺失候选
   models.addAlias({ protocol: 'openai', alias_name: 'merge-dest', provider_id: 'mp3', model_id: 'mm3' })
@@ -228,7 +228,7 @@ test('merges alias candidates into a new or existing alias without switching tra
   assert.deepEqual(dest?.targets.find((target) => target.active)?.model_id, 'mm3')
   const destRoute = models.findRoute('openai', 'merge-dest')
   assert.equal(destRoute.kind, 'ok')
-  if (destRoute.kind === 'ok') assert.equal(destRoute.provider.id, 'mp3')
+  if (destRoute.kind === 'ok') assert.equal(destRoute.candidates.find((c) => c.target.active === 1)?.provider.id, 'mp3')
 
   // 3. 新建时 thinking 继承 sources 顺序上第一个非空配置
   models.addAlias({ protocol: 'openai', alias_name: 'merge-c', provider_id: 'mp1', model_id: 'mm1' })

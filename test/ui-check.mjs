@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-const BASE = 'http://127.0.0.1:3000'
+const BASE = process.env.UI_CHECK_URL || 'http://127.0.0.1:3000'
 const OUT = 'test-results/ui-check'
 mkdirSync(OUT, { recursive: true })
 

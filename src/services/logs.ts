@@ -52,8 +52,8 @@ export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] }
 
 export function writeLog(row: Partial<LogRow>): number {
   const result = db.prepare(
-    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, provider_name, resolved_model, status, latency_ms, error_code, request_bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO logs (created_at, client_ip, protocol, method, path, model, provider_id, provider_name, resolved_model, status, latency_ms, error_code, request_bytes, prompt_tokens, completion_tokens, total_tokens, attempt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.created_at ?? new Date().toISOString(),
     row.client_ip ?? null,
@@ -68,6 +68,10 @@ export function writeLog(row: Partial<LogRow>): number {
     row.latency_ms ?? null,
     row.error_code ?? null,
     row.request_bytes ?? null,
+    row.prompt_tokens ?? null,
+    row.completion_tokens ?? null,
+    row.total_tokens ?? null,
+    row.attempt ?? null,
   )
   return Number(result.lastInsertRowid)
 }
@@ -76,6 +80,20 @@ export function writeLog(row: Partial<LogRow>): number {
 export function updateLogResponseBytes(id: number, bytes: number): void {
   if (!Number.isInteger(id) || id <= 0) return
   db.prepare('UPDATE logs SET response_bytes = ? WHERE id = ?').run(bytes, id)
+}
+
+/** 响应结束后回填被动解析到的 token 用量（响应中未见 usage 时传 null 保持列不变）。 */
+export function updateLogUsage(
+  id: number,
+  usage: { prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null },
+): void {
+  if (!Number.isInteger(id) || id <= 0) return
+  db.prepare('UPDATE logs SET prompt_tokens = ?, completion_tokens = ?, total_tokens = ? WHERE id = ?').run(
+    usage.prompt_tokens,
+    usage.completion_tokens,
+    usage.total_tokens,
+    id,
+  )
 }
 
 export function clearLogs(): void {

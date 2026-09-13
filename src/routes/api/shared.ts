@@ -60,6 +60,7 @@ export const settingsSchema = z.object({
   port: z.string().regex(/^\d{1,5}$/).refine((value) => Number(value) >= 1 && Number(value) <= 65535, 'port 无效').optional(),
   global_timeout_ms: nonNegativeIntegerText.optional(),
   log_retention_days: nonNegativeIntegerText.optional(),
+  health_check_interval_seconds: nonNegativeIntegerText.optional(),
 })
 
 export const providerSchema = z.object({
@@ -109,12 +110,24 @@ export const thinkingConfigSchema = z.looseObject({
   value: z.unknown(),
 })
 
+/**
+ * 路由配置：single 仅 active 目标；weighted 全候选按 weight 加权随机；
+ * failover 按 priority 升序逐个尝试。max_attempts 未配置 = 尝试全部候选。
+ */
+export const routingConfigSchema = z.object({
+  mode: z.enum(['single', 'weighted', 'failover']),
+  affinity_seconds: z.number().int().min(0).max(3600).optional(),
+  max_attempts: z.number().int().min(1).max(10).optional(),
+  cooldown_seconds: z.number().int().min(0).max(3600).optional(),
+})
+
 export const aliasSchema = aliasRefSchema.extend({
   provider_id: nonEmptyText,
   model_id: nonEmptyText,
   group_id: nonEmptyText.nullable().optional(),
   enabled: z.union([z.literal(0), z.literal(1)]).optional(),
   thinking: thinkingConfigSchema.optional(),
+  routing_config: routingConfigSchema.optional(),
 }).superRefine((alias, ctx) => {
   if (alias.thinking && !validateThinkingValue(alias.protocol, alias.thinking.value)) {
     ctx.addIssue({ code: 'custom', path: ['thinking', 'value'], message: 'thinking value does not match protocol' })
@@ -129,9 +142,12 @@ export const aliasPatchSchema = aliasRefSchema.extend({
   model_id: nonEmptyText.optional(),
   /** undefined = 不变；null = 清除 */
   thinking: thinkingConfigSchema.nullable().optional(),
+  /** undefined = 不变；null = 清除 */
+  routing_config: routingConfigSchema.nullable().optional(),
 }).refine(
   (value) => value.new_alias_name !== undefined || value.group_id !== undefined || value.enabled !== undefined
     || value.thinking !== undefined
+    || value.routing_config !== undefined
     || (value.provider_id !== undefined && value.model_id !== undefined),
   'alias patch cannot be empty',
 ).refine(

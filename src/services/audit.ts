@@ -33,6 +33,7 @@ export type AuditAction =
   | 'activate'
   | 'reorder'
   | 'merge'
+  | 'weight'
 
 export interface AuditInput {
   resource: AuditResource

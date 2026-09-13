@@ -5,6 +5,7 @@ export const DEFAULT_SETTINGS = {
   port: '3000',
   global_timeout_ms: '120000',
   log_retention_days: '30',
+  health_check_interval_seconds: '0',
 }
 
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS
