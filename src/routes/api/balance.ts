@@ -1,16 +1,18 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { fetchNewApiBalance } from '../../services/balance'
+import { getProviderBalance, listBalanceSnapshots } from '../../services/balance'
 import { writeAuditLog } from '../../services/audit'
+import { UpstreamError, httpStatusForUpstreamError } from '../../services/errors'
+import { redactText } from '../../services/redact'
 
 const app = new Hono<Env>()
 
 app.get('/:id/balance', async (c) => {
   const providerId = c.req.param('id')
+  const force = c.req.query('force') === '1'
 
   try {
-    const result = await fetchNewApiBalance(providerId)
-
+    const result = await getProviderBalance(providerId, { force })
     writeAuditLog({
       resource: 'provider',
       target: providerId,
@@ -18,73 +20,28 @@ app.get('/:id/balance', async (c) => {
       detail: `balance=${result.balance}`,
       status: 200,
     })
-
     return c.json({ ok: true, data: result })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
+    const code = err instanceof UpstreamError ? err.code : 'upstream_error'
+    const rawMessage = err instanceof Error ? err.message : 'unknown error'
+    const message = redactText(rawMessage)
+    const status = httpStatusForUpstreamError(code)
 
     writeAuditLog({
       resource: 'provider',
       target: providerId,
       action: 'balance',
-      detail: message,
-      status: 500,
+      detail: redactText(`${code}: ${rawMessage}`),
+      status,
     })
 
-    if (message.includes('not found')) {
-      return c.json(
-        {
-          ok: false,
-          error: {
-            message: 'Provider not found',
-            type: 'provider_not_found',
-            code: 'provider_not_found',
-          },
-        },
-        404,
-      )
-    }
-
-    if (message.includes('not a New API or Sub2API instance')) {
-      return c.json(
-        {
-          ok: false,
-          error: {
-            message: 'Provider is not a New API or Sub2API instance',
-            type: 'invalid_upstream_type',
-            code: 'invalid_upstream_type',
-          },
-        },
-        400,
-      )
-    }
-
-    if (message.includes('timed out')) {
-      return c.json(
-        {
-          ok: false,
-          error: {
-            message: 'Balance query request timed out',
-            type: 'upstream_timeout',
-            code: 'upstream_timeout',
-          },
-        },
-        504,
-      )
-    }
-
-    return c.json(
-      {
-        ok: false,
-        error: {
-          message: 'Failed to query balance from upstream',
-          type: 'upstream_error',
-          code: 'upstream_error',
-        },
-      },
-      502,
-    )
+    return c.json({ ok: false, error: { message, type: code, code } }, status as 400 | 404 | 502 | 504)
   }
+})
+
+app.get('/:id/balance/snapshots', (c) => {
+  const providerId = c.req.param('id')
+  return c.json({ ok: true, data: listBalanceSnapshots(providerId) })
 })
 
 export default app

@@ -676,7 +676,7 @@ test('adds a candidate target by searching models across providers', async ({ pa
   await expect(page.getByText('alias-a')).toBeVisible()
   // 展开候选面板
   await page.locator('table button[aria-expanded]').first().click()
-  await expect(page.getByText('候选目标（按优先级排序，当前只使用一个）')).toBeVisible()
+  await expect(page.getByText('候选目标（仅使用当前激活目标）')).toBeVisible()
 
   // 不选 Provider 直接模糊搜索，可命中其他 Provider 的真实模型
   await page.getByRole('combobox', { name: '模型' }).click()

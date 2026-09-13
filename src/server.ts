@@ -9,6 +9,7 @@ import { getAdminToken } from './services/auth'
 import { getSettings, getLogRetentionDays } from './services/settings'
 import { cleanOldLogs } from './services/logs'
 import { invalidateAllDispatchers } from './proxy'
+import { startHealthProbeScheduler } from './services/health-probe'
 
 // 首次启动初始化数据库并自动生成 admin_token
 getAdminToken()
@@ -104,3 +105,4 @@ function startRssWatchdog() {
 }
 
 startRssWatchdog()
+startHealthProbeScheduler()

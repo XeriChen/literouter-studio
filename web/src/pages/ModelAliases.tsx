@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Brain, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Eraser, FolderInput, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, TextCursorInput, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
-import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, ThinkingConfig } from '@/api/types'
+import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, RoutingConfig, ThinkingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { SearchableSelect } from '@/components/searchable-select'
 import { Badge } from '@/components/ui/badge'
@@ -78,6 +78,66 @@ function thinkingBadge(thinkingJson: string | null): string | null {
   }
 }
 
+// ---------- 路由配置 ----------
+
+type RoutingMode = RoutingConfig['mode']
+
+interface RoutingFormState {
+  mode: RoutingMode
+  max_attempts: string
+  cooldown_seconds: string
+  affinity_seconds: string
+}
+
+const emptyRoutingForm: RoutingFormState = { mode: 'single', max_attempts: '', cooldown_seconds: '', affinity_seconds: '' }
+
+function parseRoutingForm(json: string | null): RoutingFormState {
+  if (!json) return emptyRoutingForm
+  try {
+    const config = JSON.parse(json) as RoutingConfig
+    if (config.mode !== 'weighted' && config.mode !== 'failover') return emptyRoutingForm
+    return {
+      mode: config.mode,
+      max_attempts: config.max_attempts != null ? String(config.max_attempts) : '',
+      cooldown_seconds: config.cooldown_seconds != null ? String(config.cooldown_seconds) : '',
+      affinity_seconds: config.affinity_seconds != null ? String(config.affinity_seconds) : '',
+    }
+  } catch {
+    return emptyRoutingForm
+  }
+}
+
+function buildRoutingConfig(form: RoutingFormState): { config: RoutingConfig | null; error?: string } {
+  if (form.mode === 'single') return { config: { mode: 'single' } }
+  const optionalInt = (raw: string, label: string, min: number, max: number): { value?: number; error?: string } => {
+    const trimmed = raw.trim()
+    if (!trimmed) return {}
+    const parsed = Number(trimmed)
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) return { error: `${label} 需为 ${min}-${max} 的整数` }
+    return { value: parsed }
+  }
+  const attempts = optionalInt(form.max_attempts, '最大尝试数', 1, 10)
+  if (attempts.error) return { config: null, error: attempts.error }
+  const cooldown = optionalInt(form.cooldown_seconds, '冷却时长', 0, 3600)
+  if (cooldown.error) return { config: null, error: cooldown.error }
+  const affinity = optionalInt(form.affinity_seconds, '亲和时长', 0, 3600)
+  if (affinity.error) return { config: null, error: affinity.error }
+  return {
+    config: {
+      mode: form.mode,
+      ...(attempts.value !== undefined ? { max_attempts: attempts.value } : {}),
+      ...(cooldown.value !== undefined ? { cooldown_seconds: cooldown.value } : {}),
+      ...(affinity.value !== undefined ? { affinity_seconds: affinity.value } : {}),
+    },
+  }
+}
+
+const routingModeLabels: Record<RoutingMode, string> = {
+  single: 'single · 仅当前目标',
+  weighted: 'weighted · 加权随机',
+  failover: 'failover · 优先级故障转移',
+}
+
 function parseThinkingConfig(thinkingJson: string | null): ThinkingConfig | null {
   if (!thinkingJson) return null
   try {
@@ -145,6 +205,8 @@ function TargetPanel({
   onActivate,
   onDelete,
   onReorder,
+  onWeight,
+  onRoutingConfig,
 }: {
   alias: ModelAlias
   providers: Provider[]
@@ -153,14 +215,20 @@ function TargetPanel({
   onActivate: (target: AliasTarget) => void
   onDelete: (target: AliasTarget) => void
   onReorder: (targets: AliasTarget[]) => void
+  onWeight: (target: AliasTarget, weight: number) => void
+  onRoutingConfig: (config: RoutingConfig) => void
 }) {
   const [providerId, setProviderId] = useState('')
   const [modelId, setModelId] = useState('')
   const [dragKey, setDragKey] = useState<string | null>(null)
+  const [routingForm, setRoutingForm] = useState<RoutingFormState>(() => parseRoutingForm(alias.routing_config_json))
+  const [routingError, setRoutingError] = useState<string | null>(null)
   const availableProviders = providers.filter((p) => p.protocol === alias.protocol && p.enabled === 1)
   // 搜索覆盖同协议全部已启用 Provider 的真实模型；选中后回填上方 Provider 与模型
   const searchableModels = models.filter((m) => m.protocol === alias.protocol && m.provider_enabled === 1 && m.enabled === 1)
   const existing = new Set(alias.targets.map((t) => `${t.provider_id}/${t.model_id}`))
+
+  useEffect(() => setRoutingForm(parseRoutingForm(alias.routing_config_json)), [alias.routing_config_json])
 
   function move(target: AliasTarget, over: AliasTarget) {
     if (target.id === over.id) return
@@ -187,7 +255,9 @@ function TargetPanel({
   return (
     <div className="space-y-3 rounded-md border bg-muted/20 p-3">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold">候选目标（按优先级排序，当前只使用一个）</div>
+        <div className="text-xs font-semibold">
+          {routingForm.mode === 'weighted' ? '候选目标（按权重随机分配）' : routingForm.mode === 'failover' ? '候选目标（按优先级故障转移）' : '候选目标（仅使用当前激活目标）'}
+        </div>
         <Badge variant="secondary">{alias.targets.length} 个</Badge>
       </div>
       <div className="space-y-1.5">
@@ -215,6 +285,20 @@ function TargetPanel({
                 title="设为当前目标"
               />
               <span className="min-w-0 flex-1 truncate font-mono">{target.provider_name} / {target.model_id}</span>
+              <label className="flex shrink-0 items-center gap-1 text-muted-foreground" title="分配权重（weighted 模式生效；0 = 仅末位备选）">
+                权重
+                <Input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  defaultValue={target.weight}
+                  className="h-7 w-16 text-xs"
+                  onBlur={(e) => {
+                    const value = Number(e.target.value)
+                    if (Number.isInteger(value) && value >= 0 && value <= 10000 && value !== target.weight) onWeight(target, value)
+                  }}
+                />
+              </label>
               {target.active && <Badge variant="outline">当前</Badge>}
               {!target.provider_enabled && <Badge variant="destructive">Provider 已禁用</Badge>}
               {target.provider_enabled === 1 && !target.target_enabled && <Badge variant="destructive">模型已禁用</Badge>}
@@ -249,6 +333,60 @@ function TargetPanel({
           )
         })}
         {!alias.targets.length && <p className="py-2 text-xs text-muted-foreground">暂无候选目标，映射当前不可调用。</p>}
+      </div>
+      <div className="space-y-2 border-t pt-3">
+        <Label className="text-xs">路由模式</Label>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <Select value={routingForm.mode} onValueChange={(value) => setRoutingForm({ ...routingForm, mode: value as RoutingMode })}>
+            <SelectTrigger className="h-8 flex-1 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(Object.keys(routingModeLabels) as RoutingMode[]).map((mode) => (
+                <SelectItem key={mode} value={mode}>{routingModeLabels[mode]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {routingForm.mode !== 'single' && (
+            <>
+              <Input
+                type="number" min={1} max={10}
+                className="h-8 w-full text-xs sm:w-28"
+                value={routingForm.max_attempts}
+                onChange={(e) => setRoutingForm({ ...routingForm, max_attempts: e.target.value })}
+                placeholder="尝试数(默认全部)"
+                title="同一候选连续失败多少次后冷却；也限制单次请求最多尝试的候选数"
+              />
+              <Input
+                type="number" min={0} max={3600}
+                className="h-8 w-full text-xs sm:w-28"
+                value={routingForm.cooldown_seconds}
+                onChange={(e) => setRoutingForm({ ...routingForm, cooldown_seconds: e.target.value })}
+                placeholder="冷却秒(默认60)"
+                title="候选进入冷却后的持续时间"
+              />
+              <Input
+                type="number" min={0} max={3600}
+                className="h-8 w-full text-xs sm:w-28"
+                value={routingForm.affinity_seconds}
+                onChange={(e) => setRoutingForm({ ...routingForm, affinity_seconds: e.target.value })}
+                placeholder="亲和秒(默认0)"
+                title="探测/故障切换成功后，一段时间内固定使用该候选"
+              />
+            </>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full shrink-0 sm:w-auto"
+            onClick={() => {
+              const built = buildRoutingConfig(routingForm)
+              if (built.error || !built.config) { setRoutingError(built.error ?? '路由配置无效'); return }
+              setRoutingError(null)
+              onRoutingConfig(built.config)
+            }}
+          >保存路由</Button>
+        </div>
+        {routingForm.mode !== 'single' && <p className="text-xs text-muted-foreground">候选连续失败达阈值后冷却并跳过；全部冷却时仅放行一个探测请求；探测/切换成功后亲和期内固定使用该候选。</p>}
+        {routingError && <p className="text-xs text-destructive">{routingError}</p>}
       </div>
       <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-end">
         <div className="min-w-0 flex-1 space-y-1">
@@ -749,7 +887,7 @@ export default function ModelAliases() {
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
                     <TableCell className="pr-5"><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" title="编辑" onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></Button><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
-                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} /></TableCell></TableRow>}
+                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} onWeight={(target, weight) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/weight', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id, weight } })} onRoutingConfig={(config) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, routing_config: config })} /></TableCell></TableRow>}
                 </Fragment>
               })}
               {!groupRows.length && <TableRow><TableCell colSpan={cols} className="h-20 text-center text-xs text-muted-foreground">暂无映射；可以先保留空分组。</TableCell></TableRow>}

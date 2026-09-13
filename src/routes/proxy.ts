@@ -5,6 +5,7 @@ import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
 import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
 import { normalizeUpstreamPath } from '../proxy/path'
+import { createUsageParser } from '../proxy/usage'
 import {
   parseProxyBody,
   readRequestBody,
@@ -13,9 +14,12 @@ import {
   MAX_REQUEST_BODY_BYTES,
   RequestBodyTooLargeError,
 } from '../proxy/body'
-import { findRoute, listAliasNames } from '../services/models'
-import { writeLog, updateLogResponseBytes } from '../services/logs'
+import { findRoute, listAliasNames, type RouteCandidate } from '../services/models'
+import { buildCandidateOrder, parseRoutingConfig } from '../services/routing'
+import { pickCandidate, reportSuccess, reportFailure, reportClientCancel } from '../services/health'
+import { writeLog, updateLogResponseBytes, updateLogUsage } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
+import { assertSafeOutboundUrl, OutboundUrlError } from '../services/url-guard'
 import type { Env, ProviderRow } from '../types'
 
 export const proxyRoutes = new Hono<Env>()
@@ -32,51 +36,108 @@ function clientIp(c: Context): string | null {
   return env?.incoming?.socket?.remoteAddress ?? null
 }
 
+/** 这些上游状态视为「该候选的故障」，可在首字节写出前换下一候选重试；其余 4xx 属客户端问题，原样透传 */
+const RETRYABLE_STATUS = new Set([401, 403, 408, 429])
+
+function retryableStatusError(status: number): { code: string; clientStatus: number } {
+  if (status === 429) return { code: 'upstream_rate_limited', clientStatus: 502 }
+  if (status === 401 || status === 403) return { code: 'upstream_auth_error', clientStatus: 502 }
+  if (status === 408) return { code: 'upstream_timeout', clientStatus: 504 }
+  return { code: 'upstream_error', clientStatus: 502 }
+}
+
 /**
- * 统计转发给客户端的响应字节数，并在流正常结束时回填日志。
+ * 统计转发给客户端的响应字节数，并被动解析 usage，在流正常结束时回填日志。
  * 用 TransformStream（而非 for-await + enqueue 的手写循环）以保证背压语义不被破坏。
  */
-function countResponseBytes(body: Readable, logId: number): ReadableStream<Uint8Array> {
+function countResponse(body: Readable, logId: number): ReadableStream<Uint8Array> {
   let total = 0
+  const usage = createUsageParser()
   const counted = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       total += chunk.byteLength
+      usage.feed(chunk)
       controller.enqueue(chunk)
     },
     flush() {
       updateLogResponseBytes(logId, total)
+      updateLogUsage(logId, usage.snapshot() ?? { prompt_tokens: null, completion_tokens: null, total_tokens: null })
     },
   })
   return (Readable.toWeb(body) as unknown as ReadableStream<Uint8Array>).pipeThrough(counted)
 }
 
-async function forward(
-  c: Context,
-  provider: ProviderRow,
-  upstreamPath: string,
-  method: string,
-  body: Uint8Array | null,
-  startedAt: number,
-  protocol: 'openai' | 'anthropic',
-  requestedModel: string,
-  resolvedModel: string,
-  requestBytes: number,
-) {
+interface AttemptOutcome {
+  kind: 'done' | 'retryable'
+  response?: Response
+  /** 重试耗尽后对客户端的最终状态码与错误码 */
+  clientStatus?: number
+  code?: string
+  message?: string
+}
+
+/**
+ * 单次候选尝试：发请求、写该次 attempt 的日志行，返回透传响应或「可重试失败」标记。
+ * 在首个字节写给客户端之前（即本函数返回 done 之前）失败都可以安全重试；
+ * 一旦 done 的 Response 开始向客户端流动，调用方不得再切换候选。
+ */
+async function forwardAttempt(params: {
+  c: Context
+  provider: ProviderRow
+  upstreamPath: string
+  method: string
+  outBody: Uint8Array
+  startedAt: number
+  protocol: 'openai' | 'anthropic'
+  requestedModel: string
+  resolvedModel: string
+  requestBytes: number
+  attempt: number
+}): Promise<AttemptOutcome> {
+  const { c, provider, upstreamPath, method, outBody, startedAt, protocol, requestedModel, resolvedModel, requestBytes, attempt } = params
+  const attemptStartedAt = Date.now()
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
+  // 出站兜底校验（base_url 在 Provider 保存时已校验，这里防拼接后的最终 URL）
+  assertSafeOutboundUrl(url)
   const timeoutMs = provider.timeout_ms ?? getGlobalTimeoutMs()
   const clientSignal = c.req.raw.signal
 
-  const res = await sendToUpstream({
-    method,
-    url,
-    headers: buildUpstreamHeaders(provider, c.req.raw.headers),
-    body,
-    signal: clientSignal,
-    dispatcher: getDispatcher(provider.proxy_url, timeoutMs),
-  })
+  let res
+  try {
+    res = await sendToUpstream({
+      method,
+      url,
+      headers: buildUpstreamHeaders(provider, c.req.raw.headers),
+      body: outBody,
+      signal: clientSignal,
+      dispatcher: getDispatcher(provider.proxy_url, timeoutMs),
+    })
+  } catch (err) {
+    if (isAbortError(err) || clientSignal.aborted) throw err
+    const timeout = isTimeoutError(err)
+    const status = timeout ? 504 : 502
+    const code = timeout ? 'upstream_timeout' : 'upstream_error'
+    const message = timeout ? 'upstream timeout' : 'upstream request failed'
+    writeLog({
+      client_ip: clientIp(c),
+      protocol,
+      method,
+      path: c.req.path,
+      model: requestedModel,
+      provider_id: provider.id,
+      provider_name: provider.name,
+      resolved_model: resolvedModel,
+      status,
+      latency_ms: Date.now() - attemptStartedAt,
+      error_code: code,
+      request_bytes: requestBytes,
+      attempt,
+    })
+    return { kind: 'retryable', clientStatus: status, code, message }
+  }
 
-  // 收到上游响应头，立即写日志（latency = 首包耗时）
+  // 收到上游响应头，立即写日志（latency = 该次尝试的首包耗时）
   const headerAt = Date.now()
   const logId = writeLog({
     client_ip: clientIp(c),
@@ -88,14 +149,16 @@ async function forward(
     provider_name: provider.name,
     resolved_model: resolvedModel,
     status: res.status,
-    latency_ms: headerAt - startedAt,
+    latency_ms: headerAt - attemptStartedAt,
+    error_code: res.status >= 400 && (RETRYABLE_STATUS.has(res.status) || res.status >= 500) ? retryableStatusError(res.status).code : null,
     request_bytes: requestBytes,
+    attempt,
   })
 
-  // 上游 5xx：包装为 502 upstream_error；4xx：原样透传
-  if (res.status >= 500) {
+  if (res.status >= 500 || RETRYABLE_STATUS.has(res.status)) {
     await drainBody(res.body)
-    return proxyError(c, 502, `upstream error (HTTP ${res.status})`, 'upstream_error')
+    const { code, clientStatus } = retryableStatusError(res.status)
+    return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})` }
   }
 
   const headers: Record<string, string> = {}
@@ -106,7 +169,8 @@ async function forward(
   })
   if (!headers['content-type']) headers['content-type'] = 'application/json'
 
-  return new Response(countResponseBytes(res.body, logId) as unknown as BodyInit, { status: res.status, headers })
+  const response = new Response(countResponse(res.body, logId) as unknown as BodyInit, { status: res.status, headers })
+  return { kind: 'done', response }
 }
 
 async function logAndFail(
@@ -174,18 +238,70 @@ proxyRoutes.all('*', async (c) => {
       return logAndFail(c, protocol, path, 'POST', model, startedAt, disabled ? 503 : 404, disabled ? 'provider_disabled' : 'model_not_found', disabled ? 'provider disabled' : 'model not found')
     }
 
-    // 映射名 -> 真实模型名，并按映射配置定点改写思考等级字段，其余字节原样保留
-    const outBody = rewriteProxyBody(parsed, route.model.model_id, route.thinking)
-    // 等待上游响应可能长达数十秒，期间只保留改写后的 outBody，不再持有原始请求体
-    releaseProxyBody(parsed)
+    // 路由落地：按映射配置生成候选尝试顺序，由健康状态机逐个消费
+    const config = parseRoutingConfig(route.alias.routing_config_json)
+    const ordered = buildCandidateOrder(route.alias, route.candidates.map((candidate) => candidate.target))
+    const aliasKey = `${protocol}/${model}`
+    const maxAttempts = config.mode === 'single' ? 1 : Math.min(config.max_attempts ?? ordered.length, ordered.length)
 
-    return await forward(c, route.provider, upstreamPath, 'POST', outBody, startedAt, protocol, model, route.model.model_id, requestBytes)
+    try {
+      let lastFailure: { clientStatus: number; code: string; message: string } | null = null
+      const attemptedTargetIds = new Set<number>()
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const remaining = ordered.filter((target) => !attemptedTargetIds.has(target.id))
+        const pick = pickCandidate(aliasKey, remaining, config)
+        if (!pick) {
+          // 剩余候选全部冷却中且探测位被占用，或已无剩余候选：快速失败
+          return logAndFail(c, protocol, path, 'POST', model, startedAt, 503, 'no_available_target', lastFailure ? lastFailure.message : 'no available route target')
+        }
+        attemptedTargetIds.add(pick.target.id)
+        const candidate: RouteCandidate = route.candidates.find((item) => item.target.id === pick.target.id)!
+        try {
+          const outBody = rewriteProxyBody(parsed, candidate.model.model_id, route.thinking)
+          const outcome = await forwardAttempt({
+            c,
+            provider: candidate.provider,
+            upstreamPath,
+            method: 'POST',
+            outBody,
+            startedAt,
+            protocol,
+            requestedModel: model,
+            resolvedModel: candidate.model.model_id,
+            requestBytes,
+            attempt,
+          })
+          if (outcome.kind === 'done') {
+            reportSuccess(aliasKey, candidate.target.id, config, {
+              // 探测成功或故障切换后的成功才进入亲和期，普通命中不亲和
+              armAffinity: pick.isProbe || attempt > 1,
+            })
+            return outcome.response!
+          }
+          lastFailure = { clientStatus: outcome.clientStatus!, code: outcome.code!, message: outcome.message! }
+          reportFailure(aliasKey, candidate.target.id, config)
+        } catch (err) {
+          // forwardAttempt 只会向外抛客户端取消；取消不是候选的失败，但需释放探测位
+          if (isAbortError(err) || c.req.raw.signal.aborted) {
+            if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
+          }
+          throw err
+        }
+      }
+      // 所有候选尝试均失败（每 attempt 已写日志，不再补写）
+      return proxyError(c, lastFailure?.clientStatus ?? 502, lastFailure?.message ?? 'upstream error', lastFailure?.code ?? 'upstream_error')
+    } finally {
+      releaseProxyBody(parsed)
+    }
   } catch (err) {
     if (isAbortError(err) || c.req.raw.signal.aborted) {
       throw err
     }
     if (err instanceof RequestBodyTooLargeError) {
       return logAndFail(c, protocol, path, c.req.method, requestedModel, startedAt, 413, 'invalid_request_body', 'request body too large (max 50MB)')
+    }
+    if (err instanceof OutboundUrlError) {
+      return logAndFail(c, protocol, path, c.req.method, requestedModel, startedAt, 502, 'outbound_url_invalid', 'upstream base url is invalid')
     }
     const timeout = isTimeoutError(err)
     return logAndFail(
@@ -197,7 +313,7 @@ proxyRoutes.all('*', async (c) => {
       startedAt,
       timeout ? 504 : 502,
       timeout ? 'upstream_timeout' : 'upstream_error',
-      timeout ? 'upstream timeout' : err instanceof Error ? err.message : 'upstream error',
+      timeout ? 'upstream timeout' : 'upstream error',
     )
   }
 })

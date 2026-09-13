@@ -237,38 +237,4 @@ export function registerProviderRoutes(api: Hono<Env>): void {
     writeAuditLog({ resource: 'model', action: 'import', target: provider.name, detail: `导入模型到 ${provider.name}: 新增 ${result.added}, 更新 ${result.updated}${createAlias ? '' : '（不创建映射）'}`, status: 200 })
     return ok(c, result)
   })
-
-  api.get('/providers/:id/balance', async (c) => {
-    const provider = getProvider(c.req.param('id'))
-    if (!provider) return fail(c, 404, 'provider not found', 'provider_not_found')
-
-    if (provider.upstream_type !== 'newapi') {
-      return fail(c, 400, 'provider is not a New API instance', 'invalid_request_body')
-    }
-
-    try {
-      const { fetchNewApiBalance } = await import('../../services/balance')
-      const result = await fetchNewApiBalance(provider.id)
-      writeAuditLog({
-        resource: 'provider',
-        action: 'balance',
-        target: provider.name,
-        detail: `查询 New API 余额 ${provider.name}: $${result.balance.toFixed(2)}`,
-        status: 200,
-      })
-      return ok(c, result)
-    } catch (error) {
-      const timeout = isTimeoutError(error)
-      const status = timeout ? 504 : 502
-      const message = timeout ? 'balance query timeout' : error instanceof Error ? error.message : 'balance query failed'
-      writeAuditLog({
-        resource: 'provider',
-        action: 'balance',
-        target: provider.name,
-        detail: `查询 New API 余额 ${provider.name} 失败: ${message}`,
-        status,
-      })
-      return fail(c, status, message, timeout ? 'upstream_timeout' : 'upstream_error')
-    }
-  })
 }

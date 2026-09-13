@@ -1,6 +1,7 @@
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import { writeAuditLog } from '../../services/audit'
+import { clearHealthState } from '../../services/health'
 import {
   activateAliasTarget,
   addAlias,
@@ -22,6 +23,7 @@ import {
   listModels,
   mergeAliases,
   reorderAliasTargets,
+  setAliasTargetWeight,
   setModelEnabled,
   updateAlias,
   updateAliasGroup,
@@ -40,6 +42,7 @@ import {
   fail,
   modelRefSchema,
   nonEmptyText,
+  routingConfigSchema,
   type ApiContext,
   ok,
   readJson,
@@ -138,11 +141,16 @@ export function registerModelRoutes(api: Hono<Env>): void {
     try {
       const row = updateAlias(parsed.data)
       const details: string[] = []
-      if (parsed.data.new_alias_name) details.push(`映射名改为 ${parsed.data.new_alias_name}`)
+      if (parsed.data.new_alias_name) {
+        details.push(`映射名改为 ${parsed.data.new_alias_name}`)
+        // 映射改名后清理旧健康状态
+        clearHealthState(`${parsed.data.protocol}/${parsed.data.alias_name}`)
+      }
       if (parsed.data.group_id !== undefined) details.push(parsed.data.group_id ? `分组 ${parsed.data.group_id}` : '移出分组')
       if (parsed.data.enabled !== undefined) details.push(parsed.data.enabled ? '启用' : '禁用')
       if (parsed.data.provider_id) details.push(`当前目标 ${parsed.data.provider_id}/${parsed.data.model_id}`)
       if (parsed.data.thinking !== undefined) details.push(parsed.data.thinking ? `思考等级 ${parsed.data.thinking.mode === 'override' ? '强制覆盖' : '仅默认'}` : '清除思考等级')
+      if (parsed.data.routing_config !== undefined) details.push(parsed.data.routing_config ? `路由模式 ${parsed.data.routing_config.mode}` : '恢复默认路由（single）')
       writeAuditLog({ resource: 'alias', action: 'update', target: row.alias_name, detail: `更新映射 ${row.alias_name}: ${details.join(', ')}`, status: 200 })
       return ok(c, row)
     } catch (error) {
@@ -155,6 +163,7 @@ export function registerModelRoutes(api: Hono<Env>): void {
     if (!parsed.success) return fail(c, 400, 'invalid alias', 'invalid_request_body')
     if (!getAlias(parsed.data.protocol, parsed.data.alias_name)) return fail(c, 404, 'alias not found', 'alias_not_found')
     deleteAlias(parsed.data)
+    clearHealthState(`${parsed.data.protocol}/${parsed.data.alias_name}`)
     writeAuditLog({ resource: 'alias', action: 'delete', target: parsed.data.alias_name, detail: `删除映射 ${parsed.data.alias_name}`, status: 200 })
     return ok(c, {})
   })
@@ -181,6 +190,12 @@ export function registerModelRoutes(api: Hono<Env>): void {
         group_id: targetExists ? undefined : (parsed.data.group_id ?? null),
         delete_sources,
       })
+      // 如果删除了源映射，清理对应的健康状态
+      if (delete_sources) {
+        for (const sourceName of result.sources) {
+          clearHealthState(`${protocol}/${sourceName}`)
+        }
+      }
       writeAuditLog({
         resource: 'alias',
         action: 'merge',
@@ -230,7 +245,12 @@ export function registerModelRoutes(api: Hono<Env>): void {
     if (!parsed.success) return fail(c, 400, 'invalid alias group', 'invalid_request_body')
     const group = getAliasGroup(parsed.data.protocol, parsed.data.group_id)
     if (!group) return fail(c, 404, 'alias group not found', 'alias_group_not_found')
+    // 删除前先获取映射列表以清理健康状态
+    const aliasesInGroup = listAliases().filter(a => a.protocol === parsed.data.protocol && a.group_id === parsed.data.group_id)
     const deletedAliases = deleteAliasGroup({ protocol: parsed.data.protocol, id: parsed.data.group_id })
+    for (const alias of aliasesInGroup) {
+      clearHealthState(`${alias.protocol}/${alias.alias_name}`)
+    }
     writeAuditLog({ resource: 'alias_group', action: 'delete', target: group.name, detail: `删除映射分组 ${group.name} 及 ${deletedAliases} 个映射`, status: 200 })
     return ok(c, { deleted_aliases: deletedAliases })
   })
@@ -248,7 +268,12 @@ export function registerModelRoutes(api: Hono<Env>): void {
     const parsed = aliasGroupRefSchema.safeParse(await readJson(c))
     if (!parsed.success) return fail(c, 400, 'invalid alias group', 'invalid_request_body')
     if (!getAliasGroup(parsed.data.protocol, parsed.data.group_id)) return fail(c, 404, 'alias group not found', 'alias_group_not_found')
+    // 删除前先获取映射列表以清理健康状态
+    const aliasesInGroup = listAliases().filter(a => a.protocol === parsed.data.protocol && a.group_id === parsed.data.group_id)
     const count = deleteGroupAliases(parsed.data)
+    for (const alias of aliasesInGroup) {
+      clearHealthState(`${alias.protocol}/${alias.alias_name}`)
+    }
     writeAuditLog({ resource: 'alias', action: 'batch_delete', target: parsed.data.group_id, detail: `批量删除分组内 ${count} 个映射`, status: 200 })
     return ok(c, { deleted: count })
   })
@@ -311,6 +336,26 @@ export function registerModelRoutes(api: Hono<Env>): void {
       return ok(c, {})
     } catch (error) {
       return fail(c, 400, error instanceof Error ? error.message : 'invalid alias target order', 'invalid_request_body')
+    }
+  })
+
+  api.post('/alias-targets/weight', async (c) => {
+    const parsed = aliasTargetRefSchema.extend({ weight: z.number().int().min(0).max(10000) }).safeParse(await readJson(c))
+    if (!parsed.success) return fail(c, 400, 'invalid alias target weight', 'invalid_request_body')
+    if (!getAlias(parsed.data.protocol, parsed.data.alias_name)) return fail(c, 404, 'alias not found', 'alias_not_found')
+    if (!getAliasTarget(parsed.data)) return fail(c, 404, 'alias target not found', 'alias_target_not_found')
+    try {
+      const row = setAliasTargetWeight(parsed.data)
+      writeAuditLog({
+        resource: 'alias_target',
+        action: 'weight',
+        target: parsed.data.alias_name,
+        detail: `设置候选 ${parsed.data.provider_id}/${parsed.data.model_id} 权重为 ${parsed.data.weight}`,
+        status: 200,
+      })
+      return ok(c, row)
+    } catch (error) {
+      return fail(c, 400, error instanceof Error ? error.message : 'invalid alias target weight', 'invalid_request_body')
     }
   })
 

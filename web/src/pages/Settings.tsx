@@ -23,7 +23,7 @@ export default function Settings() {
   const [importWarnOpen, setImportWarnOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
-  const [form, setForm] = useState({ host: '0.0.0.0', port: '3000', global_timeout_ms: '120000', log_retention_days: '30' })
+  const [form, setForm] = useState({ host: '0.0.0.0', port: '3000', global_timeout_ms: '120000', log_retention_days: '30', health_check_interval_seconds: '0' })
   const fileRef = useRef<HTMLInputElement>(null)
 
   const settingsQuery = useQuery({
@@ -44,6 +44,7 @@ export default function Settings() {
         port: settingsQuery.data.port ?? '3000',
         global_timeout_ms: settingsQuery.data.global_timeout_ms ?? '120000',
         log_retention_days: settingsQuery.data.log_retention_days ?? '30',
+        health_check_interval_seconds: settingsQuery.data.health_check_interval_seconds ?? '0',
       })
     }
   }, [settingsQuery.data])
@@ -139,6 +140,15 @@ export default function Settings() {
                 onChange={(e) => setForm({ ...form, log_retention_days: e.target.value })}
                 placeholder="30（0 表示永不清理）"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label>健康探针间隔 (秒)</Label>
+              <Input
+                value={form.health_check_interval_seconds}
+                onChange={(e) => setForm({ ...form, health_check_interval_seconds: e.target.value })}
+                placeholder="0 表示关闭"
+              />
+              <p className="text-xs text-muted-foreground">对冷却中的候选发最小请求探活，成功则提前恢复</p>
             </div>
           </div>
           <Button size="sm" onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending || settingsQuery.isLoading}>

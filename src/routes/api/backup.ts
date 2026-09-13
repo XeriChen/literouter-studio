@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { exportBackup, importBackup } from '../../services/backup'
 import { writeAuditLog } from '../../services/audit'
 import { getAdminToken } from '../../services/auth'
+import { clearHealthState } from '../../services/health'
 import type { Env } from '../../types'
 import { fail, nonEmptyText, ok, providerSchema, readJson, settingsSchema, thinkingConfigSchema } from './shared'
 
@@ -90,6 +91,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
         groups: data.groups,
         aliases: data.aliases,
       })
+      clearHealthState()
       writeAuditLog({
         resource: 'backup',
         action: 'import',

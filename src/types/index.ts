@@ -110,6 +110,22 @@ export interface LogRow {
   request_bytes: number | null
   /** 实际转发给客户端的响应体字节数；流未正常结束（如客户端断开）时为 null */
   response_bytes: number | null
+  /** 被动解析到的上游 usage（仅在客户端可见的响应中出现时才有值） */
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  /** 多候选重试时的第几次尝试（1 起）；single 模式恒为 1 */
+  attempt: number | null
+}
+
+export interface BalanceSnapshotRow {
+  id: number
+  provider_id: string
+  /** 当地时区日期（YYYY-MM-DD），同 Provider 每天一条，后写覆盖 */
+  day_key: string
+  balance: number | null
+  currency: string | null
+  captured_at: string
 }
 
 export interface AuditRow {

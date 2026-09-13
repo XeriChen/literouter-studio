@@ -1,7 +1,7 @@
 # 架构与设计文档
 
 > 本文是项目设计的唯一权威指南。按任务从 [AGENTS.md](AGENTS.md) 的阅读索引定位相关章节；部署与使用说明见 [README.md](README.md)，无需每次改动前通读三份文档。
-> 实现核对记录：2026-09-12（已与 schema v9、密钥加密、路由模式（single/weighted/failover）、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
+> 实现核对记录：2026-09-13（已与 schema v11、密钥加密、路由模式落地（候选列表 + 冷却/探测/亲和状态机）、被动 usage 统计、余额泛化与日快照、健康探针设置、思考等级改写、Provider/映射分组、多候选目标、全量备份恢复、React Router 8、请求体安全边界及运行时生命周期实现核对）
 
 ---
 
@@ -40,7 +40,7 @@ src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
   crypto.ts        AES-256-GCM 加密/解密：Provider auth_json 加密存储，环境变量 ENCRYPTION_KEY 或启动时生成
-  db/index.ts      SQLite 初始化 + 当前 schema v9 基线（开发期允许删库重建，v6→v7、v7→v8、v8→v9 保留守卫式加列）
+  db/index.ts      SQLite 初始化 + 当前 schema v11 基线（开发期允许删库重建，v6→v11 保留守卫式加列/建表）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
   proxy/           undici 上游请求与请求体解析：按 (proxy_url, timeout) 缓存 dispatcher；path.ts 做 v1 路径归一化
@@ -61,7 +61,7 @@ skills/literouter/ agent 管理 Skill 的维护源：SKILL.md（按任务引导�
 data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入库）
 ```
 
-## 4. 数据模型（schema v9）
+## 4. 数据模型（schema v11）
 
 | 表 | 说明 |
 | :--- | :--- |
@@ -70,12 +70,13 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | `provider_models` | 真实模型：PK(provider_id, model_id)，display_name、enabled、source(fetched/manual)、fetched_at |
 | `model_alias_groups` | 映射分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
 | `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关；`thinking_json` 为可选思考等级配置（`{mode:override/default, value:协议原生值}`）；`routing_config_json` 为路由配置（`{mode:'single'|'weighted'|'failover', ...}`，默认 single） |
-| `model_alias_targets` | 映射候选：指向真实模型，带 priority/active/weight（默认 100）；single 模式只用 active，weighted 按 weight 加权随机，failover 按 priority 故障转移 |
-| `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days |
-| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读） |
+| `model_alias_targets` | 映射候选：指向真实模型，带 priority/active/weight（默认 100，0-10000）；single 模式只用 active，weighted 按 weight 加权随机分配，failover 按 priority 故障转移（代理路径实际消费这些字段） |
+| `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days、health_check_interval_seconds |
+| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读）；prompt_tokens/completion_tokens/total_tokens 为被动解析的用量（响应未携带 usage 时为 null），attempt 为多候选重试的第几次尝试（1 起） |
+| `balance_snapshots` | 余额日快照：UNIQUE(provider_id, day_key)，后写覆盖；仅查询成功且 balance 非空时落库；不含在备份内（派生数据） |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
-当前处于无正式用户的开发阶段，schema v9 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v7、v7→v8、v8→v9 的守卫式加列）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
+当前处于无正式用户的开发阶段，schema v11 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v11 的守卫式加列/建表）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
 
 **密钥加密（schema v9 新增）：** Provider 的 `auth_json` 使用 AES-256-GCM 加密存储为 `auth_json_encrypted`。加密密钥由环境变量 `ENCRYPTION_KEY`（64 位十六进制字符串）提供；若缺失则启动时自动生成并在控制台显著提示保存（丢失密钥导致已存储的 Provider 认证数据不可恢复）。v8→v9 迁移时，已有 Provider 的明文 `auth_json` 自动加密并迁移到新列。备份导出/导入仍使用明文 JSON 格式（`auth_json` 字段），导入时自动加密存储。
 
@@ -86,10 +87,10 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 客户端请求到网关时，`model` 字段的值是**映射名**，不是真实模型名。
 
 - 映射名按 `(protocol, alias_name)` 唯一，两协议各自独立命名空间；分组也按协议隔离，创建/归组本身不改变调用。
-- 映射可绑定多个真实模型候选，支持三种路由模式（`routing_config_json`）：
+- 映射可绑定多个真实模型候选，支持三种路由模式（`routing_config_json`），由代理路径按候选列表真实消费（见第 6 节）：
   - **single**（默认）：只使用 `active=1` 的唯一目标，保持当前行为
-  - **weighted**：按候选的 `weight` 字段（默认 100）加权随机选择，适用于流量分配与灰度
-  - **failover**：按 `priority` 升序选择首个可用候选，适用于主备故障转移（故障检测与切换由外部触发）
+  - **weighted**：全候选按 `weight` 字段（默认 100，0-10000，`POST /alias-targets/weight` 设置）加权随机生成尝试顺序，weight 0 候选垫底仅作备选，全 0 时均匀随机
+  - **failover**：按 `priority` 升序（同优先级按 id）生成严格尝试顺序，失败自动切换下一候选
 - 映射有独立 `enabled` 开关；`GET /openai/v1/models` 与 `GET /anthropic/v1/models` 只返回映射、当前可用目标、Provider 与真实模型均启用的映射名。
 - 未建立映射的模型（或直接写真实模型名）→ `404 model_not_found`。
 - 映射指向的 Provider 被禁用 → `503 provider_disabled`；目标模型被禁用 → `404`。
@@ -115,6 +116,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `POST /providers/:id/cleanup-imported-models` | 一键清理该 Provider 全部拉取导入的模型（`source='fetched'`，手动添加不受影响）；同名映射保留，候选随引用修复，可能留下无候选的无效映射（用「清理无效映射」清理）；返回 `{deleted}` |
 | `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
 | `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段、思考等级（PATCH 传 null 清除）与路由配置（`routing_config` 字段，PATCH 传 null 清除） |
+| `POST /alias-targets/weight` | 设置候选权重：body `{protocol, alias_name, provider_id, model_id, weight(0-10000)}`；weighted 模式消费，0 表示仅末位备选 |
 | `POST /aliases/merge` | 合并映射：body `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加（`added`/`skipped`），并入已有映射不改其 active，新建映射以第一个源的当前目标为 active、thinking 与 routing_config 继承第一个非空源；`delete_sources:true` 时删除源映射（FK 级联候选） |
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
 | `POST /alias-groups/batch-enable`、`POST /alias-groups/batch-delete` | 原子批量启用或清空组内映射 |
@@ -154,26 +156,39 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 
 ```text
 POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 model
-     → model 查已启用映射 + 按路由模式选择候选 → 找到 → 校验 provider.enabled
-     → 构造上游 URL(保留 query string, base_url 去尾部 '/')
+     → model 查已启用映射的全部可用候选（findRoute，按 priority ASC 排序）
+     → buildCandidateOrder 按路由模式生成尝试顺序 → pickCandidate 经健康状态机选出本次候选
+     → 按候选真实模型名定点改写 body → 构造上游 URL（过 assertSafeOutboundUrl 兜底校验）
      → undici 请求(dispatcher 按 proxy_url+timeout 缓存)
-     → 收到响应头 → 立即写日志(latency = 收请求→响应头)
-     → 原样透传(3xx/4xx 透传；5xx 包装 502 丢弃 body；超时 504)
+     → 收到响应头 → 立即写日志(latency = 本次尝试首包耗时, attempt=第几次尝试)
+     → 2xx/3xx/4xx(除可重试状态) 原样透传并计成功；5xx/401/403/408/429 或网络错误
+       （均发生在首个字节写给客户端之前）→ 记失败并尝试下一候选；候选耗尽后返回最后错误
 ```
 
-路由模式（`src/services/routing.ts`）：
-- **single**：返回唯一 `active=1` 的候选（保持 v8 及之前的行为）
-- **weighted**：按每个候选的 `weight` 字段（默认 100）加权随机选择，总权重为 0 时回退到第一个候选
-- **failover**：按 `priority` 升序（同优先级按 `id` 升序）选择首个候选，故障检测与切换由外部触发
+路由模式（`src/services/routing.ts` 的 `buildCandidateOrder`）：
+- **single**：仅 `active=1` 的唯一候选（保持 v8 及之前的行为，不重试）
+- **weighted**：全候选按 `weight` 加权随机生成完整尝试顺序；weight 0 候选垫底仅作备选，全 0 时均匀随机
+- **failover**：`priority ASC, id ASC` 严格顺序
 
-映射路由配置存储在 `model_aliases.routing_config_json`（可选，默认 `{mode:'single'}`）；管理 API 的 `POST/PATCH /aliases` 接受 `routing_config` 字段（PATCH 传 `null` 清除并回退默认）。
+健康状态机（`src/services/health.ts`，纯进程内，重启即清空）：
+- **重试上限**：单次请求最多尝试 `min(max_attempts, 候选数)` 个候选；max_attempts 未配置 = 尝试全部
+- **冷却**：同一候选跨请求连续失败达 `max_attempts`（默认 1）次后，`cooldown_seconds`（默认 60）内被选路跳过；`cooldown_seconds=0` 关闭冷却
+- **单探测**：全部候选都在冷却时，仅放行一个请求到最早到期的候选做探测（探测位独占 120s TTL），其余请求立刻 503 `no_available_target`
+- **亲和**：探测或故障切换后的成功可在 `affinity_seconds` 内把后续请求固定到该候选（未配置则不启用）
+- **客户端取消不计失败**；探测请求被取消时立即释放探测位
+
+重试只在「首个响应字节写给客户端之前」进行：一旦透传流开始，不再切换候选。每 attempt 各写一条访问日志（`attempt` 列），客户端最终收到的是最后一个候选的结果。
+
+被动 usage 统计（`src/proxy/usage.ts`）：透传流内扫描未转义的 JSON token 键（`prompt_tokens`/`completion_tokens`/`total_tokens`/`input_tokens`/`output_tokens` 及 Anthropic cache token 键），同键取最后一次出现；**绝不向任何请求注入字段**（因此 OpenAI 流式仅当客户端自行开启 `stream_options.include_usage` 时可见 usage，未携带时列为 null，属预期精度边界）。字符串值内的引号必然被转义，模型输出内容不会误触发计数。
+
+映射路由配置存储在 `model_aliases.routing_config_json`（可选，默认 `{mode:'single'}`）；管理 API 的 `POST/PATCH /aliases` 接受 `routing_config` 字段（PATCH 传 `null` 清除并回退默认）。`GET */v1/models` 暴露「至少存在一个可用候选」的已启用映射，不再要求 active=1。
 
 ### 请求体与响应边界
 
 - `src/proxy/body.ts` 先按 `Content-Length` 快速拒绝超限请求，再通过 `ReadableStream` 分块读取，累计超过 50 MiB 时立即取消读取。
 - 代理只接受顶层 JSON object 且 `model` 必须是非空字符串。解析器保留原文中顶层 `model` 字符串及 `thinking`/`reasoning_effort` 值的字节范围，路由成功后做定点替换（模型名恒替换；思考字段按映射配置的 override/default 改写，缺失时在对象开头注入）；不重新序列化 JSON，因此空白、字段顺序、数字精度、转义和其他同名字段都保持不变。重复键遵循 `JSON.parse` 的最后一个键语义；思考字段重复时仅替换最后一次出现的值。
 - 上游响应 body 是 Node `Readable`：成功与 3xx/4xx 响应用 `new Response(readable)` 透传，5xx 或无需返回 body 时调用 `.dump()` 排空；上游缺少 `content-type` 时默认补 `application/json`。
-- 上游 3xx/4xx 保留状态码与响应体；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
+- 上游 3xx/4xx 保留状态码与响应体（401/403/408/429 除外——它们被视为「该候选的故障」，在首字节前触发换候选重试；候选耗尽后客户端收到 502/504 包装）；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
 - 转发请求丢弃 hop-by-hop、客户端认证和 `content-length`，强制 `accept-encoding: identity`；Provider 认证头最后写入，`custom_headers` 不能覆盖 `authorization`、`x-api-key`、`api-key` 或 `accept-encoding`。
 - 收到上游响应头即写访问日志：`latency_ms` 是首包耗时，`status` 记录上游原始状态，`model` 记请求的映射名，`provider_name` / `resolved_model` 记实际路由的提供商名称与真实模型名（冗余落库）。因此上游 5xx 虽向客户端转换为 502，日志仍保留实际的上游 5xx；映射/超时等网关失败则记录网关状态与 `error_code`。
 
@@ -190,7 +205,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 3. `accept-encoding: identity` 防上游压缩破坏 SSE。
 4. 客户端断连（`c.req.raw.signal`）立即 abort 上游；AbortError 静默，不写日志。
 5. `custom_headers` 禁覆盖 `authorization` / `x-api-key` / `api-key` / `accept-encoding`。
-6. 日志在收到响应头时立即写入（首包），`latency_ms`=请求→响应头。
+6. 日志在收到响应头时立即写入（首包），`latency_ms`=本次尝试请求→响应头；每 attempt 一条日志，`attempt` 列区分重试序号。
 7. 生产 SPA fallback：仅非 `/api`、非静态资源的 GET 回 index.html；`/api` 未匹配 404 JSON。
 
 ### 测活（liveness）
@@ -199,16 +214,20 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 测活按 Provider 协议构造非流式 Chat/Messages 请求并解析回复。Provider 模型列表拉取和连通性测试复用认证头与 `(proxy_url, timeout)` dispatcher；Provider/全局超时为 0 时，代理请求不设连接/响应头超时，但这两类管理操作仍以 30s `AbortSignal` 兜底。
 
+### 周期健康探针（health-probe）
+
+设置 `health_check_interval_seconds`（默认 0 = 关闭，范围 5-86400，修改即时生效无需重启）开启后，调度器周期性对「处于冷却中」的候选发一次 `max_tokens=1` 的最小真实请求：成功则抬冷却，失败按失败计数处理（只会延长冷却）。探测与请求失败共享 health.ts 的失败计数，因此不会误伤正常候选。
+
 ## 7. 前端要点
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
-- Providers 页按协议和自定义分组折叠展示，支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。拉取导入弹窗按已入库状态标记每行「已导入」（source='fetched'）或「已添加」（手动添加），支持对已导入模型单个「取消导入」（删除该真实模型，同名映射保留），以及一键清理该 Provider 全部拉取导入的模型（手动添加不受影响）。
+- Providers 页按协议和自定义分组折叠展示，支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。拉取导入弹窗按已入库状态标记每行「已导入」（source='fetched'）或「已添加」（手动添加），支持对已导入模型单个「取消导入」（删除该真实模型，同名映射保留），以及一键清理该 Provider 全部拉取导入的模型（手动添加不受影响）。Provider 卡片右上角显示余额查询按钮（仅 `upstream_type` 为 newapi/sub2api 时可见），点击弹窗展示余额/到期日/用量统计与历史快照图表。
 - Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
-- Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选；分组支持「导入映射」——在弹窗内模糊搜索映射名后批量移入；新增候选与新建映射的模型选择为可搜索下拉（按模型 ID/显示名/Provider 名模糊匹配，已存在的候选置灰）：新增候选的搜索覆盖同协议全部已启用 Provider 的模型并按 Provider 分组展示，选中后自动回填 Provider 与模型；新建映射在所选 Provider 内搜索，选中模型后可一键把真实模型名填为映射名（映射名为空时自动填入）；页头「清理无效映射」一键删除无任何候选目标（候选指向的真实模型/Provider 已不存在）的映射，确认后按当前协议筛选范围批量删除）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
+- Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选；候选面板内可直接编辑路由模式（single/weighted/failover 与尝试数/冷却/亲和参数）和各候选的分配权重；分组支持「导入映射」——在弹窗内模糊搜索映射名后批量移入；新增候选与新建映射的模型选择为可搜索下拉（按模型 ID/显示名/Provider 名模糊匹配，已存在的候选置灰）：新增候选的搜索覆盖同协议全部已启用 Provider 的模型并按 Provider 分组展示，选中后自动回填 Provider 与模型；新建映射在所选 Provider 内搜索，选中模型后可一键把真实模型名填为映射名（映射名为空时自动填入）；页头「清理无效映射」一键删除无任何候选目标（候选指向的真实模型/Provider 已不存在）的映射，确认后按当前协议筛选范围批量删除）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
 - Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
 - `ChatUI` 使用 `SseDeltaParser` 处理任意网络 chunk 边界、CRLF、多个 `data:` 行和没有尾部分隔符的最终事件；按 `protocol + alias` 将对话持久化到 `localStorage`。
-- Settings 页可查看/复制/重置 Token；重置后当前前端会用新 Token 续期，备份导入则清除本地 Token 并强制回登录页。
+- Settings 页可查看/复制/重置 Token、配置 host/port/全局超时/日志保留天数/健康探针间隔（`health_check_interval_seconds`，0=关闭，5-86400 秒，即时生效）；重置后当前前端会用新 Token 续期，备份导入则清除本地 Token 并强制回登录页。
 - shadcn 组件新增用 `pnpm dlx shadcn@latest add ...`；`@/*` 别名指向 `web/src/*`。
 
 ## 8. 已知权衡与陷阱（决策留痕）
@@ -224,4 +243,6 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
 10. **路径归一化的边界**：代理端点 v1 段归一化后，未知 POST 路径会原样转发上游、由上游回 4xx，网关不再本地判 `not_found`；非模型列表的 GET 按「只接受 POST」规则返回 405。路径中任何 `v1` 段（忽略大小写）都会被剔除——若未来上游真有含字面 `v1` 段的端点会被误伤（当前两协议端点集不存在）。
 11. **加密密钥管理（schema v9 新增）**：Provider 认证数据使用 AES-256-GCM 加密存储。加密密钥由环境变量 `ENCRYPTION_KEY`（64 位十六进制字符串）提供；若未设置，启动时自动生成并在控制台显著提示（红色警告）保存到环境变量。丢失密钥导致已存储的 Provider 认证数据永久不可恢复；备份导出为明文 JSON（便于迁移和审查），导入时自动加密存储。
-12. **路由模式边界（schema v9 新增）**：weighted 模式的随机选择在每次请求时独立执行，不保证严格按权重比例分配（短期流量可能偏离预期比例）；failover 模式只选择 priority 最低的首个候选，故障检测与实际切换由外部触发（当前未实现自动故障转移）；single 模式保持 v8 行为，只使用唯一 active 目标。路由配置缺失或非法时回退到 single 模式。
+12. **路由模式边界（v11 起真实落地）**：weighted 模式的加权随机在每次请求时独立执行，不保证严格按权重比例分配（短期流量可能偏离预期比例）；failover 与 weighted 的失败切换只发生在首个响应字节写给客户端之前，透传流开始后的失败不会重试；健康状态（冷却/探测位/亲和）纯进程内存储，重启即清空，多实例部署不共享（本项目按单进程设计，见第 2 条）。`max_attempts` 同时是「连续失败冷却阈值」与「单次请求尝试上限」。路由配置缺失或非法时回退到 single 模式。
+13. **被动 usage 的精度边界（v11 新增）**：用量解析只统计客户端可见响应中的 usage——OpenAI 流式默认不回 usage（客户端未开 `stream_options.include_usage` 时日志列为 null）；Anthropic SSE 取 message_start/message_delta 的累计值。usage 键识别依赖「JSON 字符串值内引号必然转义」这一性质，若上游返回非法 JSON（键未转义）可能误计。
+14. **余额能力泛化（v10→v11 演进）**：余额查询按 `upstream_type` 经能力描述符（`src/services/upstream-capabilities.ts`）判别，不支持时返回 400 `balance_unsupported` 而非抛错；`GET /api/providers/:id/balance` 带 60s TTL 缓存与在途去重（`?force=1` 跳过缓存直连上游，但非 force 的重复查询受 10s 最小间隔保护）；查询成功且 balance 非空时 upsert 当日快照（`balance_snapshots`，后写覆盖）。快照与用量均为派生数据，不含在备份内。错误信息经 `redactText` 脱敏后才写入审计日志。

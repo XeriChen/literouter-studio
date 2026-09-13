@@ -34,9 +34,14 @@ export interface Provider {
 }
 
 export interface BalanceResult {
-  balance: number
-  currency: string
-  last_checked: string
+  success: boolean
+  balance: number | null
+  currency: string | null
+  balances: Array<{ label: string; balance: number; currency: string }>
+  available: boolean | null
+  status_code: number | null
+  fetched_at: string
+  error: string | null
 }
 
 export interface ProviderGroup {
@@ -81,12 +86,21 @@ export interface AliasTarget {
   model_id: string
   priority: number
   active: number
+  weight: number
   created_at: string
   updated_at: string
   provider_name: string
   provider_protocol: 'openai' | 'anthropic'
   provider_enabled: number
   target_enabled: number
+}
+
+/** 路由配置（与后端 routing_config_schema 一致） */
+export interface RoutingConfig {
+  mode: 'single' | 'weighted' | 'failover'
+  affinity_seconds?: number
+  max_attempts?: number
+  cooldown_seconds?: number
 }
 
 export interface ThinkingConfig {
@@ -103,6 +117,8 @@ export interface ModelAlias {
   enabled: number
   /** 思考等级配置 JSON 字符串（ThinkingConfig | null） */
   thinking_json: string | null
+  /** 路由配置 JSON 字符串（RoutingConfig | null，null = single 默认） */
+  routing_config_json: string | null
   provider_id: string | null
   model_id: string | null
   created_at: string

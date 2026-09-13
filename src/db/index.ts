@@ -10,8 +10,8 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 /**
- * 开发阶段当前 schema 基线（v10）。旧数据库允许直接删除 data/gateway.db 后重建，
- * 因此这里不保留历史 v1-v5 迁移分支；仅保留 v6 → v7、v7 → v8、v8 → v9、v9 → v10 的守卫式加列。
+ * 开发阶段当前 schema 基线（v11）。旧数据库允许直接删除 data/gateway.db 后重建，
+ * 因此这里不保留历史 v1-v5 迁移分支；仅保留 v6 → v7 至 v10 → v11 的守卫式加列/建表。
  */
 db.exec(`
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -77,6 +77,17 @@ CREATE TABLE IF NOT EXISTS logs (
   status INTEGER,
   latency_ms INTEGER,
   error_code TEXT
+);
+
+CREATE TABLE IF NOT EXISTS balance_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id TEXT NOT NULL,
+  day_key TEXT NOT NULL,
+  balance REAL,
+  currency TEXT,
+  captured_at TEXT NOT NULL,
+  UNIQUE (provider_id, day_key),
+  FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -170,7 +181,21 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'response_
   db.prepare('ALTER TABLE logs ADD COLUMN response_bytes INTEGER').run()
 }
 
-db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (10)').run()
+// v10 → v11：被动用量统计（prompt/completion/total tokens）与重试序号；余额日快照
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'prompt_tokens'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN prompt_tokens INTEGER').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'completion_tokens'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN completion_tokens INTEGER').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'total_tokens'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN total_tokens INTEGER').run()
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('logs') WHERE name = 'attempt'").get()) {
+  db.prepare('ALTER TABLE logs ADD COLUMN attempt INTEGER').run()
+}
+
+db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (11)').run()
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

@@ -330,8 +330,17 @@ export default function Providers() {
   })
 
   const balanceMutation = useMutation({
-    mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance`, { method: 'GET' }),
-    onSuccess: (data) => setResult({ message: `余额：${data.balance.toFixed(2)} ${data.currency}`, ok: true }),
+    mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance?force=1`, { method: 'GET' }),
+    onSuccess: (data) => {
+      if (!data.success || data.balance === null) {
+        setResult({ message: `余额查询失败：${data.error ?? '未知错误'}`, ok: false })
+        return
+      }
+      const detail = data.balances.length > 1
+        ? data.balances.map((item) => `${item.label} ${item.balance.toFixed(2)} ${item.currency}`).join('，')
+        : `${data.balance.toFixed(2)} ${data.currency ?? ''}`
+      setResult({ message: `余额：${detail}${data.available === false ? '（额度不足或已停用）' : ''}`, ok: true })
+    },
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '余额查询失败', ok: false }),
   })
 
