@@ -71,33 +71,34 @@ export function pickCandidate<T extends { id: number }>(
     state.affinity = null
   }
 
-  // 找未冷却的可用目标
-  const available = ordered.find((t) => {
+  // 找可用目标（未冷却或冷却已过期）
+  for (const t of ordered) {
     const until = state.cooldowns.get(t.id)
-    return until === undefined || until <= now
-  })
-  if (available && !state.cooldowns.has(available.id)) {
-    // 完全未冷却：正常返回
-    return { target: available, isProbe: false }
+    if (until === undefined) {
+      // 完全未冷却：正常返回
+      return { target: t, isProbe: false }
+    }
+    if (until <= now) {
+      // 冷却已过期：清除过期条目并正常返回
+      state.cooldowns.delete(t.id)
+      return { target: t, isProbe: false }
+    }
   }
 
-  // 全部冷却中：找最早到期候选
+  // 全部候选都在冷却中且未到期：找最早到期候选进入探测分支
   let earliest: { id: number; until: number } | null = null
   for (const t of ordered) {
     const until = state.cooldowns.get(t.id)
-    if (until !== undefined && (earliest === null || until < earliest.until)) {
+    if (until !== undefined && until > now && (earliest === null || until < earliest.until)) {
       earliest = { id: t.id, until }
     }
   }
   if (!earliest) return null
 
-  // 冷却未到期：拒绝
-  if (earliest.until > now) return null
-
-  // 冷却已到期但探测位被占用：拒绝
+  // 探测位被占用：拒绝
   if (state.probe && state.probe.expiresAt > now) return null
 
-  // 冷却到期且探测位空闲：放行探测
+  // 探测位空闲：放行探测
   state.probe = { targetId: earliest.id, expiresAt: now + PROBE_TTL_MS }
   const target = ordered.find((t) => t.id === earliest.id)
   return target ? { target, isProbe: true } : null

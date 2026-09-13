@@ -172,7 +172,8 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 健康状态机（`src/services/health.ts`，纯进程内，重启即清空）：
 - **重试上限**：单次请求最多尝试 `min(max_attempts, 候选数)` 个候选；max_attempts 未配置 = 尝试全部
-- **冷却**：同一候选跨请求连续失败达 `max_attempts`（默认 1）次后，`cooldown_seconds`（默认 60）内被选路跳过；`cooldown_seconds=0` 关闭冷却
+- **冷却**：同一候选跨请求连续失败达阈值（固定为 1）后，`cooldown_seconds`（默认 60）内被选路跳过；`cooldown_seconds=0` 关闭冷却
+- **single 模式免疫**：single 模式（默认）保持 v8 行为，失败不进入冷却、成功不计亲和，避免单候选因上游偶发故障停摆
 - **单探测**：全部候选都在冷却时，仅放行一个请求到最早到期的候选做探测（探测位独占 120s TTL），其余请求立刻 503 `no_available_target`
 - **亲和**：探测或故障切换后的成功可在 `affinity_seconds` 内把后续请求固定到该候选（未配置则不启用）
 - **客户端取消不计失败**；探测请求被取消时立即释放探测位
@@ -240,7 +241,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 6. **请求体原样保留的边界**：只有合法 JSON object 且顶层存在非空字符串 `model` 的代理请求可以路由；除 `model` 与映射配置的思考字段（Anthropic `thinking` / OpenAI `reasoning_effort`）外，网关不会尝试修复或重写其他 JSON 结构，超过 50 MiB 的请求在读取阶段拒绝。管理侧测活仍不经映射层，但支持在请求体中显式携带 `thinking` 配置（前端映射快速测活会自动带上）。
 7. **dispatcher 生命周期**：Provider 的 `proxy_url` 或 `timeout_ms` 变化、Provider 删除及进程关闭都会清空 dispatcher 缓存；缓存键为 `(proxy_url, timeout_ms)`，`bodyTimeout` 永远为 0。
 8. **运行目录影响数据位置**：SQLite 使用 `process.cwd()/data/gateway.db`，生产静态文件则相对 `src/app.ts` 定位；应通过仓库脚本从项目根目录启动，避免误用另一份数据库。
-9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；不包含 `logs` / `audit_logs`，导入不会清空既有日志；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
+9. **备份恢复是配置全量替换**：导入前先校验 Provider 分组、Provider、真实模型、映射分组、映射与候选目标之间的数据图；事务内必须先删除全部 `model_aliases`（包括 `group_id IS NULL` 的未分组映射），再按外键顺序重建两类分组、Provider、模型、映射与候选。备份使用独立 `provider_groups` 字段保存 Provider 分组，原 `groups` 仍表示映射分组；备份包含路由配置 (`routing_config_json`) 与候选权重 (`weight`)；不包含 `logs` / `audit_logs` / `balance_snapshots`，导入不会清空既有日志与快照；导入成功以及进入数据图校验后发生的失败会另写一条审计日志。
 10. **路径归一化的边界**：代理端点 v1 段归一化后，未知 POST 路径会原样转发上游、由上游回 4xx，网关不再本地判 `not_found`；非模型列表的 GET 按「只接受 POST」规则返回 405。路径中任何 `v1` 段（忽略大小写）都会被剔除——若未来上游真有含字面 `v1` 段的端点会被误伤（当前两协议端点集不存在）。
 11. **加密密钥管理（schema v9 新增）**：Provider 认证数据使用 AES-256-GCM 加密存储。加密密钥由环境变量 `ENCRYPTION_KEY`（64 位十六进制字符串）提供；若未设置，启动时自动生成并在控制台显著提示（红色警告）保存到环境变量。丢失密钥导致已存储的 Provider 认证数据永久不可恢复；备份导出为明文 JSON（便于迁移和审查），导入时自动加密存储。
 12. **路由模式边界（v11 起真实落地）**：weighted 模式的加权随机在每次请求时独立执行，不保证严格按权重比例分配（短期流量可能偏离预期比例）；failover 与 weighted 的失败切换只发生在首个响应字节写给客户端之前，透传流开始后的失败不会重试；健康状态（冷却/探测位/亲和）纯进程内存储，重启即清空，多实例部署不共享（本项目按单进程设计，见第 2 条）。`max_attempts` 同时是「连续失败冷却阈值」与「单次请求尝试上限」。路由配置缺失或非法时回退到 single 模式。

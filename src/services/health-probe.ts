@@ -99,8 +99,12 @@ export async function probeCoolingTargetsOnce(): Promise<number> {
       })
       const okStatus = res.status >= 200 && res.status < 300
       await drainBody(res.body)
+      // 只计 5xx/401/403/429 或网络错误为失败；4xx（如 o 系列/gpt-5 拒绝 max_tokens:1）不计失败
       if (okStatus) reportSuccess(candidate.aliasKey, candidate.targetId, config, { armAffinity: false })
-      else reportFailure(candidate.aliasKey, candidate.targetId, config)
+      else if (res.status >= 500 || res.status === 401 || res.status === 403 || res.status === 429) {
+        reportFailure(candidate.aliasKey, candidate.targetId, config)
+      }
+      // 其他 4xx 静默忽略，不影响冷却状态
     } catch {
       // 探测失败（超时/网络/上游错误）一律按失败累计：只会延长冷却，不会误伤
       reportFailure(candidate.aliasKey, candidate.targetId, config)

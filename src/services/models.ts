@@ -752,8 +752,10 @@ export function findRoute(protocol: ProviderProtocol, aliasName: string): RouteR
     // 区分「映射不存在/禁用」与「存在但候选不可用」
     const alias = getAlias(protocol, aliasName)
     if (!alias || !alias.enabled) return { kind: 'not_found' }
+    // 映射存在且启用，但没有可用候选：provider_disabled
     return { kind: 'provider_disabled' }
   }
+  // SQL 已过滤 provider/model 均启用的候选，rows 非空说明有可用候选
   const alias: ModelAliasRow = {
     protocol,
     alias_name: aliasName,

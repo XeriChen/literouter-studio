@@ -330,7 +330,7 @@ export default function Providers() {
   })
 
   const balanceMutation = useMutation({
-    mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance?force=1`, { method: 'GET' }),
+    mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance`, { method: 'GET' }),
     onSuccess: (data) => {
       if (!data.success || data.balance === null) {
         setResult({ message: `余额查询失败：${data.error ?? '未知错误'}`, ok: false })

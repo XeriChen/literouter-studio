@@ -292,11 +292,13 @@ function TargetPanel({
                   type="number"
                   min={0}
                   max={10000}
-                  defaultValue={target.weight}
+                  value={target.weight}
                   className="h-7 w-16 text-xs"
-                  onBlur={(e) => {
+                  onChange={(e) => {
                     const value = Number(e.target.value)
-                    if (Number.isInteger(value) && value >= 0 && value <= 10000 && value !== target.weight) onWeight(target, value)
+                    if (value === 0 || (Number.isInteger(value) && value > 0 && value <= 10000)) {
+                      onWeight(target, value)
+                    }
                   }}
                 />
               </label>

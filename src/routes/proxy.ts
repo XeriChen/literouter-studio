@@ -272,14 +272,20 @@ proxyRoutes.all('*', async (c) => {
             attempt,
           })
           if (outcome.kind === 'done') {
-            reportSuccess(aliasKey, candidate.target.id, config, {
-              // 探测成功或故障切换后的成功才进入亲和期，普通命中不亲和
-              armAffinity: pick.isProbe || attempt > 1,
-            })
+            // single 模式：保持 v8 行为，不参与健康状态机
+            if (config.mode !== 'single') {
+              reportSuccess(aliasKey, candidate.target.id, config, {
+                // 探测成功或故障切换后的成功才进入亲和期，普通命中不亲和
+                armAffinity: pick.isProbe || attempt > 1,
+              })
+            }
             return outcome.response!
           }
           lastFailure = { clientStatus: outcome.clientStatus!, code: outcome.code!, message: outcome.message! }
-          reportFailure(aliasKey, candidate.target.id, config)
+          // single 模式：保持 v8 行为，失败不进入冷却
+          if (config.mode !== 'single') {
+            reportFailure(aliasKey, candidate.target.id, config)
+          }
         } catch (err) {
           // forwardAttempt 只会向外抛客户端取消；取消不是候选的失败，但需释放探测位
           if (isAbortError(err) || c.req.raw.signal.aborted) {
@@ -289,6 +295,10 @@ proxyRoutes.all('*', async (c) => {
         }
       }
       // 所有候选尝试均失败（每 attempt 已写日志，不再补写）
+      // single 模式最后一次尝试的 4xx 应透传原始响应（含 Retry-After 等头），不包装成 502/504
+      if (config.mode === 'single' && lastFailure && lastFailure.clientStatus >= 400 && lastFailure.clientStatus < 500) {
+        return proxyError(c, lastFailure.clientStatus, lastFailure.message, lastFailure.code)
+      }
       return proxyError(c, lastFailure?.clientStatus ?? 502, lastFailure?.message ?? 'upstream error', lastFailure?.code ?? 'upstream_error')
     } finally {
       releaseProxyBody(parsed)
