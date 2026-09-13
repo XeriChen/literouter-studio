@@ -26,8 +26,36 @@ function parseStringRecord(value: string): Record<string, string> {
   }
 }
 
-export function parseAuth(provider: ProviderRow): Record<string, string> {
-  return parseStringRecord(provider.auth_json)
+export interface CustomAuthConfig {
+  header_name: string
+  format: string
+}
+
+export interface ParsedAuth {
+  api_key?: string
+  version?: string
+  custom_auth?: CustomAuthConfig
+  [key: string]: string | CustomAuthConfig | undefined
+}
+
+export function parseAuth(provider: ProviderRow): ParsedAuth {
+  try {
+    const parsed = JSON.parse(provider.auth_json) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const obj = parsed as Record<string, unknown>
+    const result: ParsedAuth = {}
+    if (typeof obj.api_key === 'string') result.api_key = obj.api_key
+    if (typeof obj.version === 'string') result.version = obj.version
+    if (obj.custom_auth && typeof obj.custom_auth === 'object' && !Array.isArray(obj.custom_auth)) {
+      const ca = obj.custom_auth as Record<string, unknown>
+      if (typeof ca.header_name === 'string' && typeof ca.format === 'string') {
+        result.custom_auth = { header_name: ca.header_name, format: ca.format }
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
 }
 
 export function parseCustomHeaders(provider: ProviderRow): Record<string, string> {
@@ -39,14 +67,32 @@ export function buildProviderHeaders(provider: ProviderRow, customOverride?: Rec
   const auth = parseAuth(provider)
   const custom = customOverride ?? parseCustomHeaders(provider)
   const headers: Record<string, string> = {}
-  if (provider.protocol === 'openai') {
-    if (auth.api_key) headers['authorization'] = `Bearer ${auth.api_key}`
+
+  // 优先使用自定义认证头配置
+  if (auth.custom_auth?.header_name && auth.custom_auth?.format && auth.api_key) {
+    const headerName = auth.custom_auth.header_name.trim()
+    const value = auth.custom_auth.format.replace(/\{key\}/g, auth.api_key)
+    headers[headerName] = value
+    // Anthropic 协议仍需 anthropic-version
+    if (provider.protocol === 'anthropic') {
+      headers['anthropic-version'] = auth.version || '2023-06-01'
+    }
   } else {
-    if (auth.api_key) headers['x-api-key'] = auth.api_key
-    headers['anthropic-version'] = auth.version || '2023-06-01'
+    // 回退到协议默认行为
+    if (provider.protocol === 'openai') {
+      if (auth.api_key) headers['authorization'] = `Bearer ${auth.api_key}`
+    } else {
+      if (auth.api_key) headers['x-api-key'] = auth.api_key
+      headers['anthropic-version'] = auth.version || '2023-06-01'
+    }
   }
+
+  // custom_headers 不能覆盖已设置的认证头和保留头
+  const reservedLower = new Set(Object.keys(headers).map(k => k.toLowerCase()))
+  reservedLower.add('accept-encoding')
+
   for (const [k, v] of Object.entries(custom)) {
-    if (RESERVED_HEADERS.has(k.toLowerCase())) continue
+    if (reservedLower.has(k.toLowerCase())) continue
     headers[k] = String(v)
   }
   return headers

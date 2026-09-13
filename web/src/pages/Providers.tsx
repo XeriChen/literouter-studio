@@ -63,6 +63,8 @@ interface ProviderForm {
   custom_headers: string
   model_filter: string
   upstream_type: string
+  custom_auth_header_name: string
+  custom_auth_format: string
 }
 
 const EMPTY_FORM: ProviderForm = {
@@ -77,6 +79,8 @@ const EMPTY_FORM: ProviderForm = {
   custom_headers: '{}',
   model_filter: '',
   upstream_type: '',
+  custom_auth_header_name: '',
+  custom_auth_format: '',
 }
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic']
@@ -133,18 +137,23 @@ export default function Providers() {
   }
 
   function formFromProvider(provider: Provider, name = provider.name): ProviderForm {
+    const customAuth = typeof provider.auth.custom_auth === 'object' && provider.auth.custom_auth !== null
+      ? provider.auth.custom_auth as { header_name: string; format: string }
+      : null
     return {
       name,
       protocol: provider.protocol,
       group_id: provider.group_id ?? '',
       base_url: provider.base_url,
-      api_key: provider.auth.api_key ?? '',
-      anthropic_version: provider.auth.version ?? '',
+      api_key: (provider.auth.api_key as string | undefined) ?? '',
+      anthropic_version: (provider.auth.version as string | undefined) ?? '',
       proxy_url: provider.proxy_url ?? '',
       timeout_ms: provider.timeout_ms == null ? '' : String(provider.timeout_ms),
       custom_headers: JSON.stringify(provider.custom_headers ?? {}, null, 2),
       model_filter: provider.model_filter ?? '',
       upstream_type: provider.upstream_type ?? '',
+      custom_auth_header_name: customAuth?.header_name ?? '',
+      custom_auth_format: customAuth?.format ?? '',
     }
   }
 
@@ -203,9 +212,15 @@ export default function Providers() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const auth: Record<string, string> = {}
+      const auth: Record<string, string | { header_name: string; format: string }> = {}
       if (form.api_key) auth.api_key = form.api_key
       if (form.protocol === 'anthropic' && form.anthropic_version.trim()) auth.version = form.anthropic_version.trim()
+      if (form.custom_auth_header_name.trim() && form.custom_auth_format.trim()) {
+        auth.custom_auth = {
+          header_name: form.custom_auth_header_name.trim(),
+          format: form.custom_auth_format.trim(),
+        }
+      }
       let custom_headers: Record<string, string> = {}
       try {
         custom_headers = JSON.parse(form.custom_headers || '{}')
@@ -674,6 +689,7 @@ export default function Providers() {
             <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户余额</p></div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>代理 URL（可选）</Label><Input value={form.proxy_url} onChange={(event) => setForm({ ...form, proxy_url: event.target.value })} placeholder="http://127.0.0.1:7890" /></div><div className="space-y-1.5"><Label>超时毫秒</Label><Input value={form.timeout_ms} onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })} placeholder="120000（0 表示不超时）" /></div></div>
             <div className="space-y-1.5"><Label>自定义请求头</Label><Textarea value={form.custom_headers} onChange={(event) => setForm({ ...form, custom_headers: event.target.value })} rows={3} className="font-mono text-xs" placeholder='{"X-Custom": "value"}' /><p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p></div>
+            <div className="space-y-1.5"><Label>自定义认证头（可选）</Label><div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><Input value={form.custom_auth_header_name} onChange={(event) => setForm({ ...form, custom_auth_header_name: event.target.value })} placeholder="X-API-Key" /><Input value={form.custom_auth_format} onChange={(event) => setForm({ ...form, custom_auth_format: event.target.value })} placeholder="Bearer {key}" /></div><p className="text-xs text-muted-foreground">自定义认证头名称和格式，{'{key}'} 会被替换为 API Key。留空使用默认认证方式</p></div>
             <div className="space-y-1.5"><Label>模型过滤规则（可选）</Label><Input value={form.model_filter} onChange={(event) => setForm({ ...form, model_filter: event.target.value })} placeholder="grok-*,mimo-*" /><p className="text-xs text-muted-foreground">逗号分隔的前缀匹配规则，拉取时只入库匹配的模型。留空不过滤。例：gpt-*,claude-*</p></div>
           </div>
           <DialogFooter className="gap-2 border-t bg-background px-4 py-3 sm:space-x-0 sm:px-6"><Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button><Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || !form.base_url.trim()}>{saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}{formMode === 'edit' ? '保存修改' : formMode === 'copy' ? '创建副本' : '创建'}</Button></DialogFooter>

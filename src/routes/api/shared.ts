@@ -48,7 +48,13 @@ const httpUrl = z.string().trim().refine(
   'must be an HTTP(S) URL',
 )
 
-export const authSchema = z.record(z.string().min(1), z.string())
+export const authSchema = z.record(z.string().min(1), z.union([
+  z.string(),
+  z.object({
+    header_name: z.string().min(1),
+    format: z.string().min(1),
+  }),
+]))
 
 const nonNegativeIntegerText = z
   .string()

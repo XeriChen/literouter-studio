@@ -23,7 +23,7 @@ export interface BackupData {
     protocol: 'openai' | 'anthropic'
     group_id: string | null
     base_url: string
-    auth: Record<string, string>
+    auth: Record<string, string | { header_name: string; format: string }>
     custom_headers: Record<string, string>
     proxy_url: string | null
     timeout_ms: number | null
@@ -169,7 +169,7 @@ export function exportBackup(): BackupData {
   return {
     token: getAdminToken(),
     settings: getSettings(),
-    providers,
+    providers: providers as BackupData['providers'],
     provider_groups,
     models,
     groups,
