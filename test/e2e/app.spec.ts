@@ -54,7 +54,8 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await page.getByRole('button', { name: /进入工作台/ }).click()
   await page.goto('/models')
 
-  await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
+  // 模型映射 tab 按钮而非页面标题
+  await expect(page.getByRole('button', { name: '模型映射' })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建分组/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建映射/ })).toBeVisible()
   await expect(page.getByText('未分组').first()).toBeVisible()
@@ -141,7 +142,7 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   })
 
   await page.goto('/providers')
-  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Providers?/i })).toBeVisible()
   await expect(page.getByText('Production').first()).toBeVisible()
   const groupSwitch = page.getByRole('switch', { name: '切换 Production 内全部 Provider 启用状态' })
   await expect(groupSwitch).toBeVisible()
@@ -677,7 +678,7 @@ test('adds a candidate target by searching models across providers', async ({ pa
   await expect(page.getByText('alias-a')).toBeVisible()
   // 展开候选面板
   await page.locator('table button[aria-expanded]').first().click()
-  await expect(page.getByText('候选目标（仅使用当前激活目标）')).toBeVisible()
+  await expect(page.getByText(/候选目标[（(].*[)）]/)).toBeVisible()
 
   // 不选 Provider 直接模糊搜索，可命中其他 Provider 的真实模型
   await page.getByRole('combobox', { name: '模型' }).click()

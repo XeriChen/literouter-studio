@@ -16,10 +16,10 @@ import { assertSafeOutboundUrl } from './url-guard'
 import { getProvider } from './providers'
 import type { ProviderProtocol, ProviderRow } from '../types'
 
-const PROBE_TIMEOUT_MS = 30_000
-const OFF_POLL_MS = 30_000
-const MIN_INTERVAL_SECONDS = 5
-const MAX_INTERVAL_SECONDS = 86_400
+const PROBE_TIMEOUT_MS = 30_000 // 探测请求超时 30s，覆盖慢上游响应
+const OFF_POLL_MS = 30_000 // 探针关闭时每 30s 轮询配置是否重新开启
+const MIN_INTERVAL_SECONDS = 5 // 最小探针间隔 5s，避免过度探测
+const MAX_INTERVAL_SECONDS = 86_400 // 最大探针间隔 24 小时
 
 interface CooledCandidate {
   aliasKey: string

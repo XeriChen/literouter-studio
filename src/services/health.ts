@@ -18,7 +18,7 @@ export interface HealthPick<T> {
 }
 
 export const DEFAULT_COOLDOWN_SECONDS = 60
-/** 探测保留的最长独占时间：覆盖慢上游的响应窗口，超时自动释放探测位 */
+/** 探测保留的最长独占时间：120s 覆盖慢上游的响应窗口，超时自动释放探测位 */
 const PROBE_TTL_MS = 120_000
 
 interface AliasState {

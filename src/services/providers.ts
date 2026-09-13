@@ -85,7 +85,7 @@ export function listProviders(): ProviderRow[] {
   const rows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
   return rows.map((row) => ({
     ...row,
-    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted),
+    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted, row.id),
   }))
 }
 
@@ -94,19 +94,21 @@ export function getProvider(id: string): ProviderRow | undefined {
   if (!row) return undefined
   return {
     ...row,
-    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted),
+    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted, row.id),
   }
 }
 
 /**
  * 解密 auth_json：优先使用 auth_json_encrypted，回退到 auth_json（迁移期兼容）
  */
-function decryptAuthJson(plaintext: string, encrypted: string | null): string {
+function decryptAuthJson(plaintext: string, encrypted: string | null, providerId?: string): string {
   if (encrypted) {
     try {
       return decrypt(encrypted)
     } catch (err) {
-      console.error('Failed to decrypt auth_json:', err)
+      const context = providerId ? ` (provider_id: ${providerId})` : ''
+      console.error(`[providers] Failed to decrypt auth_json${context}:`, err instanceof Error ? err.message : String(err))
+      // 解密失败应抛异常，但为向后兼容暂时回退到明文
       return plaintext
     }
   }

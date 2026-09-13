@@ -24,8 +24,8 @@ export interface BalanceResult {
 }
 
 /** 管理面查询走缓存 + 在途去重；TTL 内重复点击不直连上游 */
-const BALANCE_TTL_MS = 60_000
-const MIN_INTERVAL_MS = 10_000
+const BALANCE_TTL_MS = 60_000 // 缓存有效期 60s，平衡实时性与上游负载
+const MIN_INTERVAL_MS = 10_000 // 最小查询间隔 10s，防止短时频繁查询
 
 interface CacheEntry {
   result: BalanceResult
