@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { Readable } from 'node:stream'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
-import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody } from '../proxy'
+import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody, type UpstreamResponse } from '../proxy'
 import { normalizeUpstreamPath } from '../proxy/path'
 import { createUsageParser } from '../proxy/usage'
 import {
@@ -76,6 +76,18 @@ interface AttemptOutcome {
   message?: string
 }
 
+/** 把上游响应原样转给客户端（过滤逐跳头），并挂字节统计/usage 解析；保留 Retry-After 等头 */
+function buildPassthroughResponse(res: UpstreamResponse, logId: number): Response {
+  const headers: Record<string, string> = {}
+  res.headers.forEach((value, key) => {
+    const k = key.toLowerCase()
+    if (HOP_BY_HOP_HEADERS.has(k) || k === 'content-length') return
+    headers[key] = value
+  })
+  if (!headers['content-type']) headers['content-type'] = 'application/json'
+  return new Response(countResponse(res.body, logId) as unknown as BodyInit, { status: res.status, headers })
+}
+
 /**
  * 单次候选尝试：发请求、写该次 attempt 的日志行，返回透传响应或「可重试失败」标记。
  * 在首个字节写给客户端之前（即本函数返回 done 之前）失败都可以安全重试；
@@ -93,8 +105,10 @@ async function forwardAttempt(params: {
   resolvedModel: string
   requestBytes: number
   attempt: number
+  /** single 模式（恒为单次尝试）：4xx 可重试状态直接透传原始响应（含 Retry-After），不包装成 502/504 */
+  passthroughRetryable4xx?: boolean
 }): Promise<AttemptOutcome> {
-  const { c, provider, upstreamPath, method, outBody, startedAt, protocol, requestedModel, resolvedModel, requestBytes, attempt } = params
+  const { c, provider, upstreamPath, method, outBody, startedAt, protocol, requestedModel, resolvedModel, requestBytes, attempt, passthroughRetryable4xx } = params
   const attemptStartedAt = Date.now()
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -156,21 +170,15 @@ async function forwardAttempt(params: {
   })
 
   if (res.status >= 500 || RETRYABLE_STATUS.has(res.status)) {
+    if (passthroughRetryable4xx && RETRYABLE_STATUS.has(res.status)) {
+      return { kind: 'done', response: buildPassthroughResponse(res, logId) }
+    }
     await drainBody(res.body)
     const { code, clientStatus } = retryableStatusError(res.status)
     return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})` }
   }
 
-  const headers: Record<string, string> = {}
-  res.headers.forEach((value, key) => {
-    const k = key.toLowerCase()
-    if (HOP_BY_HOP_HEADERS.has(k) || k === 'content-length') return
-    headers[key] = value
-  })
-  if (!headers['content-type']) headers['content-type'] = 'application/json'
-
-  const response = new Response(countResponse(res.body, logId) as unknown as BodyInit, { status: res.status, headers })
-  return { kind: 'done', response }
+  return { kind: 'done', response: buildPassthroughResponse(res, logId) }
 }
 
 async function logAndFail(
@@ -270,6 +278,7 @@ proxyRoutes.all('*', async (c) => {
             resolvedModel: candidate.model.model_id,
             requestBytes,
             attempt,
+            passthroughRetryable4xx: config.mode === 'single',
           })
           if (outcome.kind === 'done') {
             // single 模式：保持 v8 行为，不参与健康状态机
@@ -294,11 +303,7 @@ proxyRoutes.all('*', async (c) => {
           throw err
         }
       }
-      // 所有候选尝试均失败（每 attempt 已写日志，不再补写）
-      // single 模式最后一次尝试的 4xx 应透传原始响应（含 Retry-After 等头），不包装成 502/504
-      if (config.mode === 'single' && lastFailure && lastFailure.clientStatus >= 400 && lastFailure.clientStatus < 500) {
-        return proxyError(c, lastFailure.clientStatus, lastFailure.message, lastFailure.code)
-      }
+      // 所有候选尝试均失败（每 attempt 已写日志，不再补写）；single 模式的 4xx 已在最后一次尝试内透传
       return proxyError(c, lastFailure?.clientStatus ?? 502, lastFailure?.message ?? 'upstream error', lastFailure?.code ?? 'upstream_error')
     } finally {
       releaseProxyBody(parsed)

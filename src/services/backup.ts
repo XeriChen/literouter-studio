@@ -1,5 +1,6 @@
 import { db } from '../db'
-import { parseAuth, parseCustomHeaders } from '../providers/headers'
+import { encrypt } from '../crypto'
+import { decryptAuthJson, parseCustomHeaders } from '../providers/headers'
 import { invalidateAllDispatchers } from '../proxy'
 import { getAdminToken, setAdminToken } from './auth'
 import { validateThinkingValue } from './models'
@@ -28,6 +29,7 @@ export interface BackupData {
     proxy_url: string | null
     timeout_ms: number | null
     model_filter: string | null
+    upstream_type: 'newapi' | 'sub2api' | null
     enabled: number
     created_at: string
     updated_at: string
@@ -131,18 +133,32 @@ function validateBackupGraph(data: BackupData): void {
   }
 }
 
+function parseAuthJson(authJson: string): BackupData['providers'][number]['auth'] {
+  try {
+    const parsed = JSON.parse(authJson || '{}') as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return parsed as BackupData['providers'][number]['auth']
+  } catch {
+    return {}
+  }
+}
+
 export function exportBackup(): BackupData {
-  const providers = (db.prepare('SELECT * FROM providers').all() as ProviderRow[]).map((p) => ({
+  // 读原始行并用严格解密：解密失败必须让导出失败，绝不产出一份悄悄丢掉密钥的备份。
+  // （listProviders 走的是「失败回退明文列」的宽松路径，明文列恒为空，导出会静默丢密钥。）
+  const providerRows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
+  const providers = providerRows.map((p) => ({
     id: p.id,
     name: p.name,
     protocol: p.protocol,
     group_id: p.group_id,
     base_url: p.base_url,
-    auth: parseAuth(p),
+    auth: parseAuthJson(decryptAuthJson(p)),
     custom_headers: parseCustomHeaders(p),
     proxy_url: p.proxy_url,
     timeout_ms: p.timeout_ms,
     model_filter: p.model_filter,
+    upstream_type: p.upstream_type,
     enabled: p.enabled,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -169,7 +185,7 @@ export function exportBackup(): BackupData {
   return {
     token: getAdminToken(),
     settings: getSettings(),
-    providers: providers as BackupData['providers'],
+    providers,
     provider_groups,
     models,
     groups,
@@ -193,13 +209,21 @@ export function importBackup(data: BackupData): void {
     db.prepare('DELETE FROM provider_groups').run()
     const insertProviderGroup = db.prepare('INSERT INTO provider_groups (protocol, id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     const insertProvider = db.prepare(
-      `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
-       VALUES (@id, @name, @protocol, @group_id, @base_url, @auth_json, @custom_headers_json, @proxy_url, @timeout_ms, @model_filter, @enabled, @created_at, @updated_at)`,
+      `INSERT INTO providers (id, name, protocol, group_id, base_url, auth_json, auth_json_encrypted, custom_headers_json, proxy_url, timeout_ms, model_filter, upstream_type, enabled, created_at, updated_at)
+       VALUES (@id, @name, @protocol, @group_id, @base_url, @auth_json, @auth_json_encrypted, @custom_headers_json, @proxy_url, @timeout_ms, @model_filter, @upstream_type, @enabled, @created_at, @updated_at)`,
     )
     const now = new Date().toISOString()
     for (const group of data.provider_groups) insertProviderGroup.run(group.protocol, group.id, group.name, now, now)
     for (const p of data.providers) {
-      insertProvider.run({ ...p, group_id: p.group_id ?? null, auth_json: JSON.stringify(p.auth), custom_headers_json: JSON.stringify(p.custom_headers), model_filter: p.model_filter ?? null })
+      insertProvider.run({
+        ...p,
+        group_id: p.group_id ?? null,
+        auth_json: '',
+        auth_json_encrypted: encrypt(JSON.stringify(p.auth)),
+        custom_headers_json: JSON.stringify(p.custom_headers),
+        model_filter: p.model_filter ?? null,
+        upstream_type: p.upstream_type ?? null,
+      })
     }
     const insertModel = db.prepare(
       `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, created_at, updated_at)

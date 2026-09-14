@@ -1,6 +1,6 @@
 import type { Hono } from 'hono'
 import { z } from 'zod'
-import { exportBackup, importBackup } from '../../services/backup'
+import { exportBackup, importBackup, type BackupData } from '../../services/backup'
 import { writeAuditLog } from '../../services/audit'
 import { getAdminToken } from '../../services/auth'
 import { clearHealthState } from '../../services/health'
@@ -53,7 +53,15 @@ const backupSchema = z.object({
 
 export function registerBackupRoutes(api: Hono<Env>): void {
   api.get('/backup', (c) => {
-    const backup = exportBackup()
+    let backup: BackupData
+    try {
+      backup = exportBackup()
+    } catch (error) {
+      // 解密失败必须让导出失败：否则会产出一份悄悄丢掉密钥的备份
+      const message = error instanceof Error ? error.message : 'export failed'
+      writeAuditLog({ resource: 'backup', action: 'export', detail: `导出备份失败: ${message}`, status: 500 })
+      return fail(c, 500, `export failed: ${message}`, 'backup_export_failed')
+    }
     writeAuditLog({
       resource: 'backup',
       action: 'export',
@@ -84,6 +92,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
           proxy_url: provider.proxy_url ?? null,
           timeout_ms: provider.timeout_ms ?? null,
           model_filter: provider.model_filter ?? null,
+          upstream_type: provider.upstream_type ?? null,
           enabled: provider.enabled,
           created_at: now,
           updated_at: now,

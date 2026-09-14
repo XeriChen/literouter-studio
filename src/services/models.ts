@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
+import { decryptAuthJsonSafe } from '../providers/headers'
 import type { ThinkingRewrite } from '../proxy/body'
 import type {
   ModelAliasGroupRow,
@@ -686,6 +687,7 @@ interface AliasRouteRow {
   provider_group_id: string | null
   base_url: string
   auth_json: string
+  auth_json_encrypted: string | null
   custom_headers_json: string
   proxy_url: string | null
   timeout_ms: number | null
@@ -721,6 +723,7 @@ const findRouteRowsStatement = db.prepare(
      p.group_id AS provider_group_id,
      p.base_url,
      p.auth_json,
+     p.auth_json_encrypted,
      p.custom_headers_json,
      p.proxy_url,
      p.timeout_ms,
@@ -785,7 +788,7 @@ export function findRoute(protocol: ProviderProtocol, aliasName: string): RouteR
       protocol: row.provider_protocol,
       group_id: row.provider_group_id,
       base_url: row.base_url,
-      auth_json: row.auth_json,
+      auth_json: decryptAuthJsonSafe(row),
       custom_headers_json: row.custom_headers_json,
       proxy_url: row.proxy_url,
       timeout_ms: row.timeout_ms,

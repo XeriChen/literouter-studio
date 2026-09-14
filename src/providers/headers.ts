@@ -1,3 +1,4 @@
+import { decrypt } from '../crypto'
 import type { ProviderRow } from '../types'
 
 export const HOP_BY_HOP_HEADERS = new Set([
@@ -60,6 +61,41 @@ export function parseAuth(provider: ProviderRow): ParsedAuth {
 
 export function parseCustomHeaders(provider: ProviderRow): Record<string, string> {
   return parseStringRecord(provider.custom_headers_json || '{}')
+}
+
+/** 认证数据落库形态：加密列为密文，明文列仅在迁移期或未加密时才有内容 */
+export interface ProviderAuthRow {
+  id?: string
+  name?: string
+  auth_json: string
+  auth_json_encrypted?: string | null
+}
+
+/**
+ * 解密 Provider 认证数据：优先使用加密列，回退明文列（迁移期兼容）。
+ * 解密失败直接抛错，由调用方决定回退策略——读配置可以退回明文，导出备份必须失败，
+ * 否则会产出「看起来完整、实际丢了所有密钥」的备份。
+ */
+export function decryptAuthJson(row: ProviderAuthRow): string {
+  if (!row.auth_json_encrypted) return row.auth_json
+  try {
+    return decrypt(row.auth_json_encrypted)
+  } catch (err) {
+    const label = row.name ? `${row.name} (${row.id})` : row.id
+    const context = label ? ` for ${label}` : ''
+    throw new Error(`failed to decrypt auth_json${context}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** 解密 Provider 认证数据，解密失败时记录日志并回退到明文列（迁移期兼容） */
+export function decryptAuthJsonSafe(row: ProviderAuthRow): string {
+  try {
+    return decryptAuthJson(row)
+  } catch (err) {
+    const context = row.id ? ` (provider_id: ${row.id})` : ''
+    console.error(`[providers] Failed to decrypt auth_json${context}:`, err instanceof Error ? err.message : String(err))
+    return row.auth_json
+  }
 }
 
 /** 由 Provider 配置构造上游请求头（认证 + anthropic-version + 自定义头） */

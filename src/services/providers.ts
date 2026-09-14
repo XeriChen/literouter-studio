@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db'
-import { encrypt, decrypt } from '../crypto'
+import { encrypt } from '../crypto'
 import { isTimeoutError, sendToUpstream, getDispatcher, drainBody, invalidateAllDispatchers } from '../proxy'
 import { MAX_UPSTREAM_MODELS_BODY_BYTES } from '../proxy/body'
 import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
-import { buildProviderHeaders } from '../providers/headers'
+import { buildProviderHeaders, decryptAuthJsonSafe } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
 import { importModels as importModelsForProvider, repairAliasTargetsInTransaction } from './models'
 import type { ProviderGroupRow, ProviderProtocol, ProviderRow } from '../types'
@@ -85,7 +85,7 @@ export function listProviders(): ProviderRow[] {
   const rows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
   return rows.map((row) => ({
     ...row,
-    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted, row.id),
+    auth_json: decryptAuthJsonSafe(row),
   }))
 }
 
@@ -94,25 +94,8 @@ export function getProvider(id: string): ProviderRow | undefined {
   if (!row) return undefined
   return {
     ...row,
-    auth_json: decryptAuthJson(row.auth_json, row.auth_json_encrypted, row.id),
+    auth_json: decryptAuthJsonSafe(row),
   }
-}
-
-/**
- * 解密 auth_json：优先使用 auth_json_encrypted，回退到 auth_json（迁移期兼容）
- */
-function decryptAuthJson(plaintext: string, encrypted: string | null, providerId?: string): string {
-  if (encrypted) {
-    try {
-      return decrypt(encrypted)
-    } catch (err) {
-      const context = providerId ? ` (provider_id: ${providerId})` : ''
-      console.error(`[providers] Failed to decrypt auth_json${context}:`, err instanceof Error ? err.message : String(err))
-      // 解密失败应抛异常，但为向后兼容暂时回退到明文
-      return plaintext
-    }
-  }
-  return plaintext
 }
 
 export function createProvider(input: {

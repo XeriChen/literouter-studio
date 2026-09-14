@@ -112,7 +112,7 @@ weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选�
 | 重置 Token | `POST /api/token/reset` | 无 body；旧 Token 全部失效，新 Token 在请求进程内保存和使用，不原样输出 |
 | 清空代理日志 | `DELETE /api/logs` | 不可恢复 |
 | 清空审计日志 | `DELETE /api/audit-logs` | 不可恢复 |
-| 导出备份 | `GET /api/backup` | 产物含明文 API Key 与网关 Token，保存到约定位置并告知敏感性 |
+| 导出备份 | `GET /api/backup` | 产物含明文 API Key 与网关 Token，保存到约定位置并告知敏感性；任一 Provider 凭据无法解密时导出直接失败（500 `backup_export_failed`），不会产出缺凭据的备份 |
 | 导入备份 | `POST /api/backup` | 备份 JSON 原样作 body；**全量替换现有配置**（含未分组映射、设置和 Token），备份不含两类日志，导入也不清空既有日志 |
 
 ## 7. 错误码速查
@@ -123,6 +123,7 @@ weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选�
 | 413 | `invalid_request_body` | body 超 50 MiB |
 | 400 | `invalid_test_prompt` | 测活提示词命中黑名单或过短，换提示词 |
 | 400 | `invalid_backup` | 备份内部引用/协议/候选关系不合法 |
+| 500 | `backup_export_failed` | 导出备份时 Provider 凭据解密失败（通常是 `ENCRYPTION_KEY` 丢失或被更换）；用原密钥重启网关后重新导出 |
 | 401 | `invalid_api_key` | 核对目标地址与凭据来源，更新有效 Token 后再验证；来源缺失时才询问 |
 | 404 | `model_not_found` / `provider_not_found` / `alias_not_found` 等 `_not_found` 系列 | 目标不存在或未启用；先 GET 列表核对标识再操作 |
 | 400 | `provider_group_exists` / `alias_exists` / `alias_group_exists` / `alias_target_exists` | 已存在；读回并比对协议、标识和任务相关配置，一致才视为目标已满足并复用 id，否则按已有授权修正 |
@@ -157,5 +158,5 @@ weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选�
 3. 代理入口：OpenAI `/openai/v1/*`、Anthropic `/anthropic/v1/*`，除 `GET */v1/models` 外只收 POST。
 4. 删除 active 候选、或删除/禁用其 Provider 与真实模型时，在配置事务内按 priority 选择首个可用候选修复 active。没有可用候选时映射保留但不可调用，按实际路由状态返回 404/503；重新启用旧目标不会替换已经可用的 active。
 5. weighted/failover 模式的失败重试只发生在「首个响应字节写给客户端之前」；候选连续失败达 max_attempts 次后冷却 cooldown_seconds（默认 60），全部冷却时其余请求立即 503 `no_available_target`。健康状态纯进程内，重启即清空。
-6. 上游 4xx 原样透传给客户端（401/403/408/429 视为候选故障会在首字节前换候选），5xx 包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是本次尝试的首包耗时，`attempt` 是第几次尝试。
+6. 上游 4xx 原样透传给客户端；401/403/408/429 属「候选故障」，会在首字节前换候选，候选耗尽后包装为 502（`upstream_auth_error`/`upstream_rate_limited`）或 504（`upstream_timeout`）；single 模式恒为单次尝试，这四种状态直接透传原始状态码、响应体与 `Retry-After` 等头，不包装。5xx 一律包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是本次尝试的首包耗时，`attempt` 是第几次尝试。
 7. 已启用的 Provider 导入/新增真实模型会自动建同名映射，但同名映射已存在时只追加 inactive 候选，不切 active。
