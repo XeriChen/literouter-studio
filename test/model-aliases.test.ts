@@ -173,6 +173,20 @@ test('thinking config validates protocol-native values, routes to rewrite, and r
   assert.equal(models.parseThinkingRewrite('openai', '{"mode":"other","value":"high"}'), null)
   assert.deepEqual(models.parseThinkingRewrite('openai', '{"mode":"override","value":"high"}'), { key: 'reasoning_effort', mode: 'override', value: 'high' })
 
+  // value 形状必须符合协议，否则同样放弃改写（不得注入非法值）
+  assert.equal(models.parseThinkingRewrite('openai', '{"mode":"override"}'), null)
+  assert.equal(models.parseThinkingRewrite('openai', '{"mode":"override","value":""}'), null)
+  assert.equal(models.parseThinkingRewrite('openai', '{"mode":"override","value":123}'), null)
+  assert.equal(models.parseThinkingRewrite('anthropic', '{"mode":"override","value":{"type":"enabled","budget_tokens":512}}'), null)
+  assert.equal(models.parseThinkingRewrite('anthropic', '{"mode":"override","value":{"type":"other"}}'), null)
+  assert.equal(models.parseThinkingRewrite('anthropic', '{"mode":"override","value":null}'), null)
+  assert.equal(models.parseThinkingRewrite('openai', '[]'), null)
+  assert.equal(models.parseThinkingRewrite('openai', '"high"'), null)
+  assert.deepEqual(
+    models.parseThinkingRewrite('anthropic', '{"mode":"default","value":{"type":"enabled","budget_tokens":2048}}'),
+    { key: 'thinking', mode: 'default', value: { type: 'enabled', budget_tokens: 2048 } },
+  )
+
   models.deleteAlias({ protocol: 'anthropic', alias_name: 'thinking-alias' })
 
 })

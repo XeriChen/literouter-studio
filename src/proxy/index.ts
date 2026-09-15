@@ -82,7 +82,8 @@ export async function sendToUpstream(req: UpstreamRequest): Promise<UpstreamResp
 }
 
 function errorCode(err: unknown): string | undefined {
-  return err instanceof Error ? (err as Error & { code?: string }).code : undefined
+  if (err instanceof Error && 'code' in err && typeof err.code === 'string') return err.code
+  return undefined
 }
 
 export function isTimeoutError(err: unknown): boolean {
