@@ -60,6 +60,7 @@
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - 两协议代理入口分别挂 `/openai`、`/anthropic`；端点的版本段自动归一化（缺 `/v1` 自动补齐、多重 `/v1` 自动去重，见 `src/proxy/path.ts`）。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
+- 测试若直接或间接 import `src/db`，必须在 import 之前切到临时目录（`process.chdir(mkdtempSync(join(tmpdir(), ...)))`）或设置 `GATEWAY_DATA_DIR`，因为库路径按进程当前目录解析。`NODE_TEST_CONTEXT` 进程打开非临时目录的库会直接抛错（曾发生测试 DELETE 掉真实 Provider 配置的事故）。
 - 新增 shadcn/ui 组件时用 `pnpm dlx shadcn@latest add ...`，配置见 `components.json`。
 
 ## 7. 数据与安全约定

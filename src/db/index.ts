@@ -1,8 +1,32 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { tmpdir } from 'node:os'
 import Database from 'better-sqlite3'
 
-const dataDir = path.resolve(process.cwd(), 'data')
+/**
+ * 数据库目录：`GATEWAY_DATA_DIR` 优先，否则取进程当前目录下的 `data`。
+ * 测试必须让解析结果落在系统临时目录内（import 前 `process.chdir(mkdtempSync(...))`，
+ * 或设置 `GATEWAY_DATA_DIR`）。
+ */
+const dataDir = process.env.GATEWAY_DATA_DIR
+  ? path.resolve(process.env.GATEWAY_DATA_DIR)
+  : path.resolve(process.cwd(), 'data')
+
+// 防呆：node:test 子进程（NODE_TEST_CONTEXT）只允许打开临时目录里的库。
+// 历史事故：某个测试文件静态 import 本模块、又没切 cwd，结果 DELETE/INSERT 直接打在仓库真实库上，
+// 删掉了全部真实 Provider 配置与候选目标。这里宁可让测试直接失败，也不允许它打开真实库。
+if (process.env.NODE_TEST_CONTEXT) {
+  const relative = path.relative(path.resolve(tmpdir()), dataDir)
+  const insideTempDir = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  if (!insideTempDir) {
+    throw new Error(
+      `[db] 测试进程拒绝打开非临时目录数据库：${dataDir}\n` +
+        `请在 import '../src/db' 之前 process.chdir(mkdtempSync(join(tmpdir(), 'literouter-...')))，` +
+        `或设置 GATEWAY_DATA_DIR 指向临时目录。`,
+    )
+  }
+}
+
 mkdirSync(dataDir, { recursive: true })
 
 export const db = new Database(path.join(dataDir, 'gateway.db'))

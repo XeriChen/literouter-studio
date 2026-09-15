@@ -1,12 +1,37 @@
-import { describe, it, afterEach } from 'node:test'
+import { after, describe, it, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { AddressInfo } from 'node:net'
-import { getProviderBalance, resetBalanceRuntimeState, listBalanceSnapshots, captureDailyBalanceSnapshot } from '../src/services/balance'
-import { UpstreamError } from '../src/services/errors'
-import { createProvider } from '../src/services/providers'
-import { db } from '../src/db'
-import { isSensitiveKey, redactObject, redactText } from '../src/services/redact'
+
+// 必须先切到临时 cwd，再动态 import 依赖 db 的模块：src/db/index.ts 按 process.cwd() 解析
+// 数据库路径，静态 import 会让本文件直接在仓库的 data/gateway.db 上跑（会删除真实 Provider 配置）。
+const originalCwd = process.cwd()
+const tempRoot = mkdtempSync(join(tmpdir(), 'literouter-balance-'))
+process.chdir(tempRoot)
+
+const { getProviderBalance, resetBalanceRuntimeState, listBalanceSnapshots, captureDailyBalanceSnapshot } = await import('../src/services/balance')
+const { UpstreamError } = await import('../src/services/errors')
+const { createProvider } = await import('../src/services/providers')
+const { db } = await import('../src/db')
+const { isSensitiveKey, redactObject, redactText } = await import('../src/services/redact')
+
+after(async () => {
+  db.close()
+  process.chdir(originalCwd)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      rmSync(tempRoot, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+      await delay(50)
+    }
+  }
+})
 
 function startMockUpstream(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ server: http.Server; baseUrl: string; hits: () => number }> {
   let hits = 0
