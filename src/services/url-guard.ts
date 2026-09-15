@@ -7,7 +7,7 @@
  * （file:、unix:、user:pass@、控制字符注入等），在出站请求前做最后一道兜底。
  */
 
-const BLOCKED_PROTOCOLS = new Set(['http:', 'https:'])
+const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
 
 export class OutboundUrlError extends Error {
   readonly code: string
@@ -26,7 +26,7 @@ export function assertSafeOutboundUrl(raw: string): URL {
   } catch {
     throw new OutboundUrlError(`invalid outbound url: ${JSON.stringify(truncate(raw))}`)
   }
-  if (!BLOCKED_PROTOCOLS.has(url.protocol)) {
+  if (!ALLOWED_PROTOCOLS.has(url.protocol)) {
     throw new OutboundUrlError(`outbound url must be http(s), got ${url.protocol}`)
   }
   if (url.username || url.password) {
