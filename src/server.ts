@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server'
 import { writeHeapSnapshot } from 'node:v8'
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadEnvFile } from 'node:process'
 import { app } from './app'
 import './db'
 import { db, getSetting } from './db'
@@ -10,6 +11,14 @@ import { getSettings, getLogRetentionDays } from './services/settings'
 import { cleanOldLogs } from './services/logs'
 import { invalidateAllDispatchers } from './proxy'
 import { startHealthProbeScheduler } from './services/health-probe'
+
+// .env 提供 ENCRYPTION_KEY 等本地配置；ENCRYPTION_KEY 变化会让已加密的 Provider 凭据无法解密。
+// 文件不存在时保持"环境变量优先"的既有行为。
+try {
+  loadEnvFile(join(process.cwd(), '.env'))
+} catch {
+  // 无 .env：按真实环境变量或默认值运行
+}
 
 // 首次启动初始化数据库并自动生成 admin_token
 getAdminToken()

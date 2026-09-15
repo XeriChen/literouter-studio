@@ -39,7 +39,7 @@
 src/
   server.ts        入口：读 settings 的 host/port 启动（保存后需重启生效）
   app.ts           Hono 实例：挂载 /api、/openai、/anthropic，生产 SPA fallback
-  crypto.ts        AES-256-GCM 加密/解密：Provider auth_json 加密存储，环境变量 ENCRYPTION_KEY 或启动时生成
+  crypto.ts        AES-256-GCM 加密/解密：Provider auth_json 加密存储，密钥取进程环境变量或根目录 .env，均缺失时启动时随机生成（不落盘，重启即丢失）
   db/index.ts      SQLite 初始化 + 当前 schema v11 基线（开发期允许删库重建，v6→v11 保留守卫式加列/建表）
   middlewares/     认证（Bearer > x-api-key > api-key）
   providers/       请求头构造（parseAuth/parseCustomHeaders，禁覆盖 authorization 等）
