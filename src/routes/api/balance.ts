@@ -13,11 +13,15 @@ app.get('/:id/balance', async (c) => {
 
   try {
     const result = await getProviderBalance(providerId, { force })
+    const used = result.unlimited ? result.balances.find((item) => item.label === '已用') : undefined
+    const detail = result.unlimited
+      ? `balance=unlimited${used ? `, used=${used.balance}` : ''}`
+      : `balance=${result.balance}`
     writeAuditLog({
       resource: 'provider',
       target: providerId,
       action: 'balance',
-      detail: `balance=${result.balance}`,
+      detail,
       status: 200,
     })
     return c.json({ ok: true, data: result })

@@ -4,7 +4,7 @@
 
 ### Backend
 - `src/crypto.ts`: AES-256-GCM encryption for provider credentials
-- `src/services/balance.ts`: `fetchNewApiBalance()` queries `/api/user/self` endpoint, converts quota to USD
+- `src/services/balance.ts`: newapi 系查询 OpenAI 兼容 billing 接口 `/v1/dashboard/billing/subscription` + `/usage`（sk- 密钥，TokenAuth），`剩余 = hard_limit_usd - total_usage/100`，并解析 `access_until` 到期日；usage 不可用时降级为只报 hard_limit_usd；`hard_limit_usd === 100000000`（new-api 无限额令牌哨兵）时返回 `unlimited=true`、`balance=null`，balances 只含「已用」（usage 不可用则为空数组），不写日快照。注意 `/api/user/self` 需要控制台 PAT/会话令牌（UserAuth），sk- 密钥会被 401，故不使用
 - `src/routes/api/balance.ts`: `GET /api/providers/:id/balance` with error handling for non-newapi providers, timeouts, upstream errors
 - `src/routes/api.ts`: Registered balance route under `/providers`
 - `src/db/index.ts`: Added `upstream_type` column to providers table (schema v9 → v10)
@@ -41,13 +41,13 @@
 1. User clicks CircleDollarSign button on newapi provider row
 2. Frontend sends `GET /api/providers/:id/balance`
 3. Backend validates provider exists and upstream_type='newapi'
-4. Backend queries New API `/api/user/self` endpoint with provider auth
-5. Backend converts quota to USD: `balance = quota / 500000`
-6. Frontend displays result in toast notification
+4. Backend queries New API `/v1/dashboard/billing/subscription` + `/usage` with the provider sk- key (`Authorization: Bearer`)
+5. Backend computes `remaining = hard_limit_usd - total_usage/100` (total_usage in cents), parses `access_until` as expiry; balances[] reports 剩余/已用/总额。`hard_limit_usd === 100000000` 哨兵表示无限额令牌：`unlimited=true`、`balance=null`，balances 只含「已用」（usage 不可用为空数组），不写日快照
+6. Frontend displays result in a toast: 有限额度显示剩余/已用/总额+到期日；无限额显示「余额：无限额，已用 X USD」
 
 ### Error Handling
 - Provider not found → 404 with `provider_not_found` error
-- Non-newapi provider → 400 with `invalid_upstream_type` error
+- Provider without a supported upstream_type → 400 with `balance_unsupported` error
 - Upstream timeout → 504 with `upstream_timeout` error
 - Upstream error → 502 with `upstream_error` error
 

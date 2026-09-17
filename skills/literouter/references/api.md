@@ -49,7 +49,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` |
 | 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 |
 | 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其余 HTTP 响应（含 404/502）判网络可达；结果不证明模型推理或映射链路可用 |
-| 查余额 | `GET /api/providers/:id/balance` | 仅 upstream_type 为 newapi/sub2api 的 Provider 支持；返回归一化结果 `{success, balance, currency, balances[], available, status_code, fetched_at, error}`；60s TTL 缓存 + 在途去重，`?force=1` 直连上游；不支持时 400 `balance_unsupported` |
+| 查余额 | `GET /api/providers/:id/balance` | 仅 upstream_type 为 newapi/sub2api 的 Provider 支持；返回归一化结果 `{success, balance, currency, balances[], unlimited, available, status_code, fetched_at, error, expires_at}`；newapi 系用 sk- 密钥调 OpenAI 兼容接口 `/v1/dashboard/billing/subscription`+`/usage`（**不是** `/api/user/self`，那需要控制台 access_token），balance=剩余额度，balances 给剩余/已用/总额，`expires_at` 为令牌到期日（无则 null）；无限额密钥（newapi 哨兵 `hard_limit_usd=100000000`）返回 `unlimited=true`、`balance=null`，balances 仅含「已用」（usage 不可用则为空数组）；60s TTL 缓存 + 在途去重，`?force=1` 直连上游；不支持时 400 `balance_unsupported` |
 | 余额日快照 | `GET /api/providers/:id/balance/snapshots` | 当地时区每天一条（后写覆盖），默认返回最近 90 天 |
 | 拉上游模型 | `POST /api/providers/:id/upstream-models` | 无 body；返回 `{model_ids:[…]}`，应用 model_filter，不落库 |
 | 导入模型 | `POST /api/providers/:id/import-models` | `{model_ids:[…]}` 非空数组，可选 `create_alias`（默认 true）；启用导入模型，已启用的 Provider 自动建同名映射（同名已存在只追加 inactive 候选，不切 active）；传 `create_alias:false` 只登记模型 |

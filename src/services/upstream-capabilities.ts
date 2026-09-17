@@ -6,7 +6,7 @@
 
 import type { ProviderRow } from '../types'
 
-export type BalanceMethod = 'new_api_token' | 'sub2api'
+export type BalanceMethod = 'newapi_billing' | 'sub2api'
 
 export interface BalanceCapability {
   supported: boolean
@@ -22,7 +22,7 @@ export interface UpstreamCapabilities {
 export function getUpstreamCapabilities(upstreamType: ProviderRow['upstream_type']): UpstreamCapabilities {
   switch (upstreamType) {
     case 'newapi':
-      return { balance: { supported: true, method: 'new_api_token', reason: null } }
+      return { balance: { supported: true, method: 'newapi_billing', reason: null } }
     case 'sub2api':
       return { balance: { supported: true, method: 'sub2api', reason: null } }
     case null:

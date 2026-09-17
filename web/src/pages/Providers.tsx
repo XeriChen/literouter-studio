@@ -347,14 +347,29 @@ export default function Providers() {
   const balanceMutation = useMutation({
     mutationFn: (id: string) => api<BalanceResult>(`/api/providers/${id}/balance`, { method: 'GET' }),
     onSuccess: (data) => {
-      if (!data.success || data.balance === null) {
+      if (!data.success) {
+        setResult({ message: `余额查询失败：${data.error ?? '未知错误'}`, ok: false })
+        return
+      }
+      const expiry = data.expires_at
+        ? `，到期日 ${new Date(data.expires_at).toLocaleDateString()}`
+        : ''
+      if (data.unlimited) {
+        const used = data.balances.find((item) => item.label === '已用')
+        const detail = used
+          ? `无限额，已用 ${used.balance.toFixed(2)} ${used.currency}`
+          : '无限额（上游未返回用量）'
+        setResult({ message: `余额：${detail}${expiry}`, ok: true })
+        return
+      }
+      if (data.balance === null) {
         setResult({ message: `余额查询失败：${data.error ?? '未知错误'}`, ok: false })
         return
       }
       const detail = data.balances.length > 1
         ? data.balances.map((item) => `${item.label} ${item.balance.toFixed(2)} ${item.currency}`).join('，')
         : `${data.balance.toFixed(2)} ${data.currency ?? ''}`
-      setResult({ message: `余额：${detail}${data.available === false ? '（额度不足或已停用）' : ''}`, ok: true })
+      setResult({ message: `余额：${detail}${expiry}${data.available === false ? '（额度不足或已停用）' : ''}`, ok: true })
     },
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '余额查询失败', ok: false }),
   })

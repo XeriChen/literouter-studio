@@ -84,12 +84,33 @@ describe('balance service', () => {
     )
   })
 
-  it('queries newapi upstream and persists a daily snapshot', async () => {
+  it('queries newapi billing endpoints with sk- key and persists a daily snapshot', async () => {
     db.exec('DELETE FROM providers')
+    const seen = new Set<string>()
     const upstream = await startMockUpstream((req, res) => {
-      assert.equal(req.url, '/api/user/self')
+      assert.equal(req.headers.authorization, 'Bearer sk-upstream')
+      const path = (req.url ?? '').split('?')[0]
+      seen.add(path)
       res.setHeader('content-type', 'application/json')
-      res.end(JSON.stringify({ quota: 2_500_000 }))
+      if (path === '/v1/dashboard/billing/subscription') {
+        // hard_limit_usd = (remain + used) / QuotaPerUnit = 25 USD
+        res.end(JSON.stringify({
+          object: 'billing_subscription',
+          has_payment_method: true,
+          soft_limit_usd: 25,
+          hard_limit_usd: 25,
+          system_hard_limit_usd: 25,
+          access_until: 1_893_456_000,
+        }))
+        return
+      }
+      if (path === '/v1/dashboard/billing/usage') {
+        // total_usage 单位为美分：2000 = 20 USD 已用
+        res.end(JSON.stringify({ object: 'list', total_usage: 2000 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
     })
     const provider = createProvider({
       name: 'NewAPI',
@@ -106,14 +127,277 @@ describe('balance service', () => {
 
     const result = await getProviderBalance(provider.id, { force: true })
     assert.equal(result.success, true)
-    assert.equal(result.balance, 5)
+    assert.equal(result.balance, 5, 'remaining = hard_limit_usd - total_usage/100')
     assert.equal(result.currency, 'USD')
     assert.equal(result.status_code, 200)
     assert.equal(result.error, null)
+    assert.equal(result.available, true)
+    assert.equal(result.unlimited, false)
+    assert.equal(result.expires_at, new Date(1_893_456_000_000).toISOString())
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 5, currency: 'USD' },
+      { label: '已用', balance: 20, currency: 'USD' },
+      { label: '总额', balance: 25, currency: 'USD' },
+    ])
+    assert.deepEqual([...seen].sort(), [
+      '/v1/dashboard/billing/subscription',
+      '/v1/dashboard/billing/usage',
+    ])
 
     const snapshots = listBalanceSnapshots(provider.id)
     assert.equal(snapshots.length, 1)
     assert.equal(snapshots[0].balance, 5)
+    upstream.server.close()
+  })
+
+  it('tolerates a base_url ending with /v1', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      assert.ok(path.startsWith('/v1/dashboard/billing/'))
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ hard_limit_usd: 25 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-V1',
+      protocol: 'openai',
+      group_id: null,
+      base_url: `${upstream.baseUrl}/v1`,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.balance, 25)
+    assert.equal(result.expires_at, null)
+    upstream.server.close()
+  })
+
+  it('degrades to total quota when the usage endpoint is unavailable', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ hard_limit_usd: 25, access_until: 0 }))
+        return
+      }
+      // 精简 fork 未实现 usage
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-NoUsage',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.balance, 25, 'fallback balance equals hard_limit_usd')
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 25, currency: 'USD' },
+      { label: '总额', balance: 25, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('degrades to total quota when the usage endpoint returns 401', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        // subscription 200 已验证密钥有效；部分 fork 对 usage 单独限权
+        res.end(JSON.stringify({ hard_limit_usd: 10 }))
+        return
+      }
+      res.statusCode = 401
+      res.end(JSON.stringify({ error: { message: 'Invalid token' } }))
+    })
+    const provider = createProvider({
+      name: 'NewAPI-Usage401',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.balance, 10)
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 10, currency: 'USD' },
+      { label: '总额', balance: 10, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('reports unlimited keys as unlimited with usage only and writes no snapshot', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        // new-api 对 unlimited 令牌硬编码 hard_limit_usd = 100000000
+        res.end(JSON.stringify({ hard_limit_usd: 100_000_000, access_until: 1_893_456_000 }))
+        return
+      }
+      if (path === '/v1/dashboard/billing/usage') {
+        // 8298.781 美分 = 82.98781 USD
+        res.end(JSON.stringify({ object: 'list', total_usage: 8298.781 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-Unlimited',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.unlimited, true)
+    assert.equal(result.balance, null, 'unlimited key has no finite remaining balance')
+    assert.equal(result.available, true)
+    assert.equal(result.expires_at, new Date(1_893_456_000_000).toISOString())
+    assert.deepEqual(result.balances, [
+      { label: '已用', balance: 82.98781, currency: 'USD' },
+    ])
+
+    assert.equal(listBalanceSnapshots(provider.id).length, 0, 'unlimited results do not snapshot balance')
+    upstream.server.close()
+  })
+
+  it('reports unlimited keys even when the usage endpoint is unavailable', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ hard_limit_usd: 100_000_000 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-Unlimited-NoUsage',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.unlimited, true)
+    assert.equal(result.balance, null)
+    assert.deepEqual(result.balances, [])
+    assert.equal(result.expires_at, null)
+    upstream.server.close()
+  })
+
+  it('only treats the exact 1e8 sentinel as unlimited', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        // 差 1 也不是无限额哨兵：真实大额额度必须按有限额度计算
+        res.end(JSON.stringify({ hard_limit_usd: 99_999_999 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-HugeButFinite',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.unlimited, false)
+    assert.equal(result.balance, 99_999_999)
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 99_999_999, currency: 'USD' },
+      { label: '总额', balance: 99_999_999, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('treats HTTP 200 with an error body as upstream failure', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ error: { message: 'database error', type: 'new_api_error' } }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-ErrorBody',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+    await assert.rejects(
+      () => getProviderBalance(provider.id, { force: true }),
+      (err: unknown) => err instanceof UpstreamError && err.code === 'upstream_error' && /database error/.test(err.message),
+    )
     upstream.server.close()
   })
 
@@ -194,8 +478,8 @@ describe('balance service', () => {
     })
     const fixed = (offsetMs: number) => new Date(Date.UTC(2026, 8, 13, 3, 0, 0) + offsetMs)
     const base: Parameters<typeof captureDailyBalanceSnapshot>[1] = {
-      success: true, balance: 1, currency: 'USD', balances: [], available: true,
-      status_code: 200, fetched_at: fixed(0).toISOString(), error: null,
+      success: true, balance: 1, currency: 'USD', balances: [], unlimited: false, available: true,
+      status_code: 200, fetched_at: fixed(0).toISOString(), error: null, expires_at: null,
     }
     captureDailyBalanceSnapshot(provider.id, base, fixed(0))
     captureDailyBalanceSnapshot(provider.id, { ...base, balance: 9 }, fixed(60_000))

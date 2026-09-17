@@ -38,10 +38,13 @@ export interface BalanceResult {
   balance: number | null
   currency: string | null
   balances: Array<{ label: string; balance: number; currency: string }>
+  /** 上游密钥无限额：balance 为 null，balances 仅可能含「已用」用量项 */
+  unlimited: boolean
   available: boolean | null
   status_code: number | null
   fetched_at: string
   error: string | null
+  expires_at: string | null
 }
 
 export interface ProviderGroup {
