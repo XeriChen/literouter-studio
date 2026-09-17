@@ -1,9 +1,13 @@
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import type { LucideIcon } from 'lucide-react'
-import { Activity, ArrowUpRight, Box, Braces, CheckCircle2, CircleDot, LayoutDashboard, MessageSquare, Radio, Route } from 'lucide-react'
+import { Activity, ArrowUpRight, Box, Braces, Check, CheckCircle2, CircleDot, Copy, LayoutDashboard, MessageSquare, Radio, Route, X } from 'lucide-react'
 import { api } from '@/api/client'
+import { copyText } from '@/lib/clipboard'
 import type { Provider, ProviderModel } from '@/api/types'
+
+const ENDPOINTS = ['/openai/v1/chat/completions', '/anthropic/v1/messages']
 
 export default function Home() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Provider[]>('/api/providers') })
@@ -13,6 +17,16 @@ export default function Home() {
   const enabledProviders = providerRows.filter((provider) => provider.enabled).length
   const enabledModels = modelRows.filter((model) => model.enabled).length
   const setupReady = enabledProviders > 0 && enabledModels > 0
+  const [copied, setCopied] = useState<{ path: string; ok: boolean } | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const copyEndpoint = (path: string) => {
+    void copyText(`${window.location.origin}${path}`).then((ok) => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current)
+      setCopied({ path, ok })
+      copiedTimer.current = setTimeout(() => setCopied(null), 2000)
+    })
+  }
 
   const setupSteps: Array<{ number: string; title: string; description: string; to: string; icon: LucideIcon }> = [
     { number: '01', title: '连接', description: '添加上游 Provider', to: '/providers', icon: LayoutDashboard },
@@ -41,7 +55,7 @@ export default function Home() {
 
       <section className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
         <div className="console-surface"><div className="flex items-center justify-between border-b border-foreground/10 px-5 py-4"><div><div className="eyebrow">System map</div><h2 className="mt-1 text-base font-bold tracking-[-0.04em]">把网关配置成你的工作流</h2></div><Activity className="h-5 w-5 text-muted-foreground" /></div><div className="grid gap-0 sm:grid-cols-3">{setupSteps.map(({ number, title, description, to, icon: Icon }) => <Link key={to} to={to} className="group border-b border-foreground/10 p-5 transition-colors hover:bg-muted/45 sm:border-b-0 sm:border-r last:border-r-0"><div className="flex items-center justify-between"><span className="font-mono text-[10px] text-muted-foreground">{number}</span><ArrowUpRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:-translate-y-1 group-hover:translate-x-1" /></div><Icon className="mt-12 h-5 w-5 text-primary" /><div className="mt-5 text-sm font-bold">{title}</div><div className="mt-2 text-xs leading-5 text-muted-foreground">{description}</div></Link>)}</div></div>
-        <div className="relative overflow-hidden rounded-lg bg-primary p-5 text-primary-foreground"><div className="signal-line absolute inset-0 opacity-60" /><div className="relative flex items-start justify-between"><div><div className="eyebrow text-primary-foreground/55">Protocol surface</div><h2 className="mt-2 text-2xl font-extrabold tracking-[-0.06em]">原生，才是默认。</h2></div><CheckCircle2 className="h-5 w-5 text-accent" /></div><p className="relative mt-16 max-w-xs text-sm leading-6 text-primary-foreground/70">请求体保持原样，仅在路由成功后替换 `model` 字段。每一次调用都可追踪、可审计、可复现。</p><div className="relative mt-8 space-y-3 font-mono text-[10px] text-primary-foreground/70"><div className="flex items-center gap-2"><CircleDot className="h-3 w-3 text-accent" /> /openai/v1/chat/completions</div><div className="flex items-center gap-2"><CircleDot className="h-3 w-3 text-accent" /> /anthropic/v1/messages</div></div></div>
+        <div className="relative overflow-hidden rounded-lg bg-primary p-5 text-primary-foreground"><div className="signal-line absolute inset-0 opacity-60" /><div className="relative flex items-start justify-between"><div><div className="eyebrow text-primary-foreground/55">Protocol surface</div><h2 className="mt-2 text-2xl font-extrabold tracking-[-0.06em]">原生，才是默认。</h2></div><CheckCircle2 className="h-5 w-5 text-accent" /></div><p className="relative mt-16 max-w-xs text-sm leading-6 text-primary-foreground/70">请求体保持原样，仅在路由成功后替换 `model` 字段。每一次调用都可追踪、可审计、可复现。</p><div className="relative mt-8 space-y-3 font-mono text-[10px] text-primary-foreground/70">{ENDPOINTS.map((path) => { const showFeedback = copied?.path === path; return (<button key={path} type="button" onClick={() => copyEndpoint(path)} title="点击复制完整 URL" className="group flex w-full cursor-pointer items-center gap-2 text-left transition-colors hover:text-primary-foreground">{showFeedback ? (copied.ok ? <Check className="h-3 w-3 shrink-0 text-accent" /> : <X className="h-3 w-3 shrink-0 text-destructive" />) : <CircleDot className="h-3 w-3 shrink-0 text-accent" />}{path}<Copy className="ml-auto h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-70" /></button>) })}</div></div>
       </section>
 
       {!setupReady && !providers.isLoading && !models.isLoading && <div className="notice notice-success"><Activity className="mt-0.5 h-4 w-4 shrink-0" /><span>还没有完整的路由链路。先添加 Provider，再导入模型，即可在 Playground 发起请求。</span><Link to="/providers" className="ml-auto shrink-0 font-semibold underline underline-offset-4">开始配置</Link></div>}

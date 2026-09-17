@@ -225,8 +225,9 @@ function TargetPanel({
   const [routingForm, setRoutingForm] = useState<RoutingFormState>(() => parseRoutingForm(alias.routing_config_json))
   const [routingError, setRoutingError] = useState<string | null>(null)
   const availableProviders = providers.filter((p) => p.protocol === alias.protocol && p.enabled === 1)
-  // 搜索覆盖同协议全部已启用 Provider 的真实模型；选中后回填上方 Provider 与模型
-  const searchableModels = models.filter((m) => m.protocol === alias.protocol && m.provider_enabled === 1 && m.enabled === 1)
+  // 未选 Provider 时搜索同协议全部已启用 Provider 的真实模型（选中后回填上方 Provider）；
+  // 已选 Provider 时仅展示该 Provider 的模型
+  const searchableModels = models.filter((m) => m.protocol === alias.protocol && m.provider_enabled === 1 && m.enabled === 1 && (!providerId || m.provider_id === providerId))
   const existing = new Set(alias.targets.map((t) => `${t.provider_id}/${t.model_id}`))
 
   useEffect(() => setRoutingForm(parseRoutingForm(alias.routing_config_json)), [alias.routing_config_json])
@@ -394,10 +395,24 @@ function TargetPanel({
       <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-end">
         <div className="min-w-0 flex-1 space-y-1">
           <Label className="text-xs">Provider</Label>
-          <Select value={providerId} onValueChange={(value) => { setProviderId(value); setModelId('') }}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="选择 Provider" /></SelectTrigger>
-            <SelectContent>{availableProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent>
-          </Select>
+          <div className="flex items-center gap-1">
+            <Select value={providerId} onValueChange={(value) => { setProviderId(value); setModelId('') }}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="选择 Provider" /></SelectTrigger>
+              <SelectContent>{availableProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent>
+            </Select>
+            {providerId && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                title="清空 Provider，恢复全局模型搜索"
+                aria-label="清空 Provider"
+                onClick={() => { setProviderId(''); setModelId('') }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
         <div className="min-w-0 flex-1 space-y-1">
           <Label className="text-xs">模型</Label>
