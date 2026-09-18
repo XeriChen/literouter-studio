@@ -26,7 +26,7 @@
 | 前端 | React 19、Vite 8、Tailwind 4、shadcn/ui、TanStack Query、react-router 8 |
 
 - 单包仓库；Node ≥ 24，包管理器固定为 pnpm 11.26.0；`web/dist` 由 Hono 托管（生产 `pnpm start`）。
-- 开发：`pnpm dev` = 后端 3000（tsx watch）+ 前端 5173（Vite，`/api`、`/openai`、`/anthropic` 已代理到 3000）。
+- 开发：`pnpm dev` = 后端（tsx watch）+ 前端（Vite，代理跟随 `PORT`）。本机 3000 为生产网关（systemd `literouter.service`），功能开发在 worktree 的 `dev` 分支上以 3001/5174 进行（见 README「部署与 CD 逻辑」）。
 - 强制 `tsx` 直接跑 TS，禁止编译后端到 JS 再跑。
 - `pnpm test` 运行 Node 原生测试；`pnpm test:e2e` 用 Playwright 启动或复用生产服务执行浏览器冒烟测试，构建、服务与 Token 前提见 [README.md](README.md) 的浏览器验证说明。
 - 开发与提交按 [AGENTS.md](AGENTS.md) 第 8 节选择验证范围。`pnpm check`（`typecheck` + 单元测试 + `build:web`）保留为核心行为、共享逻辑、依赖或构建配置改动的默认全量检查；文档和局部改动按风险验证。

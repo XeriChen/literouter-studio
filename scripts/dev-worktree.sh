@@ -1,29 +1,37 @@
 #!/usr/bin/env bash
 #
-# 创建本机开发 worktree 并以非生产端口启动开发实例（前台运行，Ctrl+C 退出）。
+# 创建/复用本机开发 worktree，并以非生产端口启动开发实例（前台运行，Ctrl+C 退出）。
 #
-# 背景：本机 3000 端口是 systemd 托管的生产网关（literouter.service），仓库根目录
-# 只做远端镜像与部署（scripts/deploy.sh）。功能开发一律在 worktree 里进行：
+# 背景：本机 3000 端口是 systemd 托管的生产网关（literouter.service），主仓库
+# 只做远端镜像与部署（scripts/deploy.sh）。功能开发一律在 worktree 的 dev 分支上进行：
 #   网关开发实例  http://127.0.0.1:3001  （HOST=127.0.0.1，仅本机可达）
 #   Vite 前端     http://localhost:5174  （/api、/openai、/anthropic 代理到 3001）
 #
 # worktree 自带独立的 data/（.gitignore，不入库）与独立 .env，与生产库完全隔离。
-# 开发完成后：push 分支 → 合入 main → 在生产仓库跑 scripts/deploy.sh。
+# 开发完成后：push origin/dev → 快进合入 main（git push origin dev:main 或 GitHub PR）
+# → 在生产仓库跑 scripts/deploy.sh。
 #
 # 用法：
-#   scripts/dev-worktree.sh <分支名>
-#   DEV_PORT=3002 VITE_PORT=5175 scripts/dev-worktree.sh <分支名>
-#   WT_ROOT=~/somewhere scripts/dev-worktree.sh <分支名>   # 自定义 worktree 路径
+#   scripts/dev-worktree.sh               # 默认挂 dev 分支，路径 ../literouter-dev
+#   scripts/dev-worktree.sh <分支名>       # 临时分支，路径 ../literouter-dev-<分支名>
+#   DEV_PORT=3002 VITE_PORT=5175 scripts/dev-worktree.sh
+#   WT_ROOT=~/somewhere scripts/dev-worktree.sh   # 自定义 worktree 路径
 #
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")/.."
 REPO_ROOT="$PWD"
-BRANCH="${1:-}"
+BRANCH="${1:-dev}"
 DEV_PORT="${DEV_PORT:-3001}"
 VITE_PORT="${VITE_PORT:-5174}"
 SAFE_BRANCH="${BRANCH//\//-}"
-WT_ROOT="${WT_ROOT:-$REPO_ROOT/../literouter-dev-$SAFE_BRANCH}"
+if [ -n "${WT_ROOT:-}" ]; then
+  WT_ROOT="$WT_ROOT"
+elif [ "$BRANCH" = "dev" ]; then
+  WT_ROOT="$REPO_ROOT/../literouter-dev"
+else
+  WT_ROOT="$REPO_ROOT/../literouter-dev-$SAFE_BRANCH"
+fi
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31m[失败] %s\033[0m\n' "$*" >&2; exit 1; }

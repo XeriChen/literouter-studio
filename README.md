@@ -56,9 +56,16 @@ pnpm start
 
 `pnpm start` 直接运行后端 TypeScript 源码，并由 Hono 托管已构建的 `web/dist`。未构建前端时，管理 API 与代理仍可启动，但不会有可用的 Web 控制台。
 
-### 从远端拉取部署（本地作为生产机）
+### 部署与 CD 逻辑（本地作为生产机）
 
-本地仓库只作为远端的只读镜像、编码在别处完成时，用部署脚本代替手工 `git pull`：
+本机 3000 是 systemd 托管的生产网关（`literouter.service`），主仓库只作为远端镜像。整套 CD 是**拉取式**的：
+
+```
+worktree（dev）→ push origin/dev → 快进合入 main → 生产机手动跑 scripts/deploy.sh
+                                     ↑ 推送 ≠ 部署，部署是显式动作
+```
+
+部署用脚本代替手工 `git pull`：
 
 ```bash
 scripts/deploy.sh
@@ -74,21 +81,29 @@ scripts/deploy.sh
 
 > 注意：本地仓库既然是远端镜像就不要在本地保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
 
-### 本机开发：worktree + 独立端口
+### 本机开发：worktree + dev 分支 + 独立端口
 
-本机 3000 是生产网关，仓库根目录只做部署；新功能一律在 worktree 里开发，并用独立端口测试：
+本机 3000 是生产网关，主仓库只做部署；新功能一律在 worktree 的 `dev` 分支上开发，并用独立端口测试：
 
 ```bash
-scripts/dev-worktree.sh feature/xxx
+scripts/dev-worktree.sh        # 默认挂 dev 分支，路径 ../literouter-dev
 ```
 
-脚本在 `../literouter-dev-feature-xxx` 创建 worktree（基于 `main`）、安装依赖、生成独立的 `.env`（`HOST=127.0.0.1` + 独立 `ENCRYPTION_KEY`），然后前台启动开发实例：
+脚本创建（或复用）worktree、安装依赖、构建一次前端（`web/dist` 被 gitignore，不预构建则网关对 `/` 返回 404，且 E2E 的服务复用探测会误判）、生成独立的 `.env`（`HOST=127.0.0.1` + 独立 `ENCRYPTION_KEY`），然后前台启动开发实例：
 
 - 网关开发实例 `http://127.0.0.1:3001`（仅本机可达），数据落在 worktree 自己的 `data/`，与生产库完全隔离；
 - Vite 前端 `http://localhost:5174`，`/api`、`/openai`、`/anthropic` 代理到 3001（跟随 `PORT`，不会误连生产）；
 - 指向开发实例跑 E2E：`E2E_GATEWAY_URL=http://127.0.0.1:3001 pnpm test:e2e`（Token 自动从 worktree 自己的库读取）。
 
-端口可用 `DEV_PORT` / `VITE_PORT` 覆盖，但**不允许占用 3000**。开发完成后 push 分支、合入 `main`，再回生产仓库跑 `scripts/deploy.sh` 部署。
+端口可用 `DEV_PORT` / `VITE_PORT` 覆盖（不允许占用 3000）；临时分支用 `scripts/dev-worktree.sh <分支名>`，路径为 `../literouter-dev-<分支名>`。
+
+**开发与发布流程**：
+
+1. 在 worktree 里编码、提交，`git push` 推到 `origin/dev`（dev 上始终线性提交，保证随时可快进）；
+2. 要发布时快进合入 main：`git push origin dev:main`，或在 GitHub 开 `dev → main` 的 PR；
+3. 回生产仓库跑 `scripts/deploy.sh`，拉取并按门禁重启。
+
+`dev` 与 `main` 的关系是单向的：`main` 只被 dev 快进推进，不在 main 上直接提交，这样 deploy.sh 的 `--ff-only` 拉取与快进校验永远成立。
 
 ## 配置生效规则
 
@@ -158,7 +173,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 | `pnpm dev` | 后端 watch + Vite 开发服务（默认 3000/5173，用 `PORT`/`VITE_PORT` 让位） |
 | `pnpm dev:server` | 仅后端（tsx watch，默认 3000） |
 | `pnpm dev:web` | 仅前端（Vite，默认 5173，代理目标跟随 `PORT`） |
-| `scripts/dev-worktree.sh <分支>` | 在 worktree 里以独立端口（默认 3001/5174）开发新功能 |
+| `scripts/dev-worktree.sh` | 挂载/复用 worktree（默认 `dev` 分支，`../literouter-dev`）并以 3001/5174 启动开发实例 |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test` | Node 单元测试 |
 | `pnpm test:e2e` | Playwright 浏览器测试；构建、服务复用与 Token 前提见下文 |
