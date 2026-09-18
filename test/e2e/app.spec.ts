@@ -1,4 +1,17 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+/**
+ * 定位模型映射分组的折叠开关（头部按钮，可访问名形如 `Production 1/1` / `未分组 3`）。
+ *
+ * 不要用 `page.locator('section button[aria-expanded]').first()`：映射数据返回前区块里只有
+ * 「未分组」，`.first()` 会先点到它，等分组数据到达后就指向了错误的分组（历史 flaky 根因）。
+ * 按名字定位则天然避开该竞态，并在数据未到达时自动等待。
+ * 工具条按钮的可访问名一律以「切换 / 向分组 / 清空分组 / 重命名 / 删除」开头，不会误匹配。
+ */
+function aliasGroupToggle(page: Page, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return page.getByRole('button', { name: new RegExp(`^${escaped}\\s`) })
+}
 
 test('loads the login page without browser errors', async ({ page }, testInfo) => {
   const browserErrors: string[] = []
@@ -52,6 +65,9 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await page.goto('/login')
   await page.getByPlaceholder('输入 gateway token').fill(process.env.E2E_GATEWAY_TOKEN!)
   await page.getByRole('button', { name: /进入工作台/ }).click()
+  // 先等 POST /api/login 完成并写入 localStorage，否则下面的 goto 会打断登录请求，
+  // token 未落盘就被 RequireAuth 弹回 /login（历史 flaky 根因）
+  await expect(page).toHaveURL(/\/$/)
   await page.goto('/models')
 
   // 模型映射 tab 按钮而非页面标题
@@ -59,8 +75,11 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await expect(page.getByRole('button', { name: /新建分组/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建映射/ })).toBeVisible()
   await expect(page.getByText('未分组').first()).toBeVisible()
-  // 分组默认折叠，展开后才渲染映射表格
-  await page.locator('section button[aria-expanded]').first().click()
+  // 分组默认折叠，展开后才渲染映射表格。「未分组」在任何环境下都存在，用它定位最稳。
+  const ungroupedToggle = aliasGroupToggle(page, '未分组').first()
+  await expect(ungroupedToggle).toHaveAttribute('aria-expanded', 'false')
+  await ungroupedToggle.click()
+  await expect(ungroupedToggle).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByRole('columnheader', { name: '候选' }).first()).toBeVisible()
 })
 
@@ -400,8 +419,10 @@ test('aligns models table headers with row content', async ({ page }, testInfo) 
 
   await page.goto('/models')
   await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
-  // 分组默认折叠，先展开第一个分组
-  await page.locator('section button[aria-expanded]').first().click()
+  // 分组默认折叠，按分组名展开（my-brain 挂在 Production 组下）
+  const productionToggle = aliasGroupToggle(page, 'Production')
+  await expect(productionToggle).toHaveAttribute('aria-expanded', 'false')
+  await productionToggle.click()
   await expect(page.getByText('my-brain')).toBeVisible()
   await expect(page.getByRole('button', { name: '启用全部' })).toHaveCount(0)
 
@@ -427,6 +448,71 @@ test('aligns models table headers with row content', async ({ page }, testInfo) 
   await expect(realTable.getByRole('columnheader', { name: 'Model' })).toBeVisible()
   await assertTableColumnsAlign(realTable)
   await page.screenshot({ path: testInfo.outputPath('models-real-columns.png') })
+})
+
+test('lists group headers above ungrouped and expands each group independently', async ({ page }) => {
+  const ts = '2026-09-06T00:00:00.000Z'
+  const alias = (aliasName: string, modelId: string, groupId: string | null) => ({
+    protocol: 'openai',
+    alias_name: aliasName,
+    group_id: groupId,
+    group_name: groupId ? 'Production' : null,
+    enabled: 1,
+    thinking_json: null,
+    provider_id: 'p1',
+    model_id: modelId,
+    created_at: ts,
+    updated_at: ts,
+    provider_name: 'Primary',
+    provider_protocol: 'openai',
+    provider_enabled: 1,
+    target_enabled: 1,
+    targets: [{ id: 1, protocol: 'openai', alias_name: aliasName, provider_id: 'p1', model_id: modelId, priority: 0, active: 1, created_at: ts, updated_at: ts, provider_name: 'Primary', provider_protocol: 'openai', provider_enabled: 1, target_enabled: 1 }],
+  })
+
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  await page.route('**/api/alias-groups', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [{ protocol: 'openai', id: 'g1', name: 'Production', created_at: ts, updated_at: ts, alias_count: 1, enabled_count: 1 }] }) }))
+  await page.route('**/api/providers', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/models', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [] }) }))
+  await page.route('**/api/aliases', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: [alias('grouped-alias', 'gpt-4', 'g1'), alias('loose-alias', 'gpt-4', null)] }) }))
+
+  await page.goto('/models')
+  const openaiSection = page.locator('section').first()
+  // 区块计数由映射查询驱动，等到它就说明数据已渲染完成
+  await expect(openaiSection.getByText('2 个映射')).toBeVisible()
+
+  // 契约：分组表头在前，「未分组」固定在最后
+  const headers = openaiSection.getByRole('button', { name: /^(Production|未分组)\s/ })
+  await expect(headers).toHaveCount(2)
+  await expect(headers.nth(0)).toHaveAccessibleName(/^Production\s/)
+  await expect(headers.nth(1)).toHaveAccessibleName(/^未分组\s/)
+
+  const productionToggle = aliasGroupToggle(page, 'Production')
+  const ungroupedToggle = aliasGroupToggle(page, '未分组').first()
+
+  // 默认全部折叠：折叠时不渲染表体
+  await expect(productionToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(ungroupedToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByText('grouped-alias')).toHaveCount(0)
+  await expect(page.getByText('loose-alias')).toHaveCount(0)
+
+  // 展开只影响自身的分组
+  await productionToggle.click()
+  await expect(productionToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(ungroupedToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByText('grouped-alias')).toBeVisible()
+  await expect(page.getByText('loose-alias')).toHaveCount(0)
+
+  // 再次点击可折叠，行随之消失
+  await productionToggle.click()
+  await expect(productionToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByText('grouped-alias')).toHaveCount(0)
+
+  // 「未分组」独立展开
+  await ungroupedToggle.click()
+  await expect(ungroupedToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText('loose-alias')).toBeVisible()
+  await expect(page.getByText('grouped-alias')).toHaveCount(0)
 })
 
 test('merges selected aliases into a new alias from the bulk bar', async ({ page }) => {
@@ -466,11 +552,11 @@ test('merges selected aliases into a new alias from the bulk bar', async ({ page
 
   await page.goto('/models')
   await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
-  // 分组默认折叠，先展开
-  await page.locator('section button[aria-expanded]').first().click()
+  // 分组默认折叠，本用例两个映射都未分组
+  await aliasGroupToggle(page, '未分组').first().click()
   await expect(page.getByText('alias-a')).toBeVisible()
 
-  await page.locator('section').first().getByLabel('切换 未分组 多选模式').click()
+  await page.getByLabel('切换 未分组 多选模式').first().click()
   await page.getByLabel('选择 alias-a').check()
   await page.getByLabel('选择 alias-b').check()
 
@@ -557,7 +643,8 @@ test('imports aliases into a group and cleans up invalid aliases', async ({ page
 
   await page.goto('/models')
   await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
-  await page.locator('section button[aria-expanded]').first().click()
+  // alias-a 挂在 Production 组下，必须展开该组才能看到行
+  await aliasGroupToggle(page, 'Production').click()
   await expect(page.getByText('alias-a')).toBeVisible()
 
   // 分组编辑：导入映射名，支持模糊搜索
@@ -674,7 +761,8 @@ test('adds a candidate target by searching models across providers', async ({ pa
 
   await page.goto('/models')
   await expect(page.getByRole('heading', { name: '模型映射' })).toBeVisible()
-  await page.locator('section button[aria-expanded]').first().click()
+  // 本用例唯一映射未分组
+  await aliasGroupToggle(page, '未分组').first().click()
   await expect(page.getByText('alias-a')).toBeVisible()
   // 展开候选面板
   await page.locator('table button[aria-expanded]').first().click()
