@@ -405,7 +405,7 @@ function TargetPanel({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-                title="清空 Provider，恢复全局模型搜索"
+                title="清空"
                 aria-label="清空 Provider"
                 onClick={() => { setProviderId(''); setModelId('') }}
               >
@@ -425,8 +425,8 @@ function TargetPanel({
             }}
             className="h-8 text-xs"
             ariaLabel="模型"
-            placeholder="搜索并选择模型"
-            searchPlaceholder="模糊搜索真实模型…"
+            placeholder="模型名"
+            searchPlaceholder="模型名"
             emptyText="没有匹配的真实模型"
             options={searchableModels.map((model) => ({
               value: `${model.provider_id}/${model.model_id}`,
@@ -477,6 +477,7 @@ export default function ModelAliases() {
   const [importOpen, setImportOpen] = useState<AliasGroup | null>(null)
   const [importSearch, setImportSearch] = useState('')
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
+  const [importNewName, setImportNewName] = useState('')
   const toastId = useRef(0)
   const chromeInset = useBottomInset()
 
@@ -637,6 +638,17 @@ export default function ModelAliases() {
     },
     onError: (error) => { invalidate(); toast(false, error instanceof Error ? error.message : '导入映射失败') },
   })
+  const createAliasInGroupMutation = useMutation({
+    mutationFn: ({ group, name }: { group: AliasGroup; name: string }) =>
+      api('/api/aliases', { method: 'POST', body: JSON.stringify({ protocol: group.protocol, alias_name: name, group_id: group.id }) }),
+    onSuccess: (_data, { group, name }) => {
+      setImportNewName('')
+      setExpandedGroups((previous) => new Set(previous).add(`${group.protocol}/${group.id}`))
+      invalidate()
+      toast(true, `已新建映射「${name}」`)
+    },
+    onError: (error) => toast(false, error instanceof Error ? error.message : '新建映射失败'),
+  })
   const cleanupInvalidMutation = useMutation({
     mutationFn: async (payload: { aliases: ModelAlias[]; targets: Array<{ protocol: Protocol; alias_name: string; provider_id: string; model_id: string }> }) => {
       await Promise.all(payload.targets.map((t) =>
@@ -693,6 +705,12 @@ export default function ModelAliases() {
       (row.group_name ?? '').toLowerCase().includes(query)
     )
   }, [importCandidates, importSearch])
+  /** 新建映射名校验：同协议下（含未分组与其他分组）不能重名 */
+  const importNameExists = useMemo(() => {
+    if (!importOpen) return false
+    const name = importNewName.trim().toLowerCase()
+    return !!name && rows.some((row) => row.protocol === importOpen.protocol && row.alias_name.toLowerCase() === name)
+  }, [importOpen, importNewName, rows])
 
   function openMerge() {
     if (!selectedProtocol) return
@@ -708,6 +726,7 @@ export default function ModelAliases() {
     setImportOpen(group)
     setImportSearch('')
     setImportSelected(new Set())
+    setImportNewName('')
   }
 
   function toggleImportSelected(aliasName: string) {
@@ -903,7 +922,7 @@ export default function ModelAliases() {
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
-                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" title="编辑" onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></Button><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
+                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
                   {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} onWeight={(target, weight) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/weight', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id, weight } })} onRoutingConfig={(config) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, routing_config: config })} /></TableCell></TableRow>}
                 </Fragment>
@@ -917,7 +936,8 @@ export default function ModelAliases() {
   }
 
   const addProviders = (providers.data ?? []).filter((provider) => provider.protocol === addForm.protocol && provider.enabled === 1)
-  const addModels = (models.data ?? []).filter((model) => model.provider_id === addForm.provider_id && model.provider_enabled === 1 && model.enabled === 1)
+  // 未选 Provider 时搜索同协议全部已启用 Provider 的真实模型（选中后回填 Provider）；已选 Provider 时仅展示该 Provider 的模型
+  const addModels = (models.data ?? []).filter((model) => model.protocol === addForm.protocol && model.provider_enabled === 1 && model.enabled === 1 && (!addForm.provider_id || model.provider_id === addForm.provider_id))
   const addGroups = (groups.data ?? []).filter((group) => group.protocol === addForm.protocol)
 
   return <>
@@ -952,7 +972,7 @@ export default function ModelAliases() {
       <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="搜索映射..." value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="映射名" value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
           size="icon"
           variant="outline"
           className="relative h-8 w-8 shrink-0"
@@ -998,12 +1018,12 @@ export default function ModelAliases() {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>导入映射到分组「{importOpen?.name}」</DialogTitle>
-          <DialogDescription>把当前协议下已有映射（未分组或其他分组）移入该分组；不改变映射的候选目标与启用状态。</DialogDescription>
+          <DialogDescription>勾选映射移入，或输入新名称新建。</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input autoFocus value={importSearch} onChange={(event) => setImportSearch(event.target.value)} placeholder="模糊搜索映射名…" />
+            <Input autoFocus value={importSearch} onChange={(event) => setImportSearch(event.target.value)} />
           </div>
           <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1.5">
             {importFiltered.map((alias) => (
@@ -1015,7 +1035,32 @@ export default function ModelAliases() {
             ))}
             {!importFiltered.length && <p className="py-6 text-center text-xs text-muted-foreground">没有可导入的映射。</p>}
           </div>
-          {importSelected.size > 0 && <p className="text-xs text-muted-foreground">已选 {importSelected.size} 个映射，导入后会从原分组移出。</p>}
+          {importSelected.size > 0 && <p className="text-xs text-muted-foreground">已选 {importSelected.size} 个</p>}
+          <div className="space-y-1.5 rounded-md border border-dashed p-2.5">
+            <div className="flex gap-2">
+              <Input
+                value={importNewName}
+                onChange={(event) => setImportNewName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && importOpen && importNewName.trim() && !importNameExists && !createAliasInGroupMutation.isPending) {
+                    createAliasInGroupMutation.mutate({ group: importOpen, name: importNewName.trim() })
+                  }
+                }}
+                placeholder="新映射名"
+                aria-label="新建映射名"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                className="shrink-0"
+                disabled={!importNewName.trim() || importNameExists || createAliasInGroupMutation.isPending}
+                onClick={() => importOpen && createAliasInGroupMutation.mutate({ group: importOpen, name: importNewName.trim() })}
+              >
+                {createAliasInGroupMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 新建
+              </Button>
+            </div>
+            {importNameExists && <p className="text-xs text-destructive">同名映射已存在</p>}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setImportOpen(null)}>取消</Button>
@@ -1030,7 +1075,7 @@ export default function ModelAliases() {
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle>新建模型映射</DialogTitle>
-          <DialogDescription>首个目标必须是当前已启用的 Provider 和真实模型。</DialogDescription>
+          <DialogDescription>选中模型后自动填充映射名。</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain py-2 pr-1">
           <div className="space-y-1.5">
@@ -1047,7 +1092,7 @@ export default function ModelAliases() {
             <div className="flex items-center justify-between gap-2">
               <Label>映射名</Label>
               {addForm.model_id && (
-                <button type="button" className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground" title={`映射名填入 ${addForm.model_id}`} onClick={() => setAddForm((form) => ({ ...form, alias_name: form.model_id }))}>
+                <button type="button" className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => setAddForm((form) => ({ ...form, alias_name: form.model_id }))}>
                   <TextCursorInput className="h-3 w-3" /> 填入真实模型名
                 </button>
               )}
@@ -1066,24 +1111,53 @@ export default function ModelAliases() {
           </div>
           <div className="space-y-1.5">
             <Label>Provider</Label>
-            <Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}>
-              <SelectTrigger><SelectValue placeholder="选择 Provider" /></SelectTrigger>
-              <SelectContent>
-                {addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1">
+              <Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}>
+                <SelectTrigger><SelectValue placeholder="全部" /></SelectTrigger>
+                <SelectContent>
+                  {addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {addForm.provider_id && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+                  title="清空"
+                aria-label="清空 Provider"
+                onClick={() => setAddForm((form) => ({ ...form, provider_id: '', model_id: '' }))}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label>当前目标</Label>
             <SearchableSelect
-              value={addForm.model_id}
-              onValueChange={(value) => setAddForm((form) => ({ ...form, model_id: value, alias_name: form.alias_name.trim() ? form.alias_name : value }))}
-              disabled={!addForm.provider_id}
+              value={addForm.provider_id && addForm.model_id ? `${addForm.provider_id}/${addForm.model_id}` : ''}
+              onValueChange={(_value, option) => {
+                if (!option.meta) return
+                const model = option.meta
+                setAddForm((form) => ({
+                  ...form,
+                  provider_id: model.provider_id,
+                  model_id: model.model_id,
+                  alias_name: form.alias_name.trim() ? form.alias_name : model.model_id,
+                }))
+              }}
               ariaLabel="当前目标"
-              placeholder={addForm.provider_id ? '搜索并选择模型' : '先选择 Provider'}
-              searchPlaceholder="模糊搜索真实模型…"
-              emptyText="没有匹配的真实模型"
-              options={addModels.map((model) => ({ value: model.model_id, label: model.display_name || model.model_id, keywords: [model.model_id, ...(model.display_name ? [model.display_name] : [])] }))}
+              placeholder="模型名"
+              searchPlaceholder="模型名"
+              emptyText="无匹配结果"
+              options={addModels.map((model) => ({
+                value: `${model.provider_id}/${model.model_id}`,
+                label: model.display_name || model.model_id,
+                keywords: [model.model_id, ...(model.display_name ? [model.display_name] : []), model.provider_name],
+                group: model.provider_name,
+                meta: model,
+              }))}
             />
           </div>
           <ThinkingFields protocol={addForm.protocol} form={addThinking} onChange={setAddThinking} />

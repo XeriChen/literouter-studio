@@ -400,7 +400,7 @@ function RealModelsList() {
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="h-8 w-40 pl-8 text-xs"
-              placeholder="搜索模型..."
+              placeholder="模型名"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value)
