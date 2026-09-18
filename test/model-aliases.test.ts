@@ -287,3 +287,33 @@ test('merges alias candidates into a new or existing alias without switching tra
   assert.equal(models.findRoute('openai', 'merged-new').kind, 'ok')
   assert.equal(models.listAliases().find((item) => item.alias_name === 'merged-new')?.targets.length, 3)
 })
+
+test('creates a target-less empty alias and routes after the first target is added', () => {
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO providers (id, name, protocol, base_url, auth_json, custom_headers_json, proxy_url, timeout_ms, model_filter, enabled, created_at, updated_at)
+     VALUES ('ep1', 'Empty P1', 'openai', 'https://example.test', '{}', '{}', NULL, NULL, NULL, 1, ?, ?)`,
+  ).run(now, now)
+  db.prepare(
+    `INSERT INTO provider_models (provider_id, model_id, display_name, enabled, source, created_at, updated_at)
+     VALUES ('ep1', 'em1', NULL, 1, 'manual', ?, ?)`,
+  ).run(now, now)
+
+  const group = models.createAliasGroup({ protocol: 'openai', name: 'Placeholder' })
+  const row = models.addAlias({ protocol: 'openai', alias_name: 'empty-alias', group_id: group.id })
+  assert.equal(row.group_id, group.id)
+
+  // 空映射：零候选、不可路由（存在但无可用候选 → provider_disabled）
+  const listed = models.listAliases().find((item) => item.alias_name === 'empty-alias')
+  assert.equal(listed?.targets.length, 0)
+  assert.equal(models.findRoute('openai', 'empty-alias').kind, 'provider_disabled')
+
+  // 补上首个候选后自动 active，立即可路由
+  models.addAliasTarget({ protocol: 'openai', alias_name: 'empty-alias', provider_id: 'ep1', model_id: 'em1' })
+  const withTarget = models.listAliases().find((item) => item.alias_name === 'empty-alias')
+  assert.equal(withTarget?.targets.length, 1)
+  assert.equal(withTarget?.targets[0]?.active, 1)
+  const routed = models.findRoute('openai', 'empty-alias')
+  assert.equal(routed.kind, 'ok')
+  if (routed.kind === 'ok') assert.equal(routed.candidates[0]?.provider.id, 'ep1')
+})

@@ -116,11 +116,16 @@ export function registerModelRoutes(api: Hono<Env>): void {
     if (getAlias(parsed.data.protocol, parsed.data.alias_name)) return fail(c, 400, 'alias name already exists', 'alias_exists')
     const groupProblem = groupError(c, parsed.data.protocol, parsed.data.group_id)
     if (groupProblem) return groupProblem
-    const targetProblem = aliasTargetError(c, parsed.data)
-    if (targetProblem) return targetProblem
+    if (parsed.data.provider_id && parsed.data.model_id) {
+      const targetProblem = aliasTargetError(c, { protocol: parsed.data.protocol, provider_id: parsed.data.provider_id, model_id: parsed.data.model_id })
+      if (targetProblem) return targetProblem
+    }
     const row = addAlias(parsed.data)
     const thinkingNote = parsed.data.thinking ? `，思考等级${parsed.data.thinking.mode === 'override' ? '强制覆盖' : '仅默认'}` : ''
-    writeAuditLog({ resource: 'alias', action: 'create', target: row.alias_name, detail: `新建映射 ${row.alias_name} → ${parsed.data.provider_id}/${parsed.data.model_id}${thinkingNote}`, status: 200 })
+    const targetNote = parsed.data.provider_id && parsed.data.model_id
+      ? ` → ${parsed.data.provider_id}/${parsed.data.model_id}`
+      : '（暂无候选目标）'
+    writeAuditLog({ resource: 'alias', action: 'create', target: row.alias_name, detail: `新建映射 ${row.alias_name}${targetNote}${thinkingNote}`, status: 200 })
     return ok(c, row)
   })
 

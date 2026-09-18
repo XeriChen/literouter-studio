@@ -379,8 +379,9 @@ export function getAlias(protocol: ProviderProtocol, aliasName: string): ModelAl
 export function addAlias(input: {
   protocol: ProviderProtocol
   alias_name: string
-  provider_id: string
-  model_id: string
+  /** 省略 = 创建无候选的空映射，之后通过候选接口补目标 */
+  provider_id?: string
+  model_id?: string
   group_id?: string | null
   enabled?: number
   thinking?: ThinkingConfig | null
@@ -401,7 +402,9 @@ export function addAlias(input: {
       now,
       now,
     )
-    insertAliasTargetInTransaction({ protocol: input.protocol, alias_name: input.alias_name, provider_id: input.provider_id, model_id: input.model_id, active: 1, priority: 0 })
+    if (input.provider_id && input.model_id) {
+      insertAliasTargetInTransaction({ protocol: input.protocol, alias_name: input.alias_name, provider_id: input.provider_id, model_id: input.model_id, active: 1, priority: 0 })
+    }
   })()
   return getAlias(input.protocol, input.alias_name)!
 }

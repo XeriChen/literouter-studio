@@ -128,13 +128,17 @@ export const routingConfigSchema = z.object({
 })
 
 export const aliasSchema = aliasRefSchema.extend({
-  provider_id: nonEmptyText,
-  model_id: nonEmptyText,
+  /** 缺省 = 先建无候选的空映射（如分组内占位新建），之后再补候选目标 */
+  provider_id: nonEmptyText.optional(),
+  model_id: nonEmptyText.optional(),
   group_id: nonEmptyText.nullable().optional(),
   enabled: z.union([z.literal(0), z.literal(1)]).optional(),
   thinking: thinkingConfigSchema.optional(),
   routing_config: routingConfigSchema.optional(),
-}).superRefine((alias, ctx) => {
+}).refine(
+  (alias) => (alias.provider_id === undefined) === (alias.model_id === undefined),
+  'provider_id and model_id must be provided together',
+).superRefine((alias, ctx) => {
   if (alias.thinking && !validateThinkingValue(alias.protocol, alias.thinking.value)) {
     ctx.addIssue({ code: 'custom', path: ['thinking', 'value'], message: 'thinking value does not match protocol' })
   }

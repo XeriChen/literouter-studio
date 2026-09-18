@@ -115,7 +115,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | `POST /providers/:id/import-models` | body `{model_ids:[...], create_alias?:boolean}`（默认 true），落库 + 自动建同名映射；`create_alias:false` 只落库不建/不追加映射 |
 | `POST /providers/:id/cleanup-imported-models` | 一键清理该 Provider 全部拉取导入的模型（`source='fetched'`，手动添加不受影响）；同名映射保留，候选随引用修复，可能留下无候选的无效映射（用「清理无效映射」清理）；返回 `{deleted}` |
 | `GET /models`、`POST/PATCH/DELETE /models` | 真实模型列表与变更；变更请求 body 传 `provider_id+model_id` |
-| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段、思考等级（PATCH 传 null 清除）与路由配置（`routing_config` 字段，PATCH 传 null 清除） |
+| `GET /aliases`、`POST/PATCH/DELETE /aliases` | 映射 CRUD；支持 enabled、分组、重命名、当前目标兼容字段、思考等级（PATCH 传 null 清除）与路由配置（`routing_config` 字段，PATCH 传 null 清除）；POST 的 `provider_id`/`model_id` 可同时省略，创建无候选的空映射（如分组内占位新建，补首个候选前不可路由） |
 | `POST /alias-targets/weight` | 设置候选权重：body `{protocol, alias_name, provider_id, model_id, weight(0-10000)}`；weighted 模式消费，0 表示仅末位备选 |
 | `POST /aliases/merge` | 合并映射：body `{protocol, sources:[…], target_alias_name, group_id?, delete_sources?}`；候选按 (provider_id, model_id) 去重追加（`added`/`skipped`），并入已有映射不改其 active，新建映射以第一个源的当前目标为 active、thinking 与 routing_config 继承第一个非空源；`delete_sources:true` 时删除源映射（FK 级联候选） |
 | `GET/POST/PATCH/DELETE /alias-groups` | 分组 CRUD；删除分组连同组内映射删除 |
