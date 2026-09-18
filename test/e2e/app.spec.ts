@@ -655,7 +655,7 @@ test('imports aliases into a group and cleans up invalid aliases', async ({ page
   await expect(importDialog.getByLabel('选择 alias-a')).toHaveCount(0)
   await expect(importDialog.getByLabel('选择 alias-b')).toBeVisible()
   await expect(importDialog.getByLabel('选择 dead-alias')).toBeVisible()
-  await importDialog.getByPlaceholder('模糊搜索映射名…').fill('dead')
+  await importDialog.getByRole('textbox').first().fill('dead')
   await expect(importDialog.getByLabel('选择 alias-b')).toHaveCount(0)
   await importDialog.getByLabel('选择 dead-alias').check()
   await importDialog.getByRole('button', { name: /^导入 1 个$/ }).click()
@@ -703,13 +703,13 @@ test('creates an alias via searchable model selection and real-model name fill',
 
   // 模糊搜索真实模型并选择；映射名为空时自动填入真实模型名
   await dialog.getByRole('combobox', { name: '当前目标' }).click()
-  await dialog.getByPlaceholder('模糊搜索真实模型…').fill('mini')
+  await dialog.getByPlaceholder('模型名').fill('mini')
   await dialog.getByRole('option', { name: 'gpt-4o-mini' }).click()
   await expect(dialog.getByPlaceholder('my-brain')).toHaveValue('gpt-4o-mini')
 
   // 改选其他模型后，可用按钮直接把真实模型名填为映射名
   await dialog.getByRole('combobox', { name: '当前目标' }).click()
-  await dialog.getByPlaceholder('模糊搜索真实模型…').fill('o3')
+  await dialog.getByPlaceholder('模型名').fill('o3')
   await dialog.getByRole('option', { name: 'o3' }).click()
   await expect(dialog.getByPlaceholder('my-brain')).toHaveValue('gpt-4o-mini')
   await dialog.getByRole('button', { name: '填入真实模型名' }).click()
@@ -771,7 +771,7 @@ test('adds a candidate target by searching models across providers', async ({ pa
   // 不选 Provider 直接模糊搜索，可命中其他 Provider 的真实模型
   await page.getByRole('combobox', { name: '模型' }).click()
   await expect(page.getByRole('option', { name: 'gpt-a' })).toBeDisabled()
-  await page.getByPlaceholder('模糊搜索真实模型…').fill('canary')
+  await page.getByPlaceholder('模型名').fill('canary')
   await expect(page.getByRole('option', { name: 'canary-model' })).toBeVisible()
   await page.getByRole('option', { name: 'canary-model' }).click()
 
