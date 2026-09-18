@@ -37,7 +37,8 @@ die() { printf '\n\033[1;31m[失败] %s\033[0m\n' "$*" >&2; exit 1; }
 CURRENT_BRANCH="$(git branch --show-current)"
 [ "$BRANCH" != "$CURRENT_BRANCH" ] || die "分支 $BRANCH 正被生产仓库（$REPO_ROOT）检出，换一个分支名"
 
-if [ -d "$WT_ROOT/.git" ]; then
+if [ -e "$WT_ROOT/.git" ]; then
+  # linked worktree 的 .git 是文件（指向主仓 .git/worktrees），主仓才是目录
   log "复用既有 worktree：$WT_ROOT"
 elif [ -e "$WT_ROOT" ]; then
   die "$WT_ROOT 已存在但不是 git worktree，请确认后手动处理或改用 WT_ROOT="
@@ -55,6 +56,12 @@ cd "$WT_ROOT"
 
 log "安装依赖"
 pnpm install --frozen-lockfile
+
+# 构建一次前端：worktree 是全新检出，web/dist 被 gitignore 不会随仓库带来。
+# 不构建的话网关对 / 返回 404，Playwright 的复用探测（要求状态码 < 404）会
+# 误判服务未就绪而去自起 pnpm start（默认 3000，会撞生产网关）。
+log "构建前端（web/dist，供网关直接托管与 E2E 复用探测）"
+pnpm build:web
 
 # 开发实例使用自己的 ENCRYPTION_KEY：与生产库无关，但重启后仍需解开自己存的凭据。
 # HOST 固定 127.0.0.1，避免在局域网暴露第二个网关。
