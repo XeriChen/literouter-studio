@@ -179,9 +179,42 @@
   .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors; }
   .icon-button:hover { @apply bg-muted text-foreground; }
   .icon-button:disabled { @apply pointer-events-none opacity-40; }
-  .notice { @apply flex items-start gap-3 border px-3 py-2.5 text-sm; }
-  .notice-success { @apply border-[hsl(var(--success)/.25)] bg-[hsl(var(--success)/.08)] text-[hsl(var(--success))]; }
-  .notice-error { @apply border-destructive/25 bg-destructive/10 text-destructive; }
+  /* 通知横幅：不透明实色底 + 白字，浮层（.notice-layer）与内嵌（引导条/弹窗内）共用。
+     注意：本项目构建出的 preflight * { margin/padding/border:0 } 为非分层规则，会压过
+     @layer components 内的同类声明，因此 padding/border 一律由 JSX 工具类提供，不在此 @apply */
+  .notice {
+    @apply flex items-start gap-2.5 rounded-lg text-sm font-medium leading-5 text-white;
+    box-shadow: 0 14px 34px -14px rgb(0 0 0 / 0.55);
+    animation: notice-drop 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .notice-success { background: hsl(152 62% 30%); }
+  .notice-error { background: hsl(0 68% 46%); }
+  .dark .notice-success { background: hsl(154 53% 25%); }
+  .dark .notice-error { background: hsl(0 60% 42%); }
+  .notice a { @apply text-white underline underline-offset-4; }
+  .notice .icon-button {
+    @apply ml-auto h-6 w-6 shrink-0 rounded-md text-white/70 transition-colors hover:bg-white/15 hover:text-white;
+  }
+  /* 浮动通知层：portal 到 body，fixed 锚定视口顶部（page-shell 的入场动画会产生 transform 包含块，不能放内部） */
+  .notice-layer {
+    @apply pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center;
+  }
+  .notice-layer .notice {
+    /* 宽度随内容收缩，短文不占满；长文不超出浮层（浮层带 px-4），到上限后换行 */
+    @apply pointer-events-auto w-fit max-w-[min(32rem,100%)];
+  }
+  .notice > span {
+    @apply min-w-0;
+    max-height: 50vh;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+@keyframes notice-drop {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (min-width: 640px) {

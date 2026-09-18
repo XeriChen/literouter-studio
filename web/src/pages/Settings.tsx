@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
+import { CheckCircle2, CircleAlert, Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
 import { api, clearToken, setToken } from '@/api/client'
 import type { BackupData } from '@/api/types'
 import { copyText } from '@/lib/clipboard'
@@ -99,17 +100,25 @@ export default function Settings() {
   }
 
   return (
-    <div className="page-shell max-w-4xl space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><KeyRound className="h-3.5 w-3.5" /> 系统配置</div><h1 className="page-title">Settings</h1><p className="page-description">网关运行配置、访问 Token 与备份管理。</p></div></div>
-
-      {notice && (
-        <div className={`notice ${notice.ok ? 'notice-success' : 'notice-error'}`}>
+    <>
+    {/* 通知 portal 到 body：.page-shell 的 animate-rise-in 残留 transform 会让内部 fixed
+        相对页面定位；portal 后横幅始终浮在视口顶部，滚动页面时保持可见 */}
+    {notice && createPortal(
+      <div className="notice-layer px-4">
+        <div className={`notice border border-white/[0.14] px-3.5 py-2.5 ${notice.ok ? 'notice-success' : 'notice-error'}`}>
+          {notice.ok
+            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            : <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />}
           <span>{notice.message}</span>
-          <button aria-label="关闭提示" onClick={() => setNotice(null)} className="icon-button ml-auto h-6 w-6">
+          <button aria-label="关闭提示" onClick={() => setNotice(null)} className="icon-button h-6 w-6">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
-      )}
+      </div>,
+      document.body,
+    )}
+    <div className="page-shell max-w-4xl space-y-6">
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><KeyRound className="h-3.5 w-3.5" /> 系统配置</div><h1 className="page-title">Settings</h1><p className="page-description">网关运行配置、访问 Token 与备份管理。</p></div></div>
 
       <Card className="console-surface shadow-none">
         <CardHeader>
@@ -277,5 +286,6 @@ export default function Settings() {
         </DialogContent>
       </Dialog>
     </div>
+    </>
   )
 }

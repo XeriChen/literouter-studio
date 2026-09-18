@@ -372,17 +372,17 @@ function RealModelsList() {
 
     {/* Toast stack */}
     {toasts.length > 0 && (
-      <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col items-center gap-2">
+      <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`flex items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm transition-all ${
+            className={`flex w-fit max-w-[min(32rem,100%)] items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm transition-all ${
               t.ok
                 ? 'border-emerald-200 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-200'
                 : 'border-red-200 bg-red-50/95 text-red-800 dark:border-red-800 dark:bg-red-950/90 dark:text-red-200'
             }`}
           >
-            <span className="max-w-md line-clamp-2">{t.message}</span>
+            <span className="max-h-[40vh] min-w-0 overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{t.message}</span>
             {t.latency_ms > 0 && <span className="shrink-0 text-xs opacity-70">{t.latency_ms}ms</span>}
             <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
               <X className="h-3.5 w-3.5" />

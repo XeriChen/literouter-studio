@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   CircleDollarSign,
   Copy,
   Eraser,
@@ -624,20 +626,22 @@ export default function Providers() {
   }
 
   const hasAnyProvider = (providers.data?.length ?? 0) > 0
-  const overlayOpen = dialogOpen || groupOpen || renaming !== null || !!fetchDialog
   const resultNotice = result ? (
-    <div role="status" className={`notice ${result.ok ? 'notice-success' : 'notice-error'}`}>
+    <div role="status" className={`notice border border-white/[0.14] px-3.5 py-2.5 ${result.ok ? 'notice-success' : 'notice-error'}`}>
+      {result.ok
+        ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+        : <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />}
       <span>{result.message}</span>
-      <button type="button" aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button ml-auto h-6 w-6"><X className="h-3.5 w-3.5" /></button>
+      <button type="button" aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button h-6 w-6"><X className="h-3.5 w-3.5" /></button>
     </div>
   ) : null
 
   return (
     <>
-    {result && overlayOpen && !dialogOpen && createPortal(
-      <div className="pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center px-4">
-        <div className="pointer-events-auto max-w-lg shadow-lg">{resultNotice}</div>
-      </div>,
+    {/* 非编辑弹窗时通知统一 portal 到 body：.page-shell 带 animate-rise-in 残留 transform，
+        会让内部 fixed 相对页面而非视口定位；portal 后始终浮在视口顶部，滚动不跟随 */}
+    {result && !dialogOpen && createPortal(
+      <div className="notice-layer px-4">{resultNotice}</div>,
       document.body,
     )}
     {selectedProviderIds.size > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
@@ -665,8 +669,6 @@ export default function Providers() {
         <div><div className="eyebrow mb-2 flex items-center gap-2"><Wifi className="h-3.5 w-3.5" /> 上游连接</div><h1 className="page-title">Providers</h1><p className="page-description">按协议和自定义分组管理 LLM 服务接入点、连通性与模型发现。</p></div>
         <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={() => openGroupDialog()} size="sm"><FolderPlus className="h-4 w-4" /> 新建分组</Button><Button onClick={openCreate} size="sm"><Plus className="h-4 w-4" /> 新增 Provider</Button></div>
       </div>
-
-      {!overlayOpen && resultNotice}
 
       <div className="space-y-4">
         {PROTOCOLS.map((protocol) => {

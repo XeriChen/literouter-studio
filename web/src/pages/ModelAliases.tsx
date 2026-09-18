@@ -921,7 +921,7 @@ export default function ModelAliases() {
   const addGroups = (groups.data ?? []).filter((group) => group.protocol === addForm.protocol)
 
   return <>
-    {toasts.length > 0 && <div className="fixed left-1/2 top-4 z-[100] flex -translate-x-1/2 flex-col gap-2">{toasts.map((item) => <div key={item.id} className={`rounded-lg border px-4 py-2 text-sm shadow-lg ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>{item.message}</div>)}</div>}
+    {toasts.length > 0 && <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">{toasts.map((item) => <div key={item.id} className={`w-fit max-w-[min(32rem,100%)] rounded-lg border px-4 py-2 text-sm shadow-lg ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}><span className="block max-h-[40vh] overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{item.message}</span></div>)}</div>}
     {selectedAliases.length > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
