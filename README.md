@@ -56,6 +56,40 @@ pnpm start
 
 `pnpm start` 直接运行后端 TypeScript 源码，并由 Hono 托管已构建的 `web/dist`。未构建前端时，管理 API 与代理仍可启动，但不会有可用的 Web 控制台。
 
+### 从远端拉取部署（本地作为生产机）
+
+本地仓库只作为远端的只读镜像、编码在别处完成时，用部署脚本代替手工 `git pull`：
+
+```bash
+scripts/deploy.sh
+```
+
+脚本依次执行：校验本地无已跟踪文件改动 → `git fetch` → 打印变更文件 → `git merge --ff-only` → 用 SQLite 在线备份 API 把 `data/gateway.db` 快照到 `data/deploy-backups/`（校验完整性后才原子落位）→ `pnpm install --frozen-lockfile` → `pnpm check`（类型检查 + 单元测试 + 前端构建）→ 重启 `literouter.service` → 冒烟检查 `http://127.0.0.1:3000/`。
+
+- **失败即中止**：`pnpm check` 不通过时不会重启服务，旧版本继续对外服务。
+- **数据库与 `.env` 不被触碰**：两者都在 `.gitignore` 内，`data/` 下只有备份目录会被写入；快照保留最近 10 份。
+- **只允许快进**：本地若存在远端没有的提交会被拒绝，避免在生产机产生分叉或合并提交。
+- 可用 `BRANCH`、`SERVICE`、`HEALTH_URL`、`KEEP_BACKUPS` 环境变量覆盖默认值。
+- 回滚需手工执行：`git checkout <旧 SHA> && pnpm install && pnpm build:web && systemctl --user restart literouter.service`；**代码回滚不会回滚数据**，必要时先从 `data/deploy-backups/` 恢复。
+
+> 注意：本地仓库既然是远端镜像就不要在本地保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
+
+### 本机开发：worktree + 独立端口
+
+本机 3000 是生产网关，仓库根目录只做部署；新功能一律在 worktree 里开发，并用独立端口测试：
+
+```bash
+scripts/dev-worktree.sh feature/xxx
+```
+
+脚本在 `../literouter-dev-feature-xxx` 创建 worktree（基于 `main`）、安装依赖、生成独立的 `.env`（`HOST=127.0.0.1` + 独立 `ENCRYPTION_KEY`），然后前台启动开发实例：
+
+- 网关开发实例 `http://127.0.0.1:3001`（仅本机可达），数据落在 worktree 自己的 `data/`，与生产库完全隔离；
+- Vite 前端 `http://localhost:5174`，`/api`、`/openai`、`/anthropic` 代理到 3001（跟随 `PORT`，不会误连生产）；
+- 指向开发实例跑 E2E：`E2E_GATEWAY_URL=http://127.0.0.1:3001 pnpm test:e2e`（Token 自动从 worktree 自己的库读取）。
+
+端口可用 `DEV_PORT` / `VITE_PORT` 覆盖，但**不允许占用 3000**。开发完成后 push 分支、合入 `main`，再回生产仓库跑 `scripts/deploy.sh` 部署。
+
 ## 配置生效规则
 
 - 默认监听 `0.0.0.0:3000`。已保存的数据库设置优先于 `HOST`/`PORT` 环境变量，环境变量再优先于默认值。
@@ -121,9 +155,10 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `pnpm dev` | 后端 watch + Vite 开发服务 |
+| `pnpm dev` | 后端 watch + Vite 开发服务（默认 3000/5173，用 `PORT`/`VITE_PORT` 让位） |
 | `pnpm dev:server` | 仅后端（tsx watch，默认 3000） |
-| `pnpm dev:web` | 仅前端（Vite，默认 5173） |
+| `pnpm dev:web` | 仅前端（Vite，默认 5173，代理目标跟随 `PORT`） |
+| `scripts/dev-worktree.sh <分支>` | 在 worktree 里以独立端口（默认 3001/5174）开发新功能 |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test` | Node 单元测试 |
 | `pnpm test:e2e` | Playwright 浏览器测试；构建、服务复用与 Token 前提见下文 |
