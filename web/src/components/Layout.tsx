@@ -52,19 +52,19 @@ export function Layout() {
   return (
     <div className="surface-grid flex min-h-screen bg-background text-foreground">
       {sidebarOpen && <button aria-label="关闭导航" className="fixed inset-0 z-40 cursor-default bg-foreground/55 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-[256px] max-w-[80vw] flex-col border-r border-foreground/15 bg-card/95 backdrop-blur-xl transition-transform duration-300 sm:w-[288px] lg:static lg:w-[288px] lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex h-14 shrink-0 items-center gap-3 border-b border-foreground/10 px-4 sm:h-16 sm:px-5 lg:h-[84px]">
-          <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_0_28px_hsl(var(--accent)/.18)] sm:h-9 sm:w-9 lg:h-10 lg:w-10">
-            <Activity className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.5} />
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-[min(22rem,90vw)] flex-col border-r border-foreground/15 bg-card/95 backdrop-blur-xl transition-transform duration-300 lg:static lg:w-[22rem] lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-foreground/10 px-4 sm:h-[4.5rem] sm:px-5 lg:h-[84px]">
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_0_28px_hsl(var(--accent)/.18)]">
+            <Activity className="h-5 w-5" strokeWidth={2.5} />
             <span className="absolute -right-1 -top-1 status-dot" />
           </div>
-          <div className="min-w-0 flex-1"><div className="truncate text-xs font-extrabold tracking-[-0.04em] sm:text-sm">LITEROUTER</div><div className="eyebrow mt-0.5 text-[9px]">gateway / studio</div></div>
-          <button aria-label="关闭导航" className="icon-button ml-auto shrink-0 lg:hidden" onClick={() => setSidebarOpen(false)}><X className="h-4 w-4" /></button>
+          <div className="min-w-0 flex-1"><div className="truncate text-base font-extrabold tracking-[-0.04em]">LITEROUTER</div><div className="eyebrow mt-1">gateway / studio</div></div>
+          <button aria-label="关闭导航" className="icon-button ml-auto shrink-0 lg:hidden" onClick={() => setSidebarOpen(false)}><X className="h-5 w-5" /></button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 lg:py-6">
-          <div className="eyebrow px-3 pb-1.5 text-[10px]">工作区</div>
-          <ul className="space-y-0.5 sm:space-y-1">{NAV_ITEMS.map((item) => <li key={item.to}><NavLink to={item.to} end={item.end} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `group relative flex items-center gap-2.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:gap-3 sm:py-2 sm:text-sm ${isActive ? 'bg-primary text-primary-foreground shadow-[0_4px_20px_hsl(var(--primary)/.14)]' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-            {({ isActive }) => <><item.icon className="h-4 w-4 shrink-0" strokeWidth={isActive ? 2.5 : 1.8} /><span className="flex-1 truncate">{item.label}</span>{isActive && <ChevronRight className="h-3.5 w-3.5 opacity-60" />}</>}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 lg:px-4 lg:py-6">
+          <div className="eyebrow px-3 pb-3">工作区</div>
+          <ul className="space-y-2">{NAV_ITEMS.map((item) => <li key={item.to}><NavLink to={item.to} end={item.end} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `group relative flex min-h-12 items-center gap-3 rounded-md px-3 py-3 text-base font-medium leading-6 transition-all ${isActive ? 'bg-primary text-primary-foreground shadow-[0_4px_20px_hsl(var(--primary)/.14)]' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+            {({ isActive }) => <><item.icon className="h-5 w-5 shrink-0" strokeWidth={isActive ? 2.5 : 1.8} /><span className="flex-1 truncate">{item.label}</span>{isActive && <ChevronRight className="h-4 w-4 opacity-60" />}</>}
           </NavLink></li>)}</ul>
         </div>
       </aside>
