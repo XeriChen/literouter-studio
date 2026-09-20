@@ -44,6 +44,19 @@ describe('parseAuth', () => {
     assert.deepEqual(auth.custom_auth, { header_name: 'X-API-Key', format: '{key}' })
   })
 
+  test('parses access_token without leaking it into provider headers', () => {
+    const provider = makeProvider({
+      protocol: 'openai',
+      auth_json: JSON.stringify({ api_key: 'sk-proxy', access_token: 'jwt-token' }),
+    })
+    const auth = parseAuth(provider)
+    assert.equal(auth.access_token, 'jwt-token')
+    // access_token 只服务管理面余额查询，不能变成上游代理请求头
+    const headers = buildProviderHeaders(provider)
+    assert.equal(headers.authorization, 'Bearer sk-proxy')
+    assert.equal(headers['access_token'], undefined)
+  })
+
   test('returns empty object for invalid JSON', () => {
     const provider = makeProvider({ auth_json: 'not-json' })
     const auth = parseAuth(provider)

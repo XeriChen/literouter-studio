@@ -34,6 +34,7 @@ export interface CustomAuthConfig {
 
 export interface ParsedAuth {
   api_key?: string
+  access_token?: string
   version?: string
   custom_auth?: CustomAuthConfig
   [key: string]: string | CustomAuthConfig | undefined
@@ -45,6 +46,7 @@ export function parseAuth(provider: ProviderRow): ParsedAuth {
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
     const obj = parsed as Record<string, unknown>
     const result: ParsedAuth = {}
+    if (typeof obj.access_token === 'string') result.access_token = obj.access_token
     if (typeof obj.api_key === 'string') result.api_key = obj.api_key
     if (typeof obj.version === 'string') result.version = obj.version
     if (obj.custom_auth && typeof obj.custom_auth === 'object' && !Array.isArray(obj.custom_auth)) {

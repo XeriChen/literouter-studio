@@ -59,6 +59,7 @@ interface ProviderForm {
   group_id: string
   base_url: string
   api_key: string
+  access_token: string
   anthropic_version: string
   proxy_url: string
   timeout_ms: string
@@ -75,6 +76,7 @@ const EMPTY_FORM: ProviderForm = {
   group_id: '',
   base_url: '',
   api_key: '',
+  access_token: '',
   anthropic_version: '',
   proxy_url: '',
   timeout_ms: '',
@@ -148,6 +150,7 @@ export default function Providers() {
       group_id: provider.group_id ?? '',
       base_url: provider.base_url,
       api_key: (provider.auth.api_key as string | undefined) ?? '',
+      access_token: (provider.auth.access_token as string | undefined) ?? '',
       anthropic_version: (provider.auth.version as string | undefined) ?? '',
       proxy_url: provider.proxy_url ?? '',
       timeout_ms: provider.timeout_ms == null ? '' : String(provider.timeout_ms),
@@ -216,6 +219,7 @@ export default function Providers() {
     mutationFn: async () => {
       const auth: Record<string, string | { header_name: string; format: string }> = {}
       if (form.api_key) auth.api_key = form.api_key
+      if (form.access_token.trim()) auth.access_token = form.access_token.trim()
       if (form.protocol === 'anthropic' && form.anthropic_version.trim()) auth.version = form.anthropic_version.trim()
       if (form.custom_auth_header_name.trim() && form.custom_auth_format.trim()) {
         auth.custom_auth = {
@@ -703,8 +707,9 @@ export default function Providers() {
             <div className="space-y-1.5"><Label>Base URL</Label><Input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
             <div className="space-y-1.5"><Label>API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." aria-label="API Key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
             {form.protocol === 'anthropic' && <div className="space-y-1.5"><Label>Anthropic Version（可选）</Label><Input value={form.anthropic_version} onChange={(event) => setForm({ ...form, anthropic_version: event.target.value })} placeholder="2023-06-01（留空使用默认值）" /></div>}
-            <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户余额</p></div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>代理 URL（可选）</Label><Input value={form.proxy_url} onChange={(event) => setForm({ ...form, proxy_url: event.target.value })} placeholder="http://127.0.0.1:7890" /></div><div className="space-y-1.5"><Label>超时毫秒</Label><Input value={form.timeout_ms} onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })} placeholder="120000（0 表示不超时）" /></div></div>
+            <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户额度；Sub2API 默认用 API Key 查 /v1/usage</p></div>
+            {form.upstream_type === 'sub2api' && <div className="space-y-1.5"><Label>Access Token（可选，Sub2API 余额查询）</Label><Input value={form.access_token} onChange={(event) => setForm({ ...form, access_token: event.target.value })} placeholder="eyJ..." /><p className="text-xs text-muted-foreground">余额默认走 <span className="font-mono">/v1/usage</span>（用上面的 API Key 即可）。仅当部署对该路由也只放行 JWT 时，才需填 Sub2API 控制台登录态 JWT（回退 <span className="font-mono">/api/v1/auth/me</span>）；该字段不参与代理转发</p></div>}
             <div className="space-y-1.5"><Label>自定义请求头</Label><Textarea value={form.custom_headers} onChange={(event) => setForm({ ...form, custom_headers: event.target.value })} rows={3} className="font-mono text-xs" placeholder='{"X-Custom": "value"}' /><p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p></div>
             <div className="space-y-1.5"><Label>自定义认证头（可选）</Label><div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><Input value={form.custom_auth_header_name} onChange={(event) => setForm({ ...form, custom_auth_header_name: event.target.value })} placeholder="X-API-Key" /><Input value={form.custom_auth_format} onChange={(event) => setForm({ ...form, custom_auth_format: event.target.value })} placeholder="Bearer {key}" /></div><p className="text-xs text-muted-foreground">自定义认证头名称和格式，{'{key}'} 会被替换为 API Key。留空使用默认认证方式</p></div>
             <div className="space-y-1.5"><Label>模型过滤规则（可选）</Label><Input value={form.model_filter} onChange={(event) => setForm({ ...form, model_filter: event.target.value })} placeholder="grok-*,mimo-*" /><p className="text-xs text-muted-foreground">逗号分隔的前缀匹配规则，拉取时只入库匹配的模型。留空不过滤。例：gpt-*,claude-*</p></div>

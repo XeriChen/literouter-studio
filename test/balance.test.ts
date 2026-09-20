@@ -405,14 +405,15 @@ describe('balance service', () => {
     db.exec('DELETE FROM providers')
     const upstream = await startMockUpstream((req, res) => {
       res.setHeader('content-type', 'application/json')
-      res.end(JSON.stringify({ balance: 12.5 }))
+      assert.equal((req.url ?? '').split('?')[0], '/v1/usage', 'sub2api balance uses the data-plane usage endpoint')
+      res.end(JSON.stringify({ isValid: true, mode: 'metered', remaining: 12.5, unit: 'USD', usage: { total: { cost: 3 } } }))
     })
     const provider = createProvider({
       name: 'Sub2API',
       protocol: 'openai',
       group_id: null,
       base_url: upstream.baseUrl,
-      auth_json: JSON.stringify({ access_token: 'tok' }),
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
       custom_headers_json: '{}',
       proxy_url: null,
       timeout_ms: null,
@@ -434,6 +435,297 @@ describe('balance service', () => {
 
     await getProviderBalance(provider.id, { force: true })
     assert.equal(upstream.hits(), 2, 'force bypasses cache')
+    upstream.server.close()
+  })
+
+  it('reads sub2api quota from /v1/usage with the proxy API key (unlimited plan)', async () => {
+    db.exec('DELETE FROM providers')
+    const seen: Array<string | undefined> = []
+    const upstream = await startMockUpstream((req, res) => {
+      seen.push(req.headers.authorization)
+      res.setHeader('content-type', 'application/json')
+      // 实测形态：公益/拼车套餐，remaining=-1 + mode=unrestricted + 全 0 限额 + 远未来到期
+      res.end(JSON.stringify({
+        isValid: true,
+        mode: 'unrestricted',
+        planName: '大善人-openai',
+        remaining: -1,
+        unit: 'USD',
+        subscription: {
+          daily_limit_usd: 0,
+          daily_usage_usd: 0,
+          weekly_limit_usd: 0,
+          weekly_usage_usd: 0,
+          monthly_limit_usd: 0,
+          monthly_usage_usd: 36.511247,
+          expires_at: '2100-01-01T07:59:59+08:00',
+        },
+        usage: { total: { cost: 36.511247, actual_cost: 36.511247 } },
+      }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Unlimited',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.unlimited, true)
+    assert.equal(result.balance, null)
+    assert.equal(result.available, true)
+    assert.deepEqual(result.balances, [{ label: '已用', balance: 36.511247, currency: 'USD' }])
+    assert.equal(result.expires_at, null, 'far-future expiry means never expires')
+    assert.deepEqual(seen, ['Bearer sk-proxy'], 'data-plane endpoint accepts the proxy API key')
+    assert.equal(listBalanceSnapshots(provider.id).length, 0, 'unlimited results do not snapshot balance')
+    upstream.server.close()
+  })
+
+  it('reads a wallet plan from /v1/usage and reports usage only', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      // 实测形态：钱包余额套餐，balance≈1e8（无限额钱包），mode 仍为 unrestricted
+      res.end(JSON.stringify({
+        isValid: true,
+        mode: 'unrestricted',
+        planName: '钱包余额',
+        balance: 99999874.27596141,
+        remaining: 99999874.27596141,
+        unit: 'USD',
+        usage: { total: { cost: 1000.3763743, actual_cost: 100.03763743 } },
+      }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Wallet',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.unlimited, true)
+    assert.equal(result.balance, null)
+    assert.deepEqual(result.balances, [{ label: '已用', balance: 1000.376374, currency: 'USD' }])
+    upstream.server.close()
+  })
+
+  it('derives remaining from the tightest subscription window', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({
+        isValid: true,
+        mode: 'metered',
+        planName: '限量套餐',
+        remaining: null,
+        unit: 'USD',
+        subscription: {
+          daily_limit_usd: 0,
+          daily_usage_usd: 0,
+          weekly_limit_usd: 100,
+          weekly_usage_usd: 20,
+          monthly_limit_usd: 300,
+          monthly_usage_usd: 50,
+          expires_at: '2027-03-01T00:00:00Z',
+        },
+        usage: { total: { cost: 70 } },
+      }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Metered',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.unlimited, false)
+    assert.equal(result.balance, 80, 'tightest window (weekly 100 - 20) wins')
+    assert.equal(result.available, true)
+    assert.deepEqual(result.balances, [
+      { label: '周限额', balance: 100, currency: 'USD' },
+      { label: '月限额', balance: 300, currency: 'USD' },
+      { label: '剩余', balance: 80, currency: 'USD' },
+      { label: '已用', balance: 70, currency: 'USD' },
+    ])
+    assert.equal(result.expires_at, new Date('2027-03-01T00:00:00Z').toISOString())
+    upstream.server.close()
+  })
+
+  it('prefers the declared remaining over subscription windows', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ mode: 'metered', remaining: 5.25, usage: { total: { cost: 1.5 } } }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Declared',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.balance, 5.25)
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 5.25, currency: 'USD' },
+      { label: '已用', balance: 1.5, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('falls back to the console endpoint when /v1/usage rejects the API key', async () => {
+    db.exec('DELETE FROM providers')
+    const seen: string[] = []
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      seen.push(`${req.headers.authorization} ${path}`)
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/usage') {
+        res.statusCode = 401
+        res.end(JSON.stringify({ code: 'INVALID_TOKEN', message: 'Invalid token' }))
+        return
+      }
+      res.end(JSON.stringify({ code: 0, message: 'ok', data: { id: 7, username: 'alice', balance: '3.5' } }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Fallback',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy', access_token: 'jwt-token' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.balance, 3.5, 'string balance is parsed numerically')
+    assert.equal(result.available, true)
+    assert.deepEqual(result.balances, [{ label: 'balance', balance: 3.5, currency: 'USD' }])
+    assert.deepEqual(seen, ['Bearer sk-proxy /v1/usage', 'Bearer jwt-token /api/v1/auth/me'])
+    upstream.server.close()
+  })
+
+  it('hints at the console JWT when /v1/usage rejects an API-key-only provider', async () => {
+    db.exec('DELETE FROM providers')
+    const hits: string[] = []
+    const upstream = await startMockUpstream((req, res) => {
+      hits.push((req.url ?? '').split('?')[0])
+      res.setHeader('content-type', 'application/json')
+      res.statusCode = 401
+      res.end(JSON.stringify({ code: 'INVALID_TOKEN', message: 'Invalid token' }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-KeyOnly',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    await assert.rejects(
+      () => getProviderBalance(provider.id, { force: true }),
+      (err: unknown) => err instanceof UpstreamError
+        && err.code === 'upstream_auth_error'
+        && err.upstreamStatus === 401
+        && /JWT/i.test(err.message),
+    )
+    assert.deepEqual(hits, ['/v1/usage'], 'no pointless retry with the same API key')
+    upstream.server.close()
+  })
+
+  it('surfaces sub2api business errors returned with HTTP 200 on the console endpoint', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/usage') {
+        res.statusCode = 401
+        res.end(JSON.stringify({ code: 'INVALID_TOKEN', message: 'Invalid token' }))
+        return
+      }
+      res.end(JSON.stringify({ code: 500, message: 'user disabled' }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-BusinessError',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy', access_token: 'jwt-token' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    await assert.rejects(
+      () => getProviderBalance(provider.id, { force: true }),
+      (err: unknown) => err instanceof UpstreamError && err.code === 'upstream_error' && /user disabled/.test(err.message),
+    )
+    upstream.server.close()
+  })
+
+  it('normalizes a sub2api base_url ending with /v1 for the usage endpoint', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      assert.equal((req.url ?? '').split('?')[0], '/v1/usage')
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ mode: 'metered', remaining: 0, usage: { total: { cost: 4 } } }))
+    })
+    const provider = createProvider({
+      name: 'Sub2API-TrailingV1',
+      protocol: 'openai',
+      group_id: null,
+      base_url: `${upstream.baseUrl}/v1`,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.balance, 0)
+    assert.equal(result.available, false, 'zero remaining is not available')
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 0, currency: 'USD' },
+      { label: '已用', balance: 4, currency: 'USD' },
+    ])
     upstream.server.close()
   })
 
