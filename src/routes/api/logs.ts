@@ -1,5 +1,6 @@
 import type { Hono } from 'hono'
 import { clearAuditLogs, listAuditLogs, writeAuditLog } from '../../services/audit'
+import { logPeriodStart, parseLogPeriod } from '../../services/log-period'
 import { clearLogs, listLogs } from '../../services/logs'
 import type { Env } from '../../types'
 import { ok } from './shared'
@@ -7,6 +8,11 @@ import { ok } from './shared'
 function finiteNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function periodSince(value: string | undefined): string | undefined {
+  const period = parseLogPeriod(value)
+  return period ? logPeriodStart(period).toISOString() : undefined
 }
 
 export function registerLogRoutes(api: Hono<Env>): void {
@@ -22,6 +28,7 @@ export function registerLogRoutes(api: Hono<Env>): void {
         provider_id: query.provider_id || undefined,
         model: query.model || undefined,
         status: Number.isFinite(status) ? status : undefined,
+        since: periodSince(query.period),
       }),
     )
   })
@@ -40,6 +47,7 @@ export function registerLogRoutes(api: Hono<Env>): void {
         page: finiteNumber(query.page, 1),
         pageSize: finiteNumber(query.page_size, 50),
         resource: query.resource || undefined,
+        since: periodSince(query.period),
       }),
     )
   })

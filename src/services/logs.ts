@@ -9,6 +9,7 @@ export interface LogFilters {
   provider_id?: string
   model?: string
   status?: number
+  since?: string
 }
 
 const MAX_PAGE_SIZE = 10_000
@@ -37,6 +38,10 @@ export function listLogs(filters: LogFilters): { total: number; rows: LogRow[] }
   if (filters.status !== undefined) {
     where.push('status = ?')
     params.push(filters.status)
+  }
+  if (filters.since) {
+    where.push('created_at >= ?')
+    params.push(filters.since)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const total = (

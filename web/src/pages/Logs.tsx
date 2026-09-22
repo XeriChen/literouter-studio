@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, RotateCw, Trash2, ScrollText, Settings2 } from 'lucide-react'
 import { api } from '@/api/client'
 import type { AuditRow, LogRow, Provider } from '@/api/types'
+import { formatLogClock } from '@/lib/log-time'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -44,6 +45,34 @@ const ACTION_LABELS: Record<string, string> = {
   merge: '合并',
 }
 
+type LogPeriod = '' | 'today' | 'week' | 'month'
+
+const PERIODS: Array<{ value: LogPeriod; label: string }> = [
+  { value: '', label: '全部' },
+  { value: 'today', label: '今日' },
+  { value: 'week', label: '本周' },
+  { value: 'month', label: '本月' },
+]
+
+function PeriodFilter({ value, onChange }: { value: LogPeriod; onChange: (value: LogPeriod) => void }) {
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label="按时间查询">
+      {PERIODS.map((option) => (
+        <Button
+          key={option.label}
+          type="button"
+          size="sm"
+          variant={value === option.value ? 'default' : 'outline'}
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
 function statusBadge(status: number | null) {
   if (status == null) return <Badge variant="outline">-</Badge>
   if (status < 400) return <Badge variant="success">{status}</Badge>
@@ -77,6 +106,7 @@ function AccessLogsTab() {
   const [model, setModel] = useState('')
   const [debouncedModel, setDebouncedModel] = useState('')
   const [status, setStatus] = useState('')
+  const [period, setPeriod] = useState<LogPeriod>('')
   const modelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const providers = useQuery({
@@ -85,13 +115,14 @@ function AccessLogsTab() {
   })
 
   const logs = useQuery({
-    queryKey: ['logs', page, protocol, providerId, debouncedModel, status],
+    queryKey: ['logs', page, protocol, providerId, debouncedModel, status, period],
     queryFn: () => {
       const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
       if (protocol) p.set('protocol', protocol)
       if (providerId) p.set('provider_id', providerId)
       if (debouncedModel.trim()) p.set('model', debouncedModel.trim())
       if (status.trim()) p.set('status', status.trim())
+      if (period) p.set('period', period)
       return api<{ total: number; rows: LogRow[] }>(`/api/logs?${p.toString()}`)
     },
   })
@@ -122,6 +153,7 @@ function AccessLogsTab() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        <PeriodFilter value={period} onChange={(value) => { setPeriod(value); setPage(1) }} />
         <Select value={protocol} onValueChange={(v) => { setProtocol(v); setPage(1) }}>
           <SelectTrigger className="w-28"><SelectValue placeholder="协议" /></SelectTrigger>
           <SelectContent>
@@ -166,7 +198,6 @@ function AccessLogsTab() {
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-6">时间</TableHead>
-                <TableHead>方法</TableHead>
                 <TableHead>路径</TableHead>
                 <TableHead>模型</TableHead>
                 <TableHead>Provider</TableHead>
@@ -178,8 +209,7 @@ function AccessLogsTab() {
             <TableBody>
               {(logs.data?.rows ?? []).map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap pl-6 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</TableCell>
-                  <TableCell className="font-mono text-xs">{r.method}</TableCell>
+                  <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
                   <TableCell className="max-w-[180px] truncate font-mono text-xs">{r.path}</TableCell>
                   <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.model ?? '-'}</TableCell>
                   <TableCell className="max-w-[120px] truncate text-xs">{r.provider_name ?? '-'}</TableCell>
@@ -190,7 +220,7 @@ function AccessLogsTab() {
               ))}
               {!logs.data?.rows.length && !logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-32 text-center">
+                  <TableCell colSpan={7} className="h-32 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <ScrollText className="h-8 w-8" />
                       <p className="text-sm">暂无代理访问日志</p>
@@ -200,7 +230,7 @@ function AccessLogsTab() {
               )}
               {logs.isLoading && (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -218,12 +248,14 @@ function AuditLogsTab() {
   const [page, setPage] = useState(1)
   const [pageSize] = useState(50)
   const [resource, setResource] = useState('')
+  const [period, setPeriod] = useState<LogPeriod>('')
 
   const auditLogs = useQuery({
-    queryKey: ['audit-logs', page, resource],
+    queryKey: ['audit-logs', page, resource, period],
     queryFn: () => {
       const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
       if (resource) p.set('resource', resource)
+      if (period) p.set('period', period)
       return api<{ total: number; rows: AuditRow[] }>(`/api/audit-logs?${p.toString()}`)
     },
   })
@@ -253,15 +285,18 @@ function AuditLogsTab() {
         </Button>
       </div>
 
-      <Select value={resource} onValueChange={(v) => { setResource(v); setPage(1) }}>
-        <SelectTrigger className="w-40"><SelectValue placeholder="资源类型" /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="">全部类型</SelectItem>
-          {Object.entries(RESOURCE_LABELS).map(([value, label]) => (
-            <SelectItem key={value} value={value}>{label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex flex-wrap items-center gap-2">
+        <PeriodFilter value={period} onChange={(value) => { setPeriod(value); setPage(1) }} />
+        <Select value={resource} onValueChange={(v) => { setResource(v); setPage(1) }}>
+          <SelectTrigger className="w-40"><SelectValue placeholder="资源类型" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部类型</SelectItem>
+            {Object.entries(RESOURCE_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>{label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <Card className="console-surface shadow-none">
         <CardContent className="p-0">
@@ -279,7 +314,7 @@ function AuditLogsTab() {
             <TableBody>
               {(auditLogs.data?.rows ?? []).map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap pl-6 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</TableCell>
+                  <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
                   <TableCell className="text-xs">{RESOURCE_LABELS[r.resource] ?? r.resource}</TableCell>
                   <TableCell className="text-xs">{ACTION_LABELS[r.action] ?? r.action}</TableCell>
                   <TableCell className="max-w-[160px] truncate font-mono text-xs">{r.target ?? '-'}</TableCell>

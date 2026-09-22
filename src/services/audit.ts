@@ -47,6 +47,7 @@ export interface AuditFilters {
   page: number
   pageSize: number
   resource?: string
+  since?: string
 }
 
 const MAX_PAGE_SIZE = 10_000
@@ -77,6 +78,10 @@ export function listAuditLogs(filters: AuditFilters): { total: number; rows: Aud
   if (filters.resource) {
     where.push('resource = ?')
     params.push(filters.resource)
+  }
+  if (filters.since) {
+    where.push('created_at >= ?')
+    params.push(filters.since)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const total = (
