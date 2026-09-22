@@ -982,7 +982,7 @@ export default function ModelAliases() {
           title={invalidTotalCount > 0
             ? `清理 ${[invalidAliases.length ? `${invalidAliases.length} 个无效映射` : '', invalidTargets.length ? `${invalidTargets.length} 个无效候选` : ''].filter(Boolean).join(' 与 ')}`
             : '没有需要清理的无效映射或候选'}
-          onClick={() => {
+          onClick={async () => {
             if (!invalidTotalCount) { toast(true, '没有需要清理的无效映射或候选'); return }
             const parts: string[] = []
             if (invalidAliases.length) {

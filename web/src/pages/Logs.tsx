@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { SearchableSelect, type SearchableSelectOption } from '@/components/searchable-select'
 
 const RESOURCE_LABELS: Record<string, string> = {
   auth: '认证',
@@ -122,7 +123,8 @@ function AccessLogsTab() {
       const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
       if (protocol) p.set('protocol', protocol)
       if (providerId) p.set('provider_id', providerId)
-      if (debouncedModel.trim()) p.set('model', debouncedModel.trim())
+      const modelFilter = (model || debouncedModel).trim()
+      if (modelFilter) p.set('model', modelFilter)
       if (status.trim()) p.set('status', status.trim())
       if (period) p.set('period', period)
       return api<{ total: number; rows: LogRow[] }>(`/api/logs?${p.toString()}`)
@@ -139,6 +141,35 @@ function AccessLogsTab() {
 
   const total = logs.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const modelsQuery = useQuery({
+    queryKey: ['models'],
+    queryFn: () => api<Array<{ model_id: string }>>('/api/models'),
+  })
+  const modelFilterOptions = ((): SearchableSelectOption[] => {
+    const names = new Set<string>()
+    for (const m of modelsQuery.data ?? []) {
+      if (m.model_id) names.add(m.model_id)
+    }
+    for (const row of logs.data?.rows ?? []) {
+      if (row.model) names.add(row.model)
+      if (row.resolved_model) names.add(row.resolved_model)
+    }
+    return [
+      { value: '', label: '全部模型' },
+      ...[...names].sort().map((name) => ({ value: name, label: name, keywords: [name] })),
+    ]
+  })()
+  const statusFilterOptions = ((): SearchableSelectOption[] => {
+    const codes = new Set<string>(['200', '201', '204', '400', '401', '403', '404', '408', '422', '429', '500', '502', '503', '504'])
+    for (const row of logs.data?.rows ?? []) {
+      if (row.status != null) codes.add(String(row.status))
+    }
+    return [
+      { value: '', label: '全部状态' },
+      ...[...codes].sort().map((code) => ({ value: code, label: code, keywords: [code] })),
+    ]
+  })()
 
   return (
     <div className="space-y-4">
@@ -174,24 +205,29 @@ function AccessLogsTab() {
             ))}
           </SelectContent>
         </Select>
-        <Input
-          className="w-36"
+        <SearchableSelect
+          className="w-40"
+          ariaLabel="按模型名筛选"
           placeholder="模型名"
-          aria-label="按模型名筛选"
+          searchPlaceholder="搜索模型"
+          emptyText="没有匹配模型"
+          options={modelFilterOptions}
           value={model}
-          onChange={(e) => {
-            setModel(e.target.value)
+          onValueChange={(v) => {
+            setModel(v)
+            setDebouncedModel(v)
             setPage(1)
-            if (modelTimerRef.current) clearTimeout(modelTimerRef.current)
-            modelTimerRef.current = setTimeout(() => setDebouncedModel(e.target.value), 300)
           }}
         />
-        <Input
-          className="w-24"
+        <SearchableSelect
+          className="w-32"
+          ariaLabel="按状态码筛选"
           placeholder="状态码"
-          aria-label="按状态码筛选"
+          searchPlaceholder="搜索状态码"
+          emptyText="没有匹配状态码"
+          options={statusFilterOptions}
           value={status}
-          onChange={(e) => { setStatus(e.target.value); setPage(1) }}
+          onValueChange={(v) => { setStatus(v); setPage(1) }}
         />
       </div>
 
