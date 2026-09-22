@@ -629,8 +629,194 @@ describe('balance service', () => {
     const result = await getProviderBalance(provider.id, { force: true })
     assert.equal(result.balance, 3.5, 'string balance is parsed numerically')
     assert.equal(result.available, true)
-    assert.deepEqual(result.balances, [{ label: 'balance', balance: 3.5, currency: 'USD' }])
+    assert.deepEqual(result.balances, [{ label: '用户余额', balance: 3.5, currency: 'USD' }])
     assert.deepEqual(seen, ['Bearer sk-proxy /v1/usage', 'Bearer jwt-token /api/v1/auth/me'])
+    upstream.server.close()
+  })
+
+  it('queries newapi user total balance via access_token /api/user/self', async () => {
+    db.exec('DELETE FROM providers')
+    const seen: Array<{ auth: string | undefined; path: string }> = []
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      seen.push({ auth: req.headers.authorization, path })
+      res.setHeader('content-type', 'application/json')
+      if (path === '/api/user/self') {
+        assert.equal(req.headers.authorization, 'Bearer pat-user-token')
+        // quota 单位：USD = quota / 500000（new-api QuotaPerUnit 默认值）
+        res.end(JSON.stringify({
+          success: true,
+          message: '',
+          data: { id: 1, username: 'alice', quota: 12_500_000, used_quota: 2_500_000 },
+        }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-UserBalance',
+      protocol: 'openai',
+      group_id: null,
+      base_url: `${upstream.baseUrl}/v1`,
+      auth_json: JSON.stringify({ access_token: 'pat-user-token' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.success, true)
+    assert.equal(result.balance, 25, 'quota 12500000 / 500000 = 25 USD')
+    assert.equal(result.unlimited, false)
+    assert.deepEqual(result.balances, [
+      { label: '用户余额', balance: 25, currency: 'USD' },
+      { label: '用户已用', balance: 5, currency: 'USD' },
+    ])
+    assert.ok(seen.some((item) => item.path === '/api/user/self' && item.auth === 'Bearer pat-user-token'))
+    assert.ok(!seen.some((item) => item.path.includes('billing')), 'no api_key means no billing probe')
+    assert.equal(listBalanceSnapshots(provider.id).length, 1)
+    upstream.server.close()
+  })
+
+  it('merges newapi user total balance with token billing when both credentials work', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/api/user/self') {
+        assert.equal(req.headers.authorization, 'Bearer jwt-console')
+        res.end(JSON.stringify({
+          success: true,
+          data: { quota: 50_000_000, used_quota: 10_000_000 },
+        }))
+        return
+      }
+      assert.equal(req.headers.authorization, 'Bearer sk-upstream')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ hard_limit_usd: 25, access_until: 0 }))
+        return
+      }
+      if (path === '/v1/dashboard/billing/usage') {
+        res.end(JSON.stringify({ object: 'list', total_usage: 2000 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-Merged',
+      protocol: 'openai',
+      group_id: null,
+      base_url: `${upstream.baseUrl}/v1`,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream', access_token: 'jwt-console' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    // 用户总余额 50000000/500000=100 优先作为 balance；令牌侧 25-20=5
+    assert.equal(result.balance, 100)
+    assert.deepEqual(result.balances, [
+      { label: '用户余额', balance: 100, currency: 'USD' },
+      { label: '用户已用', balance: 20, currency: 'USD' },
+      { label: '令牌剩余', balance: 5, currency: 'USD' },
+      { label: '令牌已用', balance: 20, currency: 'USD' },
+      { label: '令牌总额', balance: 25, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('falls back to newapi billing when access_token cannot read user self', async () => {
+    db.exec('DELETE FROM providers')
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      res.setHeader('content-type', 'application/json')
+      if (path === '/api/user/self') {
+        res.statusCode = 401
+        res.end(JSON.stringify({ success: false, message: 'unauthorized' }))
+        return
+      }
+      assert.equal(req.headers.authorization, 'Bearer sk-upstream')
+      if (path === '/v1/dashboard/billing/subscription') {
+        res.end(JSON.stringify({ hard_limit_usd: 25, access_until: 0 }))
+        return
+      }
+      if (path === '/v1/dashboard/billing/usage') {
+        res.end(JSON.stringify({ object: 'list', total_usage: 2000 }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'NewAPI-TokenFallback',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-upstream', access_token: 'expired' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'newapi',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.balance, 5)
+    assert.deepEqual(result.balances, [
+      { label: '剩余', balance: 5, currency: 'USD' },
+      { label: '已用', balance: 20, currency: 'USD' },
+      { label: '总额', balance: 25, currency: 'USD' },
+    ])
+    upstream.server.close()
+  })
+
+  it('merges sub2api console user balance with data-plane usage when access_token is present', async () => {
+    db.exec('DELETE FROM providers')
+    const seen: string[] = []
+    const upstream = await startMockUpstream((req, res) => {
+      const path = (req.url ?? '').split('?')[0]
+      seen.push(`${req.headers.authorization} ${path}`)
+      res.setHeader('content-type', 'application/json')
+      if (path === '/v1/usage') {
+        res.end(JSON.stringify({ isValid: true, mode: 'metered', remaining: 12.5, unit: 'USD', usage: { total: { cost: 3 } } }))
+        return
+      }
+      if (path === '/api/v1/auth/me') {
+        res.end(JSON.stringify({ code: 0, message: 'ok', data: { balance: 42.5 } }))
+        return
+      }
+      res.statusCode = 404
+      res.end()
+    })
+    const provider = createProvider({
+      name: 'Sub2API-Both',
+      protocol: 'openai',
+      group_id: null,
+      base_url: upstream.baseUrl,
+      auth_json: JSON.stringify({ api_key: 'sk-proxy', access_token: 'jwt-user' }),
+      custom_headers_json: '{}',
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: 'sub2api',
+    })
+
+    const result = await getProviderBalance(provider.id, { force: true })
+    assert.equal(result.balance, 42.5, 'console user balance is the primary figure')
+    assert.deepEqual(result.balances, [
+      { label: '用户余额', balance: 42.5, currency: 'USD' },
+      { label: '剩余', balance: 12.5, currency: 'USD' },
+      { label: '已用', balance: 3, currency: 'USD' },
+    ])
+    assert.ok(seen.includes('Bearer sk-proxy /v1/usage'))
+    assert.ok(seen.includes('Bearer jwt-user /api/v1/auth/me'))
     upstream.server.close()
   })
 

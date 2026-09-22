@@ -45,6 +45,13 @@ const SUB2API_QUOTA_WINDOWS = [
 ] as const
 /** sub2api 用远未来时间戳表示「永不过期」；2100 及以后按无到期处理 */
 const SUB2API_NEVER_EXPIRES_YEAR = 2100
+/**
+ * new-api 控制台账户余额换算：`GET /api/user/self` 的 `quota`/`used_quota`
+ * 为内部额度单位，默认 `common.QuotaPerUnit = 500000`（$1 = 500000 quota）。
+ * all-api-hub / newapi-ai-check-in 同用该常数；站点自定义 QuotaPerUnit 时
+ * 展示值会偏大/偏小，网关无公开只读接口可稳定读取站点配置，故沿用默认。
+ */
+const NEWAPI_QUOTA_PER_USD = 500_000
 
 /** 管理面查询走缓存 + 在途去重；TTL 内重复点击不直连上游 */
 const BALANCE_TTL_MS = 60_000 // 缓存有效期 60s，平衡实时性与上游负载
@@ -136,21 +143,33 @@ async function fetchProviderBalance(providerId: string): Promise<BalanceResult> 
   }
 }
 
-/**
- * 收集余额查询可用凭据（保序去重）。
- * newapi 系用代理 sk- 密钥（TokenAuth）调 billing 接口；sub2api 的账户端点挂在
- * 用户态 JWT 认证中间件下，代理用 API Key 只授权 /v1 Relay 路由，因此两类上游的
- * 凭据优先级不同，由 prefer 决定。
- */
-function collectAuthTokens(authJson: string, prefer: 'api_key' | 'access_token'): string[] {
+interface ProviderAuthTokens {
+  apiKey: string | null
+  accessToken: string | null
+}
+
+/** 读出 Provider 认证中的 api_key / access_token（余额查询专用，不参与代理转发） */
+function readProviderAuthTokens(authJson: string): ProviderAuthTokens {
   let auth: Record<string, unknown>
   try {
     auth = JSON.parse(authJson) as Record<string, unknown>
   } catch {
     throw new UpstreamError('upstream_error', 'provider auth_json is not valid JSON')
   }
-  const apiKey = typeof auth.api_key === 'string' ? auth.api_key : ''
-  const accessToken = typeof auth.access_token === 'string' ? auth.access_token : ''
+  const apiKey = typeof auth.api_key === 'string' && auth.api_key ? auth.api_key : null
+  const accessToken = typeof auth.access_token === 'string' && auth.access_token ? auth.access_token : null
+  return { apiKey, accessToken }
+}
+
+/**
+ * 收集余额查询可用凭据（保序去重）。
+ * newapi 系用代理 sk- 密钥（TokenAuth）调 billing 接口；控制台用户总余额用
+ * access_token（UserAuth）调 `/api/user/self`。sub2api 的账户端点挂在用户态
+ * JWT 认证中间件下，代理用 API Key 只授权 /v1 Relay 路由，因此两类上游的
+ * 凭据优先级不同，由 prefer 决定。
+ */
+function collectAuthTokens(authJson: string, prefer: 'api_key' | 'access_token'): string[] {
+  const { apiKey, accessToken } = readProviderAuthTokens(authJson)
   const ordered = prefer === 'access_token' ? [accessToken, apiKey] : [apiKey, accessToken]
   const tokens: string[] = []
   for (const token of ordered) {
@@ -253,11 +272,7 @@ async function queryBalanceByMethod(provider: NonNullable<ReturnType<typeof getP
 
   try {
     if (method === 'newapi_billing') {
-      const headers: Record<string, string> = {
-        'accept': 'application/json',
-        'authorization': `Bearer ${collectAuthTokens(provider.auth_json, 'api_key')[0]}`,
-      }
-      return await queryNewApiBilling(provider, headers, dispatcher, controller.signal)
+      return await queryNewApiBalance(provider, dispatcher, controller.signal)
     }
     return await querySub2ApiProfile(provider, dispatcher, controller.signal)
   } finally {
@@ -265,9 +280,147 @@ async function queryBalanceByMethod(provider: NonNullable<ReturnType<typeof getP
   }
 }
 
+interface NewApiUserBalance {
+  balanceUsd: number
+  usedUsd: number | null
+  status: number
+}
+
 /**
- * new-api 系余额查询：使用代理密钥（sk-，TokenAuth 中间件）访问 OpenAI 兼容 billing 接口。
- * 不能用 GET /api/user/self——那是控制台 PAT/会话令牌（UserAuth），sk- 密钥会被 401。
+ * new-api 系余额总入口：
+ * 1. 有 `access_token` 时优先/同时查控制台 `GET /api/user/self`（用户总余额）
+ * 2. 有 `api_key` 时继续查 OpenAI 兼容 billing（令牌额度）
+ * 两边都成功则合并展示；仅一边成功则只报该侧；都失败抛出更有指向性的错误。
+ */
+async function queryNewApiBalance(
+  provider: NonNullable<ReturnType<typeof getProvider>>,
+  dispatcher: ReturnType<typeof getDispatcher>,
+  signal: AbortSignal,
+): Promise<BalanceResult> {
+  const { apiKey, accessToken } = readProviderAuthTokens(provider.auth_json)
+  if (!apiKey && !accessToken) {
+    throw new UpstreamError('upstream_auth_error', 'provider auth_json has no api_key/access_token for balance query')
+  }
+
+  let billingResult: BalanceResult | null = null
+  let billingError: UpstreamError | null = null
+  let userResult: NewApiUserBalance | null = null
+  let userError: UpstreamError | null = null
+
+  if (apiKey) {
+    try {
+      const headers: Record<string, string> = {
+        'accept': 'application/json',
+        'authorization': `Bearer ${apiKey}`,
+      }
+      billingResult = await queryNewApiBilling(provider, headers, dispatcher, signal)
+    } catch (err) {
+      if (!(err instanceof UpstreamError)) throw err
+      billingError = err
+    }
+  }
+
+  if (accessToken) {
+    try {
+      userResult = await queryNewApiUserBalance(provider, accessToken, dispatcher, signal)
+    } catch (err) {
+      if (!(err instanceof UpstreamError)) throw err
+      userError = err
+    }
+  }
+
+  if (userResult) return mergeNewApiBalance(billingResult, userResult)
+  if (billingResult) return billingResult
+  throw (
+    billingError
+    ?? userError
+    ?? new UpstreamError('upstream_auth_error', 'newapi balance query has no usable credential result')
+  )
+}
+
+/**
+ * new-api 控制台用户总余额：`GET {root}/api/user/self`（UserAuth）。
+ * all-api-hub `fetchAccountQuota` 与 newapi-ai-check-in 同源；响应信封
+ * `{success, message, data}`，`data.quota`/`data.used_quota` 为内部额度单位。
+ * 该端点只接受控制台 PAT/会话 JWT，代理用 sk- 密钥会被 401。
+ */
+async function queryNewApiUserBalance(
+  provider: NonNullable<ReturnType<typeof getProvider>>,
+  accessToken: string,
+  dispatcher: ReturnType<typeof getDispatcher>,
+  signal: AbortSignal,
+): Promise<NewApiUserBalance> {
+  const url = `${billingRoot(provider.base_url)}/api/user/self`
+  assertSafeOutboundUrl(url)
+
+  const { status, body } = await billingGet(
+    url,
+    { 'accept': 'application/json', 'authorization': `Bearer ${accessToken}` },
+    dispatcher,
+    signal,
+  )
+
+  // 兼容信封与部分 fork 直接返回用户对象的形态
+  const success = body.success
+  if (success === false) {
+    const message = typeof body.message === 'string' && body.message.trim() ? body.message.trim() : 'newapi /api/user/self returned success=false'
+    throw new UpstreamError(status === 401 || status === 403 ? 'upstream_auth_error' : 'upstream_error', message, status)
+  }
+  const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data)
+    ? body.data as Record<string, unknown>
+    : body
+  const quota = toFiniteNumber(data.quota)
+  if (quota === null) {
+    throw new UpstreamError('upstream_error', 'newapi /api/user/self response has no numeric quota field', status)
+  }
+  const usedRaw = toFiniteNumber(data.used_quota)
+  return {
+    balanceUsd: roundMoney(quota / NEWAPI_QUOTA_PER_USD),
+    usedUsd: usedRaw === null ? null : roundMoney(usedRaw / NEWAPI_QUOTA_PER_USD),
+    status,
+  }
+}
+
+/**
+ * 合并 newapi 令牌额度与用户总余额。
+ * 有 access_token 查到账户余额时，`balance` 以**用户总余额**为准（本功能语义），
+ * balances 同时保留用户侧与令牌侧明细；令牌侧标签加「令牌」前缀避免与用户余额混淆。
+ */
+function mergeNewApiBalance(billing: BalanceResult | null, user: NewApiUserBalance): BalanceResult {
+  const balances: BalanceResult['balances'] = [
+    { label: '用户余额', balance: user.balanceUsd, currency: 'USD' },
+  ]
+  if (user.usedUsd !== null) balances.push({ label: '用户已用', balance: user.usedUsd, currency: 'USD' })
+
+  if (billing) {
+    for (const item of billing.balances) {
+      const label = item.label === '剩余' ? '令牌剩余'
+        : item.label === '已用' ? '令牌已用'
+          : item.label === '总额' ? '令牌总额'
+            : item.label
+      balances.push({ ...item, label })
+    }
+  }
+
+  return {
+    success: true,
+    balance: user.balanceUsd,
+    currency: 'USD',
+    balances,
+    // 已取到有限的用户总余额时，不因令牌 unlimited 而抹掉账户余额
+    unlimited: false,
+    available: user.balanceUsd > 0 || billing?.available === true,
+    status_code: user.status,
+    fetched_at: new Date().toISOString(),
+    error: null,
+    expires_at: billing?.expires_at ?? null,
+  }
+}
+
+/**
+ * new-api 系令牌额度查询：使用代理密钥（sk-，TokenAuth 中间件）访问 OpenAI 兼容 billing 接口。
+ * `GET /api/user/self` 是另一条路径（控制台 UserAuth + access_token），由
+ * `queryNewApiUserBalance` 处理用户总余额；sk- 密钥打 user/self 会被 401。
  * 公式与 new-api 自身探测上游渠道一致（controller/channel-billing.go）：
  *   剩余 = hard_limit_usd - total_usage/100（total_usage 单位为美分）。
  * /usage 不可用时降级为只报 subscription 的 hard_limit_usd（总额度）。
@@ -360,8 +513,9 @@ async function queryNewApiBilling(
  *
  * 主路径是数据面 `GET {base}/v1/usage`：与推理同源、代理用的 sk- 密钥即可访问，
  * 一次性给出 remaining / mode / 套餐限额（日周月）/ 已用成本 / 到期时间
- * （cc-switch 的用量脚本打的也是这个端点）。部分部署对该路由同样只放行 JWT，
- * 此时回退控制台 `GET {base}/api/v1/auth/me`（需要 access_token）。
+ * （cc-switch 的用量脚本打的也是这个端点）。配置了 access_token 时还会查
+ * 控制台 `GET {base}/api/v1/auth/me` 取**用户总余额**并合并展示；
+ * `/v1/usage` 被拒时回退控制台端点。
  */
 async function querySub2ApiProfile(
   provider: NonNullable<ReturnType<typeof getProvider>>,
@@ -370,16 +524,35 @@ async function querySub2ApiProfile(
 ): Promise<BalanceResult> {
   const tokens = collectAuthTokens(provider.auth_json, 'access_token')
   const apiKey = providerApiKey(provider)
+  const accessToken = readProviderAuthTokens(provider.auth_json).accessToken
   let usageAuthError: UpstreamError | null = null
+  let usageResult: BalanceResult | null = null
 
   if (apiKey) {
     try {
-      return await querySub2ApiUsage(provider, apiKey, dispatcher, signal)
+      usageResult = await querySub2ApiUsage(provider, apiKey, dispatcher, signal)
     } catch (err) {
       if (!(err instanceof UpstreamError) || err.code !== 'upstream_auth_error') throw err
       usageAuthError = err
     }
   }
+
+  // access_token ≠ 代理 API Key 时，额外取用户账户总余额（all-api-hub 同端点）
+  if (accessToken && accessToken !== apiKey) {
+    try {
+      const consoleResult = await querySub2ApiConsoleProfile(provider, [accessToken], dispatcher, signal)
+      if (usageResult) return mergeSub2ApiUserBalance(usageResult, consoleResult)
+      return consoleResult
+    } catch (err) {
+      if (!(err instanceof UpstreamError)) throw err
+      // 控制台侧失败不掩盖已成功的数据面结果；数据面也失败时才抛出
+      if (usageResult) return usageResult
+      if (err.code !== 'upstream_auth_error') throw err
+      usageAuthError = err
+    }
+  }
+
+  if (usageResult) return usageResult
 
   // 只有 API Key 时没必要用同一把 key 再打一次控制台端点（必然同样 401）
   if (tokens.some((token) => token !== apiKey)) {
@@ -391,6 +564,24 @@ async function querySub2ApiProfile(
     `${usageAuthError?.message ?? 'sub2api rejected the API key'}; the console access token (JWT) is required`,
     usageAuthError?.upstreamStatus ?? null,
   )
+}
+
+/** 把 sub2api 控制台用户总余额合并进数据面套餐/用量结果 */
+function mergeSub2ApiUserBalance(usage: BalanceResult, user: BalanceResult): BalanceResult {
+  const balances: BalanceResult['balances'] = [
+    { label: '用户余额', balance: user.balance ?? 0, currency: 'USD' },
+  ]
+  for (const item of usage.balances) {
+    balances.push(item)
+  }
+  return {
+    ...usage,
+    // 用户账户余额存在时优先作为主余额展示
+    balance: user.balance ?? usage.balance,
+    balances,
+    unlimited: usage.unlimited && user.balance === null,
+    available: (user.balance !== null && user.balance > 0) || usage.available === true,
+  }
 }
 
 /**
@@ -519,7 +710,7 @@ async function querySub2ApiConsoleProfile(
         success: true,
         balance,
         currency: 'USD',
-        balances: [{ label: 'balance', balance, currency: 'USD' }],
+        balances: [{ label: '用户余额', balance, currency: 'USD' }],
         unlimited: false,
         available: balance > 0,
         status_code: status,
