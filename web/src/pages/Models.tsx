@@ -5,6 +5,8 @@ import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedToasts } from '@/hooks/useTimedNotice'
+import { useConfirm } from '@/components/ConfirmDialog'
+import { NoticeStack } from '@/components/NoticeStack'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -22,6 +24,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import ModelAliases from './ModelAliases'
@@ -30,33 +33,23 @@ export default function Models() {
   const [tab, setTab] = useState<'aliases' | 'real'>('aliases')
 
   return (
-    <>
-      <div className="mb-4 flex items-center gap-1 border-b">
-        <button
-          onClick={() => setTab('aliases')}
-          className={`rounded-t-md px-3 py-1.5 text-sm font-medium ${
-            tab === 'aliases' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          模型映射
-        </button>
-        <button
-          onClick={() => setTab('real')}
-          className={`rounded-t-md px-3 py-1.5 text-sm font-medium ${
-            tab === 'real' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          真实模型
-        </button>
-      </div>
-      {tab === 'aliases' ? <ModelAliases /> : <RealModelsList />}
-    </>
+    <div className="page-shell space-y-4">
+      <Tabs value={tab} onValueChange={(value) => setTab(value as 'aliases' | 'real')}>
+        <TabsList>
+          <TabsTrigger value="aliases">模型映射</TabsTrigger>
+          <TabsTrigger value="real">真实模型</TabsTrigger>
+        </TabsList>
+        <TabsContent value="aliases" className="mt-4"><ModelAliases /></TabsContent>
+        <TabsContent value="real" className="mt-4"><RealModelsList /></TabsContent>
+      </Tabs>
+    </div>
   )
 }
 
 function RealModelsList() {
   const qc = useQueryClient()
   const chromeInset = useBottomInset()
+  const { confirm, confirmDialog } = useConfirm()
   const [protocol, setProtocol] = useState<'all' | 'openai' | 'anthropic'>('all')
   const [providerId, setProviderId] = useState('all')
   const [addOpen, setAddOpen] = useState(false)
@@ -265,18 +258,19 @@ function RealModelsList() {
                     checked={!!m.enabled}
                     disabled={!m.provider_enabled}
                     onCheckedChange={() => toggleMutation.mutate(m)}
+                    aria-label={`切换 ${m.model_id} 启用状态`}
                   />
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
+                    <Button variant="ghost" size="sm" aria-label={`测活 ${m.model_id}`} title="测活" onClick={() => { setTestTarget(m); setTestPrompt(''); setTestResult(null); setTestLatency(null) }}>
                       <Activity className="h-3.5 w-3.5" />
                     </Button>
                     <Button variant="ghost" size="sm" disabled={quickTestId === rowKey}
                       onClick={() => {
                         setQuickTestId(rowKey)
                         runTest.mutate(
-                          { model: m, prompt: '现在的美国总统是谁' },
+                          { model: m, prompt: '请用一句话介绍你自己' },
                           {
                             onSuccess: (data) => addToast(true, `${m.model_id}: ${data.reply}`, data.latency_ms),
                             onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),
@@ -290,7 +284,14 @@ function RealModelsList() {
                 </TableCell>
                 <TableCell className="pr-6">
                   <div className="flex justify-end">
-                    <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除模型「${m.model_id}」？`)) delMutation.mutate(m) }}>
+                    <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" aria-label={`删除 ${m.model_id}`} title="删除" onClick={async () => {
+                      if (await confirm({
+                        title: '删除模型？',
+                        description: `确定删除模型「${m.model_id}」？同名映射候选会一并修复。`,
+                        confirmLabel: '删除',
+                        destructive: true,
+                      })) delMutation.mutate(m)
+                    }}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -348,6 +349,7 @@ function RealModelsList() {
 
   return (
     <>
+    {confirmDialog}
     {/* Batch action bar */}
     {selectedModels.length > 0 && (
       <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
@@ -359,7 +361,14 @@ function RealModelsList() {
         <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedModels, enabled: 0 })}>
           禁用
         </Button>
-        <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedModels.length} 个模型？`)) batchDeleteMutation.mutate(selectedModels) }}>
+        <Button size="sm" variant="outline" onClick={async () => {
+          if (await confirm({
+            title: '删除选中模型？',
+            description: `确定删除选中的 ${selectedModels.length} 个模型？关联的映射候选会一并修复。`,
+            confirmLabel: '删除',
+            destructive: true,
+          })) batchDeleteMutation.mutate(selectedModels)
+        }}>
           <Trash2 className="h-3.5 w-3.5" /> 删除
         </Button>
         <Button size="sm" variant="ghost" aria-label="清除选择" onClick={() => { setSelected(new Set()); setSelectionMode(false) }}>
@@ -368,30 +377,19 @@ function RealModelsList() {
       </div>
     )}
 
-    {/* Toast stack */}
-    {toasts.items.length > 0 && (
-      <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">
-        {toasts.items.map((t) => (
-          <div
-            key={t.id}
-            className={`toast-banner flex w-fit max-w-[min(32rem,100%)] items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm ${t.leaving ? 'is-leaving' : ''} ${
-              t.ok
-                ? 'border-emerald-200 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-200'
-                : 'border-red-200 bg-red-50/95 text-red-800 dark:border-red-800 dark:bg-red-950/90 dark:text-red-200'
-            }`}
-            style={t.leaving ? { animationDuration: `${t.fadeMs}ms` } : undefined}
-          >
-            <span className="max-h-[40vh] min-w-0 overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{t.message}</span>
-            {t.latency_ms > 0 && <span className="shrink-0 text-xs opacity-70">{t.latency_ms}ms</span>}
-            <button onClick={() => toasts.leave(t.id)} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
-      </div>
-    )}
+    <NoticeStack
+      items={toasts.items.map((t) => ({
+        id: t.id,
+        ok: t.ok,
+        message: t.message,
+        leaving: t.leaving,
+        fadeMs: t.fadeMs,
+        meta: t.latency_ms > 0 ? `${t.latency_ms}ms` : undefined,
+      }))}
+      onDismiss={toasts.leave}
+    />
 
-    <div className="page-shell space-y-6">
+    <div className="space-y-6">
       <div className="page-heading">
         <div><div className="eyebrow mb-2 flex items-center gap-2"><Box className="h-3.5 w-3.5" /> 模型目录</div><h1 className="page-title">真实模型</h1><p className="page-description">按 Provider 管理真实模型，客户端仅可通过模型映射调用。</p></div>
         <div className="flex flex-wrap items-center gap-2">
@@ -429,33 +427,31 @@ function RealModelsList() {
         </div>
       </div>
 
-      <Card className="console-surface shadow-none">
-        <CardHeader className="flex-row items-center justify-between border-b border-foreground/10 px-5 py-4">
-          <CardTitle className="text-sm font-medium">
-            模型列表
-            {filtered.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">（{filtered.length} 个）</span>}
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Switch checked={onlyEnabled} onCheckedChange={setOnlyEnabled} />
-              <span>仅启用</span>
-            </div>
-            <Button size="sm" variant={selectionMode ? 'secondary' : 'ghost'} onClick={() => { if (selectionMode) setSelected(new Set()); setSelectionMode(!selectionMode) }}>
-              <ListChecks className="h-4 w-4" /> 多选
-            </Button>
-            {selectionMode && (
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Checkbox
-                  checked={allFilteredSelected ? true : selectedModels.length > 0 ? 'indeterminate' : false}
-                  onCheckedChange={selectAll}
-                  aria-label="全选当前筛选下的全部模型"
-                />
-                <span>全选筛选</span>
-              </label>
-            )}
+      <div className="console-toolbar console-surface">
+        <div className="text-sm font-medium">
+          模型列表
+          {filtered.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">（{filtered.length} 个）</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Switch checked={onlyEnabled} onCheckedChange={setOnlyEnabled} aria-label="仅显示已启用模型" />
+            <span>仅启用</span>
           </div>
-        </CardHeader>
-      </Card>
+          <Button size="sm" variant={selectionMode ? 'secondary' : 'ghost'} onClick={() => { if (selectionMode) setSelected(new Set()); setSelectionMode(!selectionMode) }}>
+            <ListChecks className="h-4 w-4" /> 多选
+          </Button>
+          {selectionMode && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox
+                checked={allFilteredSelected ? true : selectedModels.length > 0 ? 'indeterminate' : false}
+                onCheckedChange={selectAll}
+                aria-label="全选当前筛选下的全部模型"
+              />
+              <span>全选筛选</span>
+            </label>
+          )}
+        </div>
+      </div>
 
       <section aria-label="真实模型分组" className="space-y-4">
         {modelGroups.map((entry) => renderProviderGroup(entry))}

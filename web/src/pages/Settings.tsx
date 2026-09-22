@@ -137,32 +137,35 @@ export default function Settings() {
         <CardContent className="space-y-4">
           <div className="grid max-w-lg grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>监听地址</Label>
-              <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
+              <Label htmlFor="setting-host">监听地址</Label>
+              <Input id="setting-host" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <Label>端口</Label>
-              <Input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} />
+              <Label htmlFor="setting-port">端口</Label>
+              <Input id="setting-port" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <Label>全局超时 (ms)</Label>
+              <Label htmlFor="setting-timeout">全局超时 (ms)</Label>
               <Input
+                id="setting-timeout"
                 value={form.global_timeout_ms}
                 onChange={(e) => setForm({ ...form, global_timeout_ms: e.target.value })}
                 placeholder="0 不超时"
               />
             </div>
             <div className="space-y-1.5">
-              <Label>日志保留天数</Label>
+              <Label htmlFor="setting-retention">日志保留天数</Label>
               <Input
+                id="setting-retention"
                 value={form.log_retention_days}
                 onChange={(e) => setForm({ ...form, log_retention_days: e.target.value })}
                 placeholder="30（0 表示永不清理）"
               />
             </div>
             <div className="space-y-1.5">
-              <Label>健康探针间隔 (秒)</Label>
+              <Label htmlFor="setting-health">健康探针间隔 (秒)</Label>
               <Input
+                id="setting-health"
                 value={form.health_check_interval_seconds}
                 onChange={(e) => setForm({ ...form, health_check_interval_seconds: e.target.value })}
                 placeholder="0 表示关闭"

@@ -32,6 +32,7 @@ import { api } from '@/api/client'
 import type { Provider, ProviderGroup, ProviderModel, BalanceResult } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedNotice } from '@/hooks/useTimedNotice'
+import { useConfirm } from '@/components/ConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -93,6 +94,7 @@ const PROTOCOLS: Protocol[] = ['openai', 'anthropic']
 export default function Providers() {
   const qc = useQueryClient()
   const chromeInset = useBottomInset()
+  const { confirm, confirmDialog } = useConfirm()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [formMode, setFormMode] = useState<FormMode>('create')
   const [editing, setEditing] = useState<Provider | null>(null)
@@ -528,8 +530,8 @@ export default function Providers() {
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button" aria-label={`编辑 ${provider.name}`} title="编辑" onClick={() => openEdit(provider)}><MoreHorizontal className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除 ${provider.name}`} title="删除" onClick={() => { if (window.confirm(`确定删除 Provider「${provider.name}」？关联的模型也会一并删除。`)) deleteMutation.mutate(provider.id) }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="icon-button" aria-label={`编辑 ${provider.name}`} title="编辑" onClick={() => openEdit(provider)}><Pencil className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除 ${provider.name}`} title="删除" onClick={() => { void (async () => { if (await confirm({ title: '删除 Provider？', description: `确定删除 Provider「${provider.name}」？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) deleteMutation.mutate(provider.id) })() }}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div></TableCell>
             </TableRow>
           ))}
@@ -598,9 +600,9 @@ export default function Providers() {
                 className="h-8 w-8"
                 disabled={!rows.length || groupActionMutation.isPending}
                 aria-label={`清空分组 ${group.name} 内的 Provider`}
-                title="清空 Provider"
-                onClick={() => {
-                  if (window.confirm(`确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`)) {
+                title="清空 Provider（不删分组）"
+                onClick={async () => {
+                  if (await confirm({ title: '清空分组？', description: `确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`, confirmLabel: '清空', destructive: true })) {
                     groupActionMutation.mutate({ action: 'clear', group })
                   }
                 }}
@@ -623,8 +625,8 @@ export default function Providers() {
                 className="h-8 w-8 hover:text-destructive"
                 aria-label={`删除分组 ${group.name}`}
                 title="删除分组"
-                onClick={() => {
-                  if (window.confirm(`删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`)) {
+                onClick={async () => {
+                  if (await confirm({ title: '删除分组？', description: `删除分组「${group.name}」？组内 Provider 会移到未分组，不会删除。`, confirmLabel: '删除分组', destructive: true })) {
                     groupActionMutation.mutate({ action: 'delete', group })
                   }
                 }}
@@ -652,6 +654,7 @@ export default function Providers() {
 
   return (
     <>
+    {confirmDialog}
     {/* 非编辑弹窗时通知统一 portal 到 body：.page-shell 带 animate-rise-in 残留 transform，
         会让内部 fixed 相对页面而非视口定位；portal 后始终浮在视口顶部，滚动不跟随 */}
     {result && !dialogOpen && createPortal(
@@ -675,7 +678,7 @@ export default function Providers() {
       </Select>
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 1 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
-      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedProviderIds.size} 个 Provider？关联的模型也会一并删除。`)) batchDeleteMutation.mutate([...selectedProviderIds]) }} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
+      <Button size="sm" variant="outline" onClick={() => { void (async () => { if (await confirm({ title: '删除选中 Provider？', description: `确定删除选中的 ${selectedProviderIds.size} 个 Provider？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) batchDeleteMutation.mutate([...selectedProviderIds]) })() }} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
       <Button size="sm" variant="ghost" onClick={() => { setSelectedProviderIds(new Set()); setSelectionMode(new Set()) }} aria-label="清除 Provider 选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
     <div className="page-shell space-y-6">
@@ -712,10 +715,10 @@ export default function Providers() {
             aria-label="Provider 配置"
             tabIndex={0}
           >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>名称</Label><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="如：OpenAI 官方" /></div><div className="space-y-1.5"><Label>协议</Label><Select disabled={formMode === 'edit'} value={form.protocol} onValueChange={(value) => setForm({ ...form, protocol: value as Protocol, group_id: value === form.protocol ? form.group_id : '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div></div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label htmlFor="provider-name">名称</Label><Input id="provider-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="如：OpenAI 官方" /></div><div className="space-y-1.5"><Label>协议</Label><Select disabled={formMode === 'edit'} value={form.protocol} onValueChange={(value) => setForm({ ...form, protocol: value as Protocol, group_id: value === form.protocol ? form.group_id : '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div></div>
             <div className="space-y-1.5"><Label>分组（可选）</Label><div className="flex gap-2"><Select value={form.group_id || 'none'} onValueChange={(value) => setForm({ ...form, group_id: value === 'none' ? '' : value })}><SelectTrigger className="flex-1"><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{(providerGroups.data ?? []).filter((group) => group.protocol === form.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" size="icon" onClick={() => openGroupDialog(form.protocol, 'provider')} aria-label="新建 Provider 分组" title="新建 Provider 分组"><FolderPlus className="h-4 w-4" /></Button></div></div>
-            <div className="space-y-1.5"><Label>Base URL</Label><Input value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
-            <div className="space-y-1.5"><Label>API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." aria-label="API Key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
+            <div className="space-y-1.5"><Label htmlFor="provider-base-url">Base URL</Label><Input id="provider-base-url" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
+            <div className="space-y-1.5"><Label htmlFor="provider-api-key">API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." id="provider-api-key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
             {form.protocol === 'anthropic' && <div className="space-y-1.5"><Label>Anthropic Version（可选）</Label><Input value={form.anthropic_version} onChange={(event) => setForm({ ...form, anthropic_version: event.target.value })} placeholder="2023-06-01（留空使用默认值）" /></div>}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>代理 URL（可选）</Label><Input value={form.proxy_url} onChange={(event) => setForm({ ...form, proxy_url: event.target.value })} placeholder="http://127.0.0.1:7890" /></div><div className="space-y-1.5"><Label>超时毫秒</Label><Input value={form.timeout_ms} onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })} placeholder="120000（0 表示不超时）" /></div></div>
             <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户额度；可填 Access Token 查询用户总余额</p></div>
@@ -758,8 +761,8 @@ export default function Providers() {
                       className="h-7 text-xs"
                       disabled={cleanupImportedMutation.isPending}
                       title="删除该 Provider 全部拉取导入的模型（手动添加的模型不受影响）"
-                      onClick={() => {
-                        if (window.confirm(`确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`)) {
+                      onClick={async () => {
+                        if (await confirm({ title: '一键清理导入模型？', description: `确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`, confirmLabel: '清理', destructive: true })) {
                           cleanupImportedMutation.mutate({ providerId: fetchDialog!.providerId })
                         }
                       }}
@@ -791,8 +794,8 @@ export default function Providers() {
                           disabled={cancelImportMutation.isPending}
                           title="取消导入（删除该导入模型，可重新导入）"
                           aria-label={`取消导入 ${id}`}
-                          onClick={() => {
-                            if (window.confirm(`取消导入「${id}」？将从该 Provider 删除此模型。`)) {
+                          onClick={async () => {
+                            if (await confirm({ title: '取消导入？', description: `取消导入「${id}」？将从该 Provider 删除此模型。`, confirmLabel: '取消导入', destructive: true })) {
                               cancelImportMutation.mutate({ providerId: fetchDialog!.providerId, modelId: id })
                             }
                           }}

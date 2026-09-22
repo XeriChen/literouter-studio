@@ -73,7 +73,7 @@ export function Layout() {
           <button aria-label="打开导航" className="icon-button lg:hidden" onClick={() => setSidebarOpen(true)}><Menu className="h-5 w-5" /></button>
           <div className="flex min-w-0 items-center gap-2"><span className="eyebrow hidden sm:block">Studio /</span><span className="truncate text-sm font-bold">{current?.label ?? '总览'}</span></div>
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden font-mono text-[10px] text-muted-foreground md:block">LOCAL INSTANCE // 3000</span>
+            <span className="hidden font-mono text-[10px] text-muted-foreground md:block">LOCAL INSTANCE // {window.location.port || '—'}</span>
             <span className="status-dot" />
             <button aria-label="切换主题" onClick={cycleTheme} className="icon-button h-8 w-8 text-muted-foreground hover:text-foreground" title={theme === 'system' ? '跟随系统' : theme === 'dark' ? '深色模式' : '浅色模式'}>{theme === 'light' ? <Sun className="h-4 w-4" /> : theme === 'dark' ? <Moon className="h-4 w-4" /> : <SunMoon className="h-4 w-4" />}</button>
           </div>

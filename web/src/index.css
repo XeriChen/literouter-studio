@@ -189,8 +189,10 @@
   }
   .notice-success { background: hsl(152 62% 30%); }
   .notice-error { background: hsl(0 68% 46%); }
+  .notice-warning { background: hsl(28 84% 32%); }
   .dark .notice-success { background: hsl(154 53% 25%); }
   .dark .notice-error { background: hsl(0 60% 42%); }
+  .dark .notice-warning { background: hsl(28 72% 28%); }
   .notice a { @apply text-white underline underline-offset-4; }
   .notice .icon-button {
     @apply ml-auto h-6 w-6 shrink-0 rounded-md text-white/70 transition-colors hover:bg-white/15 hover:text-white;
@@ -198,6 +200,11 @@
   /* 浮动通知层：portal 到 body，fixed 锚定视口顶部（page-shell 的入场动画会产生 transform 包含块，不能放内部） */
   .notice-layer {
     @apply pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center;
+    flex-direction: row;
+  }
+  .notice-layer.flex-col {
+    flex-direction: column;
+    align-items: center;
   }
   .notice-layer .notice {
     /* 宽度随内容收缩，短文不占满；长文不超出浮层（浮层带 px-4），到上限后换行 */

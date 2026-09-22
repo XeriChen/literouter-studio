@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useConfirm } from '@/components/ConfirmDialog'
 
 const RESOURCE_LABELS: Record<string, string> = {
   auth: '认证',
@@ -98,6 +99,7 @@ function Pagination({ page, totalPages, onPage }: { page: number; totalPages: nu
 }
 
 function AccessLogsTab() {
+  const { confirm, confirmDialog } = useConfirm()
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [pageSize] = useState(50)
@@ -140,6 +142,7 @@ function AccessLogsTab() {
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <p className="text-sm text-muted-foreground">模型访问请求记录，共 {total} 条</p>
@@ -147,7 +150,7 @@ function AccessLogsTab() {
             <RotateCw className="h-3.5 w-3.5" />
           </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { if (window.confirm('确定清空所有代理访问日志？此操作不可撤销。')) clearMutation.mutate() }} disabled={clearMutation.isPending}>
+        <Button variant="outline" size="sm" onClick={() => { void (async () => { if (await confirm({ title: '清空访问日志？', description: '确定清空所有代理访问日志？此操作不可撤销。', confirmLabel: '清空', destructive: true })) clearMutation.mutate() })() }} disabled={clearMutation.isPending}>
           <Trash2 className="h-4 w-4" /> 清空
         </Button>
       </div>
@@ -244,6 +247,7 @@ function AccessLogsTab() {
 }
 
 function AuditLogsTab() {
+  const { confirm, confirmDialog } = useConfirm()
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [pageSize] = useState(50)
@@ -273,6 +277,7 @@ function AuditLogsTab() {
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <p className="text-sm text-muted-foreground">网站配置操作记录，共 {total} 条</p>
@@ -280,7 +285,7 @@ function AuditLogsTab() {
             <RotateCw className="h-3.5 w-3.5" />
           </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { if (window.confirm('确定清空所有配置操作日志？此操作不可撤销。')) clearMutation.mutate() }} disabled={clearMutation.isPending}>
+        <Button variant="outline" size="sm" onClick={() => { void (async () => { if (await confirm({ title: '清空配置日志？', description: '确定清空所有配置操作日志？此操作不可撤销。', confirmLabel: '清空', destructive: true })) clearMutation.mutate() })() }} disabled={clearMutation.isPending}>
           <Trash2 className="h-4 w-4" /> 清空
         </Button>
       </div>

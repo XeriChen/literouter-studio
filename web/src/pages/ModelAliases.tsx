@@ -5,6 +5,8 @@ import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, RoutingConfig, ThinkingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedToasts } from '@/hooks/useTimedNotice'
+import { useConfirm } from '@/components/ConfirmDialog'
+import { NoticeStack } from '@/components/NoticeStack'
 import { copyText } from '@/lib/clipboard'
 import { SearchableSelect } from '@/components/searchable-select'
 import { Badge } from '@/components/ui/badge'
@@ -315,7 +317,7 @@ function TargetPanel({
                   disabled={idx === 0}
                   onClick={() => moveStep(idx, 'up')}
                   title="提高优先级"
-                  aria-label="提高优先级"
+                  aria-label={`提高 ${target.model_id} 优先级`}
                 >
                   <ChevronUp className="h-3.5 w-3.5" />
                 </Button>
@@ -326,11 +328,11 @@ function TargetPanel({
                   disabled={idx === alias.targets.length - 1}
                   onClick={() => moveStep(idx, 'down')}
                   title="降低优先级"
-                  aria-label="降低优先级"
+                  aria-label={`降低 ${target.model_id} 优先级`}
                 >
                   <ChevronDown className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(target)} title="删除候选" aria-label="删除候选">
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(target)} title="删除候选" aria-label={`删除候选 ${target.model_id}`}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -382,7 +384,7 @@ function TargetPanel({
             size="sm"
             variant="outline"
             className="w-full shrink-0 sm:w-auto"
-            onClick={() => {
+            onClick={async () => {
               const built = buildRoutingConfig(routingForm)
               if (built.error || !built.config) { setRoutingError(built.error ?? '路由配置无效'); return }
               setRoutingError(null)
@@ -467,6 +469,7 @@ export default function ModelAliases() {
   const [mergeGroup, setMergeGroup] = useState('')
   const [mergeDeleteSources, setMergeDeleteSources] = useState(false)
   const toasts = useTimedToasts<{ ok: boolean; message: string }>()
+  const { confirm, confirmDialog } = useConfirm()
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -854,8 +857,8 @@ export default function ModelAliases() {
                 className="h-8 w-8"
                 aria-label={`清空分组 ${group.name} 内的映射`}
                 title="清空映射"
-                onClick={() => {
-                  if (window.confirm(`清空分组「${group.name}」内的 ${groupRows.length} 个映射？`)) {
+                onClick={async () => {
+                  if (await confirm({ title: '清空分组映射？', description: `清空分组「${group.name}」内的 ${groupRows.length} 个映射？`, confirmLabel: '清空', destructive: true })) {
                     groupActionMutation.mutate({ action: 'clear', group })
                   }
                 }}
@@ -878,8 +881,8 @@ export default function ModelAliases() {
                 className="h-8 w-8 text-muted-foreground hover:text-destructive"
                 aria-label={`删除分组 ${group.name}`}
                 title="删除分组"
-                onClick={() => {
-                  if (window.confirm(`删除分组「${group.name}」及其全部映射？`)) {
+                onClick={async () => {
+                  if (await confirm({ title: '删除分组？', description: `删除分组「${group.name}」及其全部映射？此操作不可恢复。`, confirmLabel: '删除分组', destructive: true })) {
                     groupActionMutation.mutate({ action: 'delete', group })
                   }
                 }}
@@ -916,13 +919,13 @@ export default function ModelAliases() {
                       onDragEnd={() => { setDragAliasKey(null); setDragOverGroupKey(null) }}
                     ><GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" /></div></TableCell>
                     <TableCell className="w-9"><Button variant="ghost" size="icon" className="h-7 w-7" aria-expanded={open} onClick={() => setExpandedAliases((previous) => { const next = new Set(previous); if (next.has(aliasKey)) next.delete(aliasKey); else next.add(aliasKey); return next })}>{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</Button></TableCell>
-                    <TableCell><div className="flex items-center gap-1.5"><span className="font-mono text-xs">{alias.alias_name}</span>{thinkingTag && <Badge variant="outline">{thinkingTag}</Badge>}<button className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" title="复制" aria-label={`复制 ${alias.alias_name}`} onClick={() => { void copyText(alias.alias_name).then((ok) => toast(ok, ok ? '已复制映射名' : '复制失败')) }}><Copy className="h-3.5 w-3.5" /></button><button className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" title="编辑" aria-label={`编辑 ${alias.alias_name}`} onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
+                    <TableCell><div className="flex items-center gap-1.5"><span className="font-mono text-xs">{alias.alias_name}</span>{thinkingTag && <Badge variant="outline">{thinkingTag}</Badge>}<button className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" title="复制" aria-label={`复制 ${alias.alias_name}`} onClick={async () => { void copyText(alias.alias_name).then((ok) => toast(ok, ok ? '已复制映射名' : '复制失败')) }}><Copy className="h-3.5 w-3.5" /></button><button className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" title="编辑" aria-label={`编辑 ${alias.alias_name}`} onClick={() => openEdit(alias)}><Pencil className="h-3.5 w-3.5" /></button></div></TableCell>
                     <TableCell><label className="flex items-center gap-1.5 text-xs"><Checkbox checked={alias.enabled === 1} onCheckedChange={(checked) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, enabled: checked ? 1 : 0 })} />{alias.enabled ? '已启用' : '已停用'}</label></TableCell>
                     <TableCell><div className="max-w-[250px] truncate text-xs">{alias.provider_name && alias.model_id ? `${alias.provider_name} / ${alias.model_id}` : '未设置目标'}</div>{!activeAvailable && <Badge variant="destructive" className="mt-1">不可调用</Badge>}</TableCell>
                     <TableCell><Badge variant="secondary">{alias.targets.length} 个</Badge></TableCell>
-                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { if (window.confirm(`确定删除映射「${alias.alias_name}」？`)) deleteAliasMutation.mutate(alias) }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
+                    <TableCell className="pr-5"><div className="flex justify-end gap-1"><button disabled={quickTestId !== null || !activeAvailable || alias.enabled !== 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40" title="快速测活" aria-label={`快速测活 ${alias.alias_name}`} onClick={() => { if (!alias.provider_id || !alias.model_id) return; setQuickTestId(aliasKey); api<{ reply: string; latency_ms: number }>('/api/models/test', { method: 'POST', body: JSON.stringify({ provider_id: alias.provider_id, model_id: alias.model_id, thinking: parseThinkingConfig(alias.thinking_json) ?? undefined }) }).then((data) => toast(true, `${alias.alias_name}: ${data.reply}`)).catch((error) => toast(false, error instanceof Error ? error.message : '测活失败')).finally(() => setQuickTestId(null)) }}>{quickTestId === aliasKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}</button><Button variant="ghost" size="sm" title="思考等级" aria-label={`设置 ${alias.alias_name} 思考等级`} onClick={() => openThinking(alias)}><Brain className="h-3.5 w-3.5" /></Button><Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => { void (async () => { if (await confirm({ title: '删除映射？', description: `确定删除映射「${alias.alias_name}」？`, confirmLabel: '删除', destructive: true })) deleteAliasMutation.mutate(alias) })() }}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>
                   </TableRow>
-                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { if (window.confirm(`删除候选「${target.model_id}」？`)) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} onWeight={(target, weight) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/weight', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id, weight } })} onRoutingConfig={(config) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, routing_config: config })} /></TableCell></TableRow>}
+                  {open && <TableRow key={`${aliasKey}/targets`}><TableCell colSpan={cols} className="bg-muted/10 px-5 py-3"><TargetPanel alias={alias} providers={providers.data ?? []} models={models.data ?? []} onAdd={(provider_id, model_id) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id, model_id } })} onActivate={(target) => targetMutation.mutate({ method: 'PATCH', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } })} onDelete={(target) => { void (async () => { if (await confirm({ title: '删除候选？', description: `删除候选「${target.model_id}」？`, confirmLabel: '删除', destructive: true })) targetMutation.mutate({ method: 'DELETE', path: '/api/alias-targets', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id } }) })() }} onReorder={(targets) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/reorder', body: { protocol: alias.protocol, alias_name: alias.alias_name, targets: targets.map((target) => ({ provider_id: target.provider_id, model_id: target.model_id })) } })} onWeight={(target, weight) => targetMutation.mutate({ method: 'POST', path: '/api/alias-targets/weight', body: { protocol: alias.protocol, alias_name: alias.alias_name, provider_id: target.provider_id, model_id: target.model_id, weight } })} onRoutingConfig={(config) => patchAliasMutation.mutate({ protocol: alias.protocol, alias_name: alias.alias_name, routing_config: config })} /></TableCell></TableRow>}
                 </Fragment>
               })}
               {!groupRows.length && <TableRow><TableCell colSpan={cols} className="h-20 text-center text-xs text-muted-foreground">暂无映射；可以先保留空分组。</TableCell></TableRow>}
@@ -939,7 +942,8 @@ export default function ModelAliases() {
   const addGroups = (groups.data ?? []).filter((group) => group.protocol === addForm.protocol)
 
   return <>
-    {toasts.items.length > 0 && <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">{toasts.items.map((item) => <div key={item.id} className={`toast-banner w-fit max-w-[min(32rem,100%)] rounded-lg border px-4 py-2 text-sm shadow-lg ${item.leaving ? 'is-leaving' : ''} ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`} style={item.leaving ? { animationDuration: `${item.fadeMs}ms` } : undefined}><span className="block max-h-[40vh] overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{item.message}</span></div>)}</div>}
+    {confirmDialog}
+    <NoticeStack items={toasts.items.map((item) => ({ id: item.id, ok: item.ok, message: item.message, leaving: item.leaving, fadeMs: item.fadeMs }))} onDismiss={toasts.leave} />
     {selectedAliases.length > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
@@ -966,10 +970,10 @@ export default function ModelAliases() {
       </Button>
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 1 })} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Power className="h-3.5 w-3.5" /> 启用</Button>
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 0 })} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
-      <Button size="sm" variant="outline" onClick={() => { if (window.confirm(`确定删除选中的 ${selectedAliases.length} 个映射？`)) batchDeleteMutation.mutate(selectedAliases) }} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
-      <Button size="sm" variant="ghost" onClick={() => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
+      <Button size="sm" variant="outline" onClick={async () => { void (async () => { if (await confirm({ title: '删除选中映射？', description: `确定删除选中的 ${selectedAliases.length} 个映射？`, confirmLabel: '删除', destructive: true })) batchDeleteMutation.mutate(selectedAliases) })() }} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
+      <Button size="sm" variant="ghost" onClick={async () => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>}
-    <div className="page-shell space-y-6">
+    <div className="space-y-6">
       <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="映射名" value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
           size="icon"
           variant="outline"
@@ -987,7 +991,7 @@ export default function ModelAliases() {
               parts.push(`${invalidAliases.length} 个无效映射（${preview}${suffix}）`)
             }
             if (invalidTargets.length) parts.push(`${invalidTargets.length} 个不可用候选（Provider 或模型已禁用）`)
-            if (window.confirm(`确定清理 ${parts.join(' 与 ')}？清理后无法自行恢复。`)) {
+            if (await confirm({ title: '清理无效配置？', description: `确定清理 ${parts.join(' 与 ')}？清理后无法自行恢复。`, confirmLabel: '清理', destructive: true })) {
               cleanupInvalidMutation.mutate({ aliases: invalidAliases, targets: invalidTargets })
             }
           }}
@@ -1281,9 +1285,9 @@ export default function ModelAliases() {
           <Button
             variant={mergeDeleteSources ? 'destructive' : 'default'}
             disabled={!selectedProtocol || !mergeSources.length || (mergeMode === 'new' ? !mergeName.trim() : !mergeTarget) || mergeMutation.isPending}
-            onClick={() => {
+            onClick={async () => {
               if (!selectedProtocol) return
-              if (mergeDeleteSources && !window.confirm(`合并后将删除 ${mergeSources.length} 个原有映射，确定继续？`)) return
+              if (mergeDeleteSources && !(await confirm({ title: '合并后删除源映射？', description: `合并后将删除 ${mergeSources.length} 个原有映射，确定继续？`, confirmLabel: '合并并删除', destructive: true }))) return
               mergeMutation.mutate({
                 protocol: selectedProtocol,
                 sources: mergeSources,

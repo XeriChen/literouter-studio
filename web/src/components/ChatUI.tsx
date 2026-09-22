@@ -189,7 +189,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
         {!hasMessages && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             选择模型映射后开始对话
@@ -229,11 +229,12 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
               }
             }}
             placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
+            aria-label="消息输入"
             rows={2}
             className="resize-none"
           />
           {hasMessages && !streaming && (
-            <Button variant="outline" size="icon" onClick={clearChat} title="清除对话">
+            <Button variant="outline" size="icon" onClick={clearChat} title="清除对话" aria-label="清除对话">
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
