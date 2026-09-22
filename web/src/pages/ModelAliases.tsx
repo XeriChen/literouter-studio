@@ -4,6 +4,7 @@ import { Activity, Brain, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Era
 import { api } from '@/api/client'
 import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, RoutingConfig, ThinkingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
+import { useTimedToasts } from '@/hooks/useTimedNotice'
 import { copyText } from '@/lib/clipboard'
 import { SearchableSelect } from '@/components/searchable-select'
 import { Badge } from '@/components/ui/badge'
@@ -465,7 +466,7 @@ export default function ModelAliases() {
   const [mergeTarget, setMergeTarget] = useState('')
   const [mergeGroup, setMergeGroup] = useState('')
   const [mergeDeleteSources, setMergeDeleteSources] = useState(false)
-  const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string }>>([])
+  const toasts = useTimedToasts<{ ok: boolean; message: string }>()
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -478,13 +479,10 @@ export default function ModelAliases() {
   const [importSearch, setImportSearch] = useState('')
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
   const [importNewName, setImportNewName] = useState('')
-  const toastId = useRef(0)
   const chromeInset = useBottomInset()
 
   function toast(ok: boolean, message: string) {
-    const id = ++toastId.current
-    setToasts((previous) => [...previous, { id, ok, message }])
-    setTimeout(() => setToasts((previous) => previous.filter((item) => item.id !== id)), 4000)
+    toasts.push({ ok, message })
   }
 
   const aliases = useQuery({ queryKey: ['aliases'], queryFn: () => api<ModelAlias[]>('/api/aliases') })
@@ -941,7 +939,7 @@ export default function ModelAliases() {
   const addGroups = (groups.data ?? []).filter((group) => group.protocol === addForm.protocol)
 
   return <>
-    {toasts.length > 0 && <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">{toasts.map((item) => <div key={item.id} className={`w-fit max-w-[min(32rem,100%)] rounded-lg border px-4 py-2 text-sm shadow-lg ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}><span className="block max-h-[40vh] overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{item.message}</span></div>)}</div>}
+    {toasts.items.length > 0 && <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">{toasts.items.map((item) => <div key={item.id} className={`toast-banner w-fit max-w-[min(32rem,100%)] rounded-lg border px-4 py-2 text-sm shadow-lg ${item.leaving ? 'is-leaving' : ''} ${item.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`} style={item.leaving ? { animationDuration: `${item.fadeMs}ms` } : undefined}><span className="block max-h-[40vh] overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{item.message}</span></div>)}</div>}
     {selectedAliases.length > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
       <div className="hidden h-4 w-px bg-border sm:block" />

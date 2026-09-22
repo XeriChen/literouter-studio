@@ -210,11 +210,23 @@
     overflow-y: auto;
     overscroll-behavior: contain;
   }
+  /* 前 5 秒不透明，后 5 秒淡出。放在 pointer-events-auto 之后，淡出时不再接点击。 */
+  .notice.is-leaving,
+  .notice-layer .notice.is-leaving,
+  .toast-banner.is-leaving {
+    animation: notice-fade 5s linear forwards;
+    pointer-events: none;
+  }
 }
 
 @keyframes notice-drop {
   from { opacity: 0; transform: translateY(-8px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes notice-fade {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-8px); }
 }
 
 @media (min-width: 640px) {

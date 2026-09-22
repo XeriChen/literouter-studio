@@ -4,6 +4,7 @@ import { Activity, Box, ChevronDown, ChevronRight, ListChecks, Loader2, Plus, Se
 import { api } from '@/api/client'
 import type { Provider, ProviderModel } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
+import { useTimedToasts } from '@/hooks/useTimedNotice'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -65,8 +66,7 @@ function RealModelsList() {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testLatency, setTestLatency] = useState<number | null>(null)
   const [quickTestId, setQuickTestId] = useState<string | null>(null)
-  const [toasts, setToasts] = useState<Array<{ id: number; ok: boolean; message: string; latency_ms: number }>>([])
-  const toastIdRef = useRef(0)
+  const toasts = useTimedToasts<{ ok: boolean; message: string; latency_ms: number }>()
   const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState(false)
@@ -76,9 +76,7 @@ function RealModelsList() {
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   function addToast(ok: boolean, message: string, latency_ms: number) {
-    const id = ++toastIdRef.current
-    setToasts((prev) => [...prev, { id, ok, message, latency_ms }])
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
+    toasts.push({ ok, message, latency_ms })
   }
 
   const models = useQuery({
@@ -371,20 +369,21 @@ function RealModelsList() {
     )}
 
     {/* Toast stack */}
-    {toasts.length > 0 && (
+    {toasts.items.length > 0 && (
       <div className="fixed inset-x-0 top-4 z-[100] flex flex-col items-center gap-2 px-4">
-        {toasts.map((t) => (
+        {toasts.items.map((t) => (
           <div
             key={t.id}
-            className={`flex w-fit max-w-[min(32rem,100%)] items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm transition-all ${
+            className={`toast-banner flex w-fit max-w-[min(32rem,100%)] items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg backdrop-blur-sm ${t.leaving ? 'is-leaving' : ''} ${
               t.ok
                 ? 'border-emerald-200 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-200'
                 : 'border-red-200 bg-red-50/95 text-red-800 dark:border-red-800 dark:bg-red-950/90 dark:text-red-200'
             }`}
+            style={t.leaving ? { animationDuration: `${t.fadeMs}ms` } : undefined}
           >
             <span className="max-h-[40vh] min-w-0 overflow-y-auto whitespace-pre-line overscroll-contain [overflow-wrap:anywhere]">{t.message}</span>
             {t.latency_ms > 0 && <span className="shrink-0 text-xs opacity-70">{t.latency_ms}ms</span>}
-            <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
+            <button onClick={() => toasts.leave(t.id)} className="shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>

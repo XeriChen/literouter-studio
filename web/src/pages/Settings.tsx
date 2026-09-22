@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTimedNotice } from '@/hooks/useTimedNotice'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, Download, KeyRound, Loader2, Upload, X } from 'lucide-react'
@@ -20,7 +21,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 export default function Settings() {
-  const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null)
+  const [notice, setNoticeState] = useState<{ id: number; message: string; ok: boolean } | null>(null)
+  const noticeSeq = useRef(0)
+  function setNotice(next: { message: string; ok: boolean } | null) {
+    setNoticeState(next ? { id: ++noticeSeq.current, message: next.message, ok: next.ok } : null)
+  }
+  const { leaving: noticeLeaving, fadeMs: noticeFadeMs, requestLeave: dismissNotice } = useTimedNotice(
+    notice ? String(notice.id) : null,
+    () => setNoticeState(null),
+  )
   const [exportWarnOpen, setExportWarnOpen] = useState(false)
   const [importWarnOpen, setImportWarnOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
@@ -105,12 +114,12 @@ export default function Settings() {
         相对页面定位；portal 后横幅始终浮在视口顶部，滚动页面时保持可见 */}
     {notice && createPortal(
       <div className="notice-layer px-4">
-        <div className={`notice border border-white/[0.14] px-3.5 py-2.5 ${notice.ok ? 'notice-success' : 'notice-error'}`}>
+        <div className={`notice border border-white/[0.14] px-3.5 py-2.5 ${notice.ok ? 'notice-success' : 'notice-error'}${noticeLeaving ? ' is-leaving' : ''}`} style={noticeLeaving ? { animationDuration: `${noticeFadeMs}ms` } : undefined}>
           {notice.ok
             ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             : <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />}
           <span>{notice.message}</span>
-          <button aria-label="关闭提示" onClick={() => setNotice(null)} className="icon-button h-6 w-6">
+          <button aria-label="关闭提示" onClick={dismissNotice} className="icon-button h-6 w-6">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>

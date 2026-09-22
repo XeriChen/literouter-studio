@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -31,6 +31,7 @@ import {
 import { api } from '@/api/client'
 import type { Provider, ProviderGroup, ProviderModel, BalanceResult } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
+import { useTimedNotice } from '@/hooks/useTimedNotice'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -97,7 +98,15 @@ export default function Providers() {
   const [editing, setEditing] = useState<Provider | null>(null)
   const [form, setForm] = useState<ProviderForm>({ ...EMPTY_FORM })
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
-  const [result, setResult] = useState<{ message: string; ok: boolean } | null>(null)
+  const [result, setResultState] = useState<{ id: number; message: string; ok: boolean } | null>(null)
+  const resultSeq = useRef(0)
+  function setResult(next: { message: string; ok: boolean } | null) {
+    setResultState(next ? { id: ++resultSeq.current, message: next.message, ok: next.ok } : null)
+  }
+  const { leaving: resultLeaving, fadeMs: resultFadeMs, requestLeave: dismissResult } = useTimedNotice(
+    result ? String(result.id) : null,
+    () => setResultState(null),
+  )
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
@@ -631,12 +640,12 @@ export default function Providers() {
 
   const hasAnyProvider = (providers.data?.length ?? 0) > 0
   const resultNotice = result ? (
-    <div role="status" className={`notice border border-white/[0.14] px-3.5 py-2.5 ${result.ok ? 'notice-success' : 'notice-error'}`}>
+    <div role="status" className={`notice border border-white/[0.14] px-3.5 py-2.5 ${result.ok ? 'notice-success' : 'notice-error'}${resultLeaving ? ' is-leaving' : ''}`} style={resultLeaving ? { animationDuration: `${resultFadeMs}ms` } : undefined}>
       {result.ok
         ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
         : <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />}
       <span>{result.message}</span>
-      <button type="button" aria-label="关闭提示" onClick={() => setResult(null)} className="icon-button h-6 w-6"><X className="h-3.5 w-3.5" /></button>
+      <button type="button" aria-label="关闭提示" onClick={dismissResult} className="icon-button h-6 w-6"><X className="h-3.5 w-3.5" /></button>
     </div>
   ) : null
 
