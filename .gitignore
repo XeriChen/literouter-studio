@@ -21,6 +21,7 @@ gui-test-screenshots/
 test-results/
 playwright-report/
 /.playwright-mcp/
+/.playwright-cli/
 /mobile-*.png
 .pi/
 .opencode/
