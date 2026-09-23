@@ -11,6 +11,7 @@
 #   scripts/deploy.sh            # 拉取 origin/main 并部署
 #   BRANCH=other scripts/deploy.sh
 #   SERVICE=other.service scripts/deploy.sh
+#   SMOKE_TIMEOUT=90 scripts/deploy.sh
 #
 set -euo pipefail
 
@@ -21,6 +22,8 @@ SERVICE="${SERVICE:-literouter.service}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/}"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/data/deploy-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-10}"
+SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-60}"
+SMOKE_INTERVAL="${SMOKE_INTERVAL:-2}"
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31m[失败] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -149,9 +152,19 @@ systemctl --user is-active --quiet "$SERVICE" || {
 }
 
 # --- 6. 冒烟检查 -------------------------------------------------------------
-log "冒烟检查 $HEALTH_URL"
-CODE="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$HEALTH_URL" || true)"
-echo "    HTTP $CODE"
+# 轮询等待而不是一次性探测：冷启动在高负载下可能十几秒才 listen（曾出现 curl -m 10
+# 恰好落在 listening 之前，报出 HTTP 000 的假失败并给出误导性的回滚提示）。
+log "冒烟检查 $HEALTH_URL（最多等待 ${SMOKE_TIMEOUT}s）"
+CODE=''
+TRIES=0
+START=$SECONDS
+while :; do
+  TRIES=$((TRIES + 1))
+  CODE="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$HEALTH_URL" || true)"
+  if [[ $CODE == 200 || $((SECONDS - START)) -ge $SMOKE_TIMEOUT ]]; then break; fi
+  sleep "$SMOKE_INTERVAL"
+done
+echo "    HTTP $CODE（第 ${TRIES} 次探测，等待 $((SECONDS - START))s）"
 if [ "$CODE" != "200" ]; then
   printf '\n\033[1;31m冒烟失败（HTTP %s）。代码与数据都已落盘，需要人工判断。\033[0m\n' "$CODE" >&2
   printf '回滚到部署前版本（数据不会自动回滚，必要时先恢复备份）：\n' >&2
