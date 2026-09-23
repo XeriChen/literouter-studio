@@ -168,11 +168,12 @@ export interface BackupData {
     protocol: 'openai' | 'anthropic'
     group_id: string | null
     base_url: string
-    auth: Record<string, string>
+    auth: Record<string, string | { header_name: string; format: string }>
     custom_headers: Record<string, string>
     proxy_url: string | null
     timeout_ms: number | null
     model_filter: string | null
+    upstream_type: 'newapi' | 'sub2api' | null
     enabled: number
     created_at: string
     updated_at: string
@@ -200,11 +201,13 @@ export interface BackupData {
     group_id: string | null
     enabled: number
     thinking: ThinkingConfig | null
+    routing_config: RoutingConfig | null
     targets: Array<{
       provider_id: string
       model_id: string
       priority: number
       active: number
+      weight: number
     }>
   }>
 }

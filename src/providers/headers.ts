@@ -13,8 +13,6 @@ export const HOP_BY_HOP_HEADERS = new Set([
 
 export const DROPPED_HEADERS = new Set(['host', 'content-length', 'authorization', 'x-api-key', 'api-key'])
 
-export const RESERVED_HEADERS = new Set(['authorization', 'x-api-key', 'api-key', 'accept-encoding'])
-
 function parseStringRecord(value: string): Record<string, string> {
   try {
     const parsed = JSON.parse(value) as unknown
@@ -75,8 +73,9 @@ export interface ProviderAuthRow {
 
 /**
  * 解密 Provider 认证数据：优先使用加密列，回退明文列（迁移期兼容）。
- * 解密失败直接抛错，由调用方决定回退策略——读配置可以退回明文，导出备份必须失败，
- * 否则会产出「看起来完整、实际丢了所有密钥」的备份。
+ * 解密失败直接抛错——代理转发/构建上游头/备份导出均不得静默回退空凭据，
+ * 否则会用空认证出站，或产出「看起来完整、实际丢了所有密钥」的备份。
+ * 读取路径统一走本助手，由调用方决定错误语义（代理 502 / 备份 backup_export_failed）。
  */
 export function decryptAuthJson(row: ProviderAuthRow): string {
   if (!row.auth_json_encrypted) return row.auth_json
@@ -85,18 +84,7 @@ export function decryptAuthJson(row: ProviderAuthRow): string {
   } catch (err) {
     const label = row.name ? `${row.name} (${row.id})` : row.id
     const context = label ? ` for ${label}` : ''
-    throw new Error(`failed to decrypt auth_json${context}: ${err instanceof Error ? err.message : String(err)}`)
-  }
-}
-
-/** 解密 Provider 认证数据，解密失败时记录日志并回退到明文列（迁移期兼容） */
-export function decryptAuthJsonSafe(row: ProviderAuthRow): string {
-  try {
-    return decryptAuthJson(row)
-  } catch (err) {
-    const context = row.id ? ` (provider_id: ${row.id})` : ''
-    console.error(`[providers] Failed to decrypt auth_json${context}:`, err instanceof Error ? err.message : String(err))
-    return row.auth_json
+    throw new Error(`failed to decrypt auth_json${context}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
   }
 }
 
@@ -107,9 +95,11 @@ export function buildProviderHeaders(provider: ProviderRow, customOverride?: Rec
   const headers: Record<string, string> = {}
 
   // 优先使用自定义认证头配置
-  if (auth.custom_auth?.header_name && auth.custom_auth?.format && auth.api_key) {
+  const apiKey = auth.api_key
+  if (auth.custom_auth?.header_name && auth.custom_auth?.format && apiKey) {
     const headerName = auth.custom_auth.header_name.trim()
-    const value = auth.custom_auth.format.replace(/\{key\}/g, auth.api_key)
+    // 回调替换：避免 String.replace 把 api_key 中的 $& / $` / $' / $n 当成特殊替换模式
+    const value = auth.custom_auth.format.replace(/\{key\}/g, () => apiKey)
     headers[headerName] = value
     // Anthropic 协议仍需 anthropic-version
     if (provider.protocol === 'anthropic') {

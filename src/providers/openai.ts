@@ -3,12 +3,13 @@ export interface ChatRequestInput {
   prompt: string
 }
 
-/** 构造 OpenAI 非流式 Chat 请求体（测活用） */
+/** 构造 OpenAI 非流式 Chat 请求体（测活用）；max_tokens 压到上限，控制探测成本 */
 export function buildOpenAIChatBody(input: ChatRequestInput): Record<string, unknown> {
   return {
     model: input.model,
     messages: [{ role: 'user', content: input.prompt }],
     stream: false,
+    max_tokens: 32,
   }
 }
 

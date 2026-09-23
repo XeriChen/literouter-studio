@@ -6,7 +6,9 @@ export function useTimedNotice(token: string | null, onGone: () => void) {
   const [queue] = useState(() => createNoticeQueue<{ token: string }>(window))
   const items = useSyncExternalStore(queue.subscribe, queue.getItems, queue.getItems)
   const onGoneRef = useRef(onGone)
-  onGoneRef.current = onGone
+  useEffect(() => {
+    onGoneRef.current = onGone
+  }, [onGone])
   const armed = useRef<string | null>(null)
 
   useEffect(() => {

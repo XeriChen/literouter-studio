@@ -1,7 +1,7 @@
 import { getSetting, setSetting } from '../db'
 
 export const DEFAULT_SETTINGS = {
-  host: '0.0.0.0',
+  host: '127.0.0.1',
   port: '3000',
   global_timeout_ms: '120000',
   log_retention_days: '30',

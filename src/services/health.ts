@@ -121,7 +121,7 @@ export function reportSuccess(
   }
 }
 
-/** 候选请求失败：连续失败达阈值（max_attempts，默认 1）才进入冷却并清除亲和。 */
+/** 候选请求失败：连续失败达阈值（固定为 1）才进入冷却并清除亲和。 */
 export function reportFailure(
   aliasKey: string,
   targetId: number,

@@ -183,3 +183,100 @@ test('backup export fails loudly instead of exporting empty auth when a credenti
   assert.equal(body.ok, false)
   assert.equal(body.error.code, 'backup_export_failed')
 })
+
+test('backup import rejects invalid routing_config shape', () => {
+  const created = providers.createProvider({
+    name: 'rc-provider',
+    protocol: 'openai',
+    group_id: null,
+    base_url: 'https://example.test',
+    auth_json: '{}',
+    custom_headers_json: '{}',
+    proxy_url: null,
+    timeout_ms: null,
+    model_filter: null,
+  })
+  models.addModel({ provider_id: created.id, model_id: 'rc-model', display_name: null })
+
+  const base = {
+    token: 'any-token',
+    settings: {},
+    providers: [{
+      id: created.id,
+      name: 'rc-provider',
+      protocol: 'openai' as const,
+      group_id: null,
+      base_url: 'https://example.test',
+      auth: {} as Record<string, string | { header_name: string; format: string }>,
+      custom_headers: {},
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: null,
+      enabled: 1 as const,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }],
+    provider_groups: [],
+    models: [{ provider_id: created.id, model_id: 'rc-model', display_name: null, enabled: 1 as const, source: 'manual' as const }],
+    groups: [],
+    aliases: [{
+      protocol: 'openai' as const,
+      alias_name: 'rc-alias',
+      group_id: null,
+      enabled: 1 as const,
+      thinking: null,
+      routing_config: { mode: 'round-robin' } as never,
+      targets: [{ provider_id: created.id, model_id: 'rc-model', priority: 0, active: 1, weight: 100 }],
+    }],
+  }
+
+  assert.throws(() => backup.importBackup(base), /invalid alias routing_config/)
+
+  const badRange = {
+    ...base,
+    aliases: [{
+      ...base.aliases[0]!,
+      routing_config: { mode: 'failover', max_attempts: 99 } as never,
+    }],
+  }
+  assert.throws(() => backup.importBackup(badRange), /invalid alias routing_config max_attempts/)
+
+  const badWeight = {
+    ...base,
+    aliases: [{
+      ...base.aliases[0]!,
+      routing_config: { mode: 'weighted' },
+      targets: [{ provider_id: created.id, model_id: 'rc-model', priority: 0, active: 1, weight: 20000 }],
+    }],
+  }
+  assert.throws(() => backup.importBackup(badWeight), /invalid alias target weight/)
+})
+
+test('backup import API maps invalid routing_config to invalid_backup', async () => {
+  const res = await api.request('http://localhost/backup', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      token: 'any-token',
+      settings: {},
+      providers: [],
+      provider_groups: [],
+      models: [],
+      groups: [],
+      aliases: [{
+        protocol: 'openai',
+        alias_name: 'api-rc-alias',
+        group_id: null,
+        enabled: 1,
+        thinking: null,
+        routing_config: { mode: 'nope' },
+        targets: [],
+      }],
+    }),
+  })
+  assert.equal(res.status, 400)
+  const body = await res.json() as { ok: boolean; error: { code: string } }
+  assert.equal(body.ok, false)
+  assert.equal(body.error.code, 'invalid_backup')
+})

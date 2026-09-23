@@ -1,6 +1,7 @@
 @import "tailwindcss/theme.css";
 @import "tailwindcss/preflight.css";
 @import "tailwindcss/utilities.css";
+@import "tw-animate-css";
 
 /* DM Mono */
 @font-face {
@@ -161,7 +162,7 @@
   .eyebrow { @apply font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground; }
   .page-shell { @apply mx-auto w-full max-w-[1480px] animate-rise-in; }
   .page-heading { @apply flex flex-wrap items-end justify-between gap-5 border-b border-foreground/10 pb-7; }
-  .page-title { @apply text-3xl font-extrabold tracking-[-0.06em]; }
+  .page-title { @apply text-2xl font-extrabold tracking-[-0.06em] sm:text-3xl; }
   .page-description { @apply mt-2 max-w-2xl text-sm leading-6 text-muted-foreground; }
   .console-surface { @apply overflow-hidden border border-foreground/10 bg-card/70; }
   .console-toolbar { @apply flex flex-wrap items-center justify-between gap-3 border-b border-foreground/10 px-4 py-3; }
@@ -237,18 +238,18 @@
 }
 
 @media (min-width: 640px) {
-  .page-title { @apply text-4xl; }
   .console-toolbar { @apply px-5; }
 }
 
 @media (max-height: 520px) {
   .page-heading { @apply pb-3 pt-0 gap-2; }
-  .page-title { @apply text-2xl; }
+  .page-title { @apply text-xl; }
   .page-description { @apply mt-0.5 text-xs; }
   .console-toolbar { @apply py-2 px-3; }
 }
 
-@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+/* 结束态必须是 transform:none，否则 fill-mode both 会残留 transform 并成为 fixed 包含块 */
+@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes signal-sweep { 0%, 35% { transform: translateX(0); opacity: 0; } 55% { opacity: 1; } 85%, 100% { transform: translateX(420%); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }

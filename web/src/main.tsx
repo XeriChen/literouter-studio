@@ -2,7 +2,11 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
+import { applyTheme, loadStoredTheme } from './lib/theme'
 import './index.css'
+
+// 启动时先应用主题，避免登录页等首屏闪烁
+applyTheme(loadStoredTheme())
 
 const queryClient = new QueryClient({
   defaultOptions: {

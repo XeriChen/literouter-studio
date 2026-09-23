@@ -138,3 +138,89 @@ test('single mode still wraps upstream 5xx as 502', async () => {
   const body = await res.json() as { error: { code: string } }
   assert.equal(body.error.code, 'upstream_error')
 })
+
+test('Anthropic Models API shape returns mapping names as model objects', async () => {
+  upstreamPort = await startUpstream((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ data: [] }))
+  })
+  await setupSingleAlias('http://127.0.0.1:' + upstreamPort, 'anthropic-model-alias')
+  // 建一条 anthropic 映射
+  const provider = providers.createProvider({
+    name: 'anthropic-upstream',
+    protocol: 'anthropic',
+    group_id: null,
+    base_url: 'http://127.0.0.1:' + upstreamPort,
+    auth_json: JSON.stringify({ api_key: 'sk-ant' }),
+    custom_headers_json: '{}',
+    proxy_url: null,
+    timeout_ms: null,
+    model_filter: null,
+  })
+  models.addModel({ provider_id: provider.id, model_id: 'claude-x', display_name: null })
+  models.addAlias({ protocol: 'anthropic', alias_name: 'claude-alias', provider_id: provider.id, model_id: 'claude-x' })
+
+  const app = appWithProxy()
+  const res = await app.request('http://localhost/anthropic/v1/models', {
+    headers: { authorization: `Bearer ${getAdminToken()}` },
+  })
+  assert.equal(res.status, 200)
+  const body = await res.json() as {
+    data: Array<{ id: string; type: string; display_name: string }>
+    has_more: boolean
+    first_id: string | null
+    last_id: string | null
+  }
+  assert.ok(Array.isArray(body.data))
+  const names = body.data.map((m) => m.id)
+  assert.ok(names.includes('claude-alias'))
+  for (const item of body.data) {
+    assert.equal(item.type, 'model')
+    assert.equal(item.display_name, item.id)
+    assert.equal((item as { object?: string }).object, undefined)
+    assert.equal((item as { owned_by?: string }).owned_by, undefined)
+  }
+  assert.equal(body.has_more, false)
+  assert.equal(body.first_id, names[0] ?? null)
+  assert.equal(body.last_id, names.length ? names[names.length - 1] : null)
+})
+
+test('OpenAI Models list keeps object list shape', async () => {
+  upstreamPort = await startUpstream((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ data: [] }))
+  })
+  await setupSingleAlias('http://127.0.0.1:' + upstreamPort, 'openai-model-alias')
+
+  const app = appWithProxy()
+  const res = await app.request('http://localhost/openai/v1/models', {
+    headers: { authorization: `Bearer ${getAdminToken()}` },
+  })
+  assert.equal(res.status, 200)
+  const body = await res.json() as { object: string; data: Array<{ id: string; object: string; owned_by: string }> }
+  assert.equal(body.object, 'list')
+  const entry = body.data.find((m) => m.id === 'openai-model-alias')
+  assert.ok(entry)
+  assert.equal(entry.object, 'model')
+  assert.equal(entry.owned_by, 'gateway')
+})
+
+test('proxy fails closed when provider credentials cannot be decrypted', async () => {
+  upstreamPort = await startUpstream((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ choices: [] }))
+  })
+  await setupSingleAlias('http://127.0.0.1:' + upstreamPort, 'undecrypt-alias')
+  // 破坏密文，模拟 ENCRYPTION_KEY 丢失
+  db.prepare("UPDATE providers SET auth_json = '', auth_json_encrypted = 'ab:cd:ef' WHERE name = 'passthrough-upstream'").run()
+
+  const app = appWithProxy()
+  const res = await app.request('http://localhost/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'undecrypt-alias', messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(res.status, 502)
+  const body = await res.json() as { error: { code: string } }
+  assert.equal(body.error.code, 'upstream_error')
+})

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import type { LucideIcon } from 'lucide-react'
 import { Activity, Box, ChevronRight, Home, LayoutDashboard, Menu, MessageSquare, Moon, ScrollText, Settings, Sun, SunMoon, X } from 'lucide-react'
+import { applyTheme, loadStoredTheme, type Theme } from '@/lib/theme'
 
 const NAV_ITEMS: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }> = [
   { to: '/', label: '总览', icon: Home, end: true },
@@ -12,22 +13,9 @@ const NAV_ITEMS: Array<{ to: string; label: string; icon: LucideIcon; end?: bool
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
-type Theme = 'light' | 'dark' | 'system'
-
-function getSystemTheme(): 'light' | 'dark' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-function applyTheme(theme: Theme) {
-  document.documentElement.classList.toggle('dark', (theme === 'system' ? getSystemTheme() : theme) === 'dark')
-}
-
 export function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem('theme')
-    return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
-  })
+  const [theme, setTheme] = useState<Theme>(() => loadStoredTheme())
   const location = useLocation()
   const current = useMemo(
     () => NAV_ITEMS.find((item) => item.end ? location.pathname === item.to : location.pathname.startsWith(item.to)) ?? NAV_ITEMS[0],
@@ -78,7 +66,7 @@ export function Layout() {
             <button aria-label="切换主题" onClick={cycleTheme} className="icon-button h-8 w-8 text-muted-foreground hover:text-foreground" title={theme === 'system' ? '跟随系统' : theme === 'dark' ? '深色模式' : '浅色模式'}>{theme === 'light' ? <Sun className="h-4 w-4" /> : theme === 'dark' ? <Moon className="h-4 w-4" /> : <SunMoon className="h-4 w-4" />}</button>
           </div>
         </header>
-        <main className="flex-1 px-3 py-4 sm:px-6 sm:py-7 lg:px-10 lg:py-10"><Outlet /></main>
+        <main className="flex min-h-0 flex-1 flex-col px-3 py-4 sm:px-6 sm:py-7 lg:px-10 lg:py-10"><Outlet /></main>
       </div>
     </div>
   )

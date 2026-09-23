@@ -219,6 +219,16 @@ proxyRoutes.all('*', async (c) => {
     // GET /v1/models：只返回已建立映射的模型名（未建映射不可见、不可调用）
     if (c.req.method === 'GET' && upstreamPath === '/v1/models') {
       const aliases = listAliasNames(protocol)
+      if (protocol === 'anthropic') {
+        // Anthropic Models API 形状：{data:[{id,type,display_name}], has_more, first_id, last_id}
+        const data = aliases.map((name) => ({ id: name, type: 'model', display_name: name }))
+        return c.json({
+          data,
+          has_more: false,
+          first_id: aliases[0] ?? null,
+          last_id: aliases.length > 0 ? aliases[aliases.length - 1]! : null,
+        })
+      }
       const data = aliases.map((name) => ({ id: name, object: 'model', owned_by: 'gateway' }))
       return c.json({ object: 'list', data })
     }

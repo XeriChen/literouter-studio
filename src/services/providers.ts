@@ -5,7 +5,7 @@ import { isTimeoutError, sendToUpstream, getDispatcher, drainBody, invalidateAll
 import { MAX_UPSTREAM_MODELS_BODY_BYTES } from '../proxy/body'
 import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
-import { buildProviderHeaders, decryptAuthJsonSafe } from '../providers/headers'
+import { buildProviderHeaders, decryptAuthJson } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
 import { importModels as importModelsForProvider, repairAliasTargetsInTransaction } from './models'
 import type { ProviderGroupRow, ProviderProtocol, ProviderRow } from '../types'
@@ -85,7 +85,7 @@ export function listProviders(): ProviderRow[] {
   const rows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
   return rows.map((row) => ({
     ...row,
-    auth_json: decryptAuthJsonSafe(row),
+    auth_json: decryptAuthJson(row),
   }))
 }
 
@@ -94,7 +94,7 @@ export function getProvider(id: string): ProviderRow | undefined {
   if (!row) return undefined
   return {
     ...row,
-    auth_json: decryptAuthJsonSafe(row),
+    auth_json: decryptAuthJson(row),
   }
 }
 

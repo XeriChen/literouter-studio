@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { CheckCircle2, CircleAlert, X } from 'lucide-react'
 
 export interface NoticeItem {
@@ -20,7 +21,8 @@ export function NoticeStack({
   role?: 'status' | 'alert'
 }) {
   if (!items.length) return null
-  return (
+  // portal 到 body：.page-shell 的 animate-rise-in 会让内部 fixed 相对页面定位
+  return createPortal(
     <div className="notice-layer flex-col gap-2 px-4" role={role}>
       {items.map((item) => (
         <div
@@ -40,6 +42,7 @@ export function NoticeStack({
           </button>
         </div>
       ))}
-    </div>
+    </div>,
+    document.body,
   )
 }

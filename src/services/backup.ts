@@ -5,6 +5,7 @@ import { invalidateAllDispatchers } from '../proxy'
 import { getAdminToken, setAdminToken } from './auth'
 import { validateThinkingValue } from './models'
 import { getSettings, updateSettings, type SettingsKey } from './settings'
+import type { RoutingConfig } from './routing'
 import type { ProviderRow, ThinkingConfig } from '../types'
 
 export interface BackupTarget {
@@ -57,9 +58,31 @@ export interface BackupData {
     group_id: string | null
     enabled: number
     thinking: ThinkingConfig | null
-    routing_config: any
+    routing_config: RoutingConfig | null
     targets: BackupTarget[]
   }>
+}
+
+
+/** 与 aliases 写入路径 routingConfigSchema 同构：非法形状必须拒绝，不能静默钳制 */
+function assertValidRoutingConfig(config: unknown, aliasLabel: string): asserts config is RoutingConfig | null {
+  if (config === null || config === undefined) return
+  if (typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`invalid alias routing_config: ${aliasLabel}`)
+  }
+  const c = config as Record<string, unknown>
+  if (c.mode !== 'single' && c.mode !== 'weighted' && c.mode !== 'failover') {
+    throw new Error(`invalid alias routing_config mode: ${aliasLabel}`)
+  }
+  const checkRange = (value: unknown, min: number, max: number, field: string): void => {
+    if (value === undefined || value === null) return
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`invalid alias routing_config ${field}: ${aliasLabel}`)
+    }
+  }
+  checkRange(c.affinity_seconds, 0, 3600, 'affinity_seconds')
+  checkRange(c.max_attempts, 1, 10, 'max_attempts')
+  checkRange(c.cooldown_seconds, 0, 3600, 'cooldown_seconds')
 }
 
 function validateBackupGraph(data: BackupData): void {
@@ -116,6 +139,7 @@ function validateBackupGraph(data: BackupData): void {
         throw new Error(`invalid alias thinking config: ${alias.protocol}/${alias.alias_name}`)
       }
     }
+    assertValidRoutingConfig(alias.routing_config, `${alias.protocol}/${alias.alias_name}`)
     const targets = new Set<string>()
     let activeCount = 0
     for (const target of alias.targets) {
@@ -127,6 +151,8 @@ function validateBackupGraph(data: BackupData): void {
       if (provider.protocol !== alias.protocol) throw new Error(`alias protocol mismatch: ${alias.protocol}/${alias.alias_name}`)
       if (!models.get(target.provider_id)?.has(target.model_id)) throw new Error(`alias target model not found: ${target.provider_id}/${target.model_id}`)
       if (!Number.isInteger(target.priority) || target.priority < 0) throw new Error(`invalid alias target priority: ${alias.alias_name}`)
+      const weight = target.weight ?? 100
+      if (!Number.isInteger(weight) || weight < 0 || weight > 10000) throw new Error(`invalid alias target weight: ${alias.alias_name}`)
       if (target.active === 1) activeCount++
     }
     if (activeCount > 1) throw new Error(`multiple active alias targets: ${alias.protocol}/${alias.alias_name}`)
@@ -192,7 +218,7 @@ export function exportBackup(): BackupData {
     aliases: aliases.map(({ thinking_json, routing_config_json, ...alias }) => ({
       ...alias,
       thinking: thinking_json ? JSON.parse(thinking_json) as ThinkingConfig : null,
-      routing_config: routing_config_json ? JSON.parse(routing_config_json) : null,
+      routing_config: routing_config_json ? JSON.parse(routing_config_json) as RoutingConfig : null,
       targets: byAlias.get(`${alias.protocol}/${alias.alias_name}`) ?? [],
     })),
   }

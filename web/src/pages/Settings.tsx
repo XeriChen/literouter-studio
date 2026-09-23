@@ -34,8 +34,20 @@ export default function Settings() {
   const [importWarnOpen, setImportWarnOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
-  const [form, setForm] = useState({ host: '0.0.0.0', port: '3000', global_timeout_ms: '120000', log_retention_days: '30', health_check_interval_seconds: '0' })
+  const [form, setForm] = useState({ host: '127.0.0.1', port: '3000', global_timeout_ms: '120000', log_retention_days: '30', health_check_interval_seconds: '0' })
   const fileRef = useRef<HTMLInputElement>(null)
+
+  function validateSettingsForm(): string | null {
+    const port = Number(form.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return '端口需为 1-65535 的整数'
+    const timeout = Number(form.global_timeout_ms)
+    if (!Number.isInteger(timeout) || timeout < 0 || timeout > 86_400_000) return '全局超时需为 0-86400000 的整数（0 表示不超时）'
+    const retention = Number(form.log_retention_days)
+    if (!Number.isInteger(retention) || retention < 0 || retention > 3650) return '日志保留天数需为 0-3650 的整数（0 表示永不清理）'
+    const health = Number(form.health_check_interval_seconds)
+    if (!Number.isInteger(health) || health < 0 || health > 86400) return '健康探针间隔需为 0-86400 的整数（0 表示关闭）'
+    return null
+  }
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
@@ -51,7 +63,7 @@ export default function Settings() {
     if (settingsQuery.data && !initialized.current) {
       initialized.current = true
       setForm({
-        host: settingsQuery.data.host ?? '0.0.0.0',
+        host: settingsQuery.data.host ?? '127.0.0.1',
         port: settingsQuery.data.port ?? '3000',
         global_timeout_ms: settingsQuery.data.global_timeout_ms ?? '120000',
         log_retention_days: settingsQuery.data.log_retention_days ?? '30',
@@ -69,12 +81,16 @@ export default function Settings() {
   const resetToken = useMutation({
     mutationFn: () => api<{ token: string }>('/api/token/reset', { method: 'POST' }),
     onSuccess: (data) => {
-      // 旧 Token 已失效，立即清除本地 token 并用新 token 重新登录
-      clearToken()
+      // 旧 Token 已失效，成功后再换新 token
       setToken(data.token)
       setResetConfirmOpen(false)
       setNotice({ message: 'Token 已重置并自动续期，旧 Token 立即失效', ok: true })
       meQuery.refetch()
+    },
+    onError: (err) => {
+      // 失败时不清除本地 token，用户仍可继续操作
+      setResetConfirmOpen(false)
+      setNotice({ message: `重置 Token 失败：${err instanceof Error ? err.message : String(err)}`, ok: false })
     },
   })
 
@@ -107,6 +123,9 @@ export default function Settings() {
     }
     reader.readAsText(importFile)
   }
+
+  const settingsError = validateSettingsForm()
+  const canSaveSettings = !settingsError && !saveSettings.isPending && !settingsQuery.isLoading
 
   return (
     <>
@@ -173,7 +192,12 @@ export default function Settings() {
               <p className="text-xs text-muted-foreground">对冷却中的候选发最小请求探活，成功则提前恢复</p>
             </div>
           </div>
-          <Button size="sm" onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending || settingsQuery.isLoading}>
+          {settingsError && <p className="text-sm text-destructive">{settingsError}</p>}
+          <Button
+            size="sm"
+            onClick={() => saveSettings.mutate()}
+            disabled={!canSaveSettings}
+          >
             {saveSettings.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             保存设置
           </Button>
@@ -247,7 +271,7 @@ export default function Settings() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导出前警告</DialogTitle>
-            <DialogDescription className="text-amber-600 dark:text-amber-400">
+            <DialogDescription className="text-[hsl(var(--warning))]">
               备份文件包含所有 Provider 的明文 API Key 和网关 Token，请妥善保管，切勿泄露到不信任环境。
             </DialogDescription>
           </DialogHeader>
@@ -274,7 +298,7 @@ export default function Settings() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导入警告</DialogTitle>
-            <DialogDescription className="text-amber-600 dark:text-amber-400">
+            <DialogDescription className="text-[hsl(var(--warning))]">
               导入将全量覆盖现有 Providers、模型、设置与 Token。成功后需使用备份中的 Token 重新登录。
             </DialogDescription>
           </DialogHeader>

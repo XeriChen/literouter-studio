@@ -1,14 +1,27 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Brain, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Eraser, FolderInput, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, TextCursorInput, Trash2, X } from 'lucide-react'
+import { Activity, Brain, Check, ChevronDown, ChevronRight, Copy, Eraser, FolderInput, GitMerge, GripVertical, ListChecks, Loader2, Pencil, Plus, Power, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
-import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, RoutingConfig, ThinkingConfig } from '@/api/types'
+import type { AliasGroup, AliasTarget, ModelAlias, Provider, ProviderModel, RoutingConfig } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedToasts } from '@/hooks/useTimedNotice'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { NoticeStack } from '@/components/NoticeStack'
 import { copyText } from '@/lib/clipboard'
-import { SearchableSelect } from '@/components/searchable-select'
+import { TargetPanel } from '@/components/aliases/TargetPanel'
+import {
+  AliasCreateDialog,
+  AliasEditDialog,
+  AliasThinkingDialog,
+  buildThinking,
+  emptyThinkingForm,
+  parseThinkingConfig,
+  parseThinkingForm,
+  thinkingBadge,
+  type Protocol,
+  type ThinkingFormState,
+} from '@/components/aliases/AliasFormDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,432 +32,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
-type Protocol = 'openai' | 'anthropic'
-
 function keyOf(a: Pick<ModelAlias, 'protocol' | 'alias_name'>): string {
   return `${a.protocol}/${a.alias_name}`
-}
-
-const openaiEffortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
-
-interface ThinkingFormState {
-  mode: 'off' | 'override' | 'default'
-  anthropicType: 'enabled' | 'disabled'
-  budget: string
-  effort: string
-}
-
-const emptyThinkingForm: ThinkingFormState = { mode: 'off', anthropicType: 'enabled', budget: '4096', effort: 'medium' }
-
-function parseThinkingForm(thinkingJson: string | null): ThinkingFormState {
-  if (!thinkingJson) return emptyThinkingForm
-  try {
-    const config = JSON.parse(thinkingJson) as ThinkingConfig
-    if (config.mode !== 'override' && config.mode !== 'default') return emptyThinkingForm
-    const value = config.value
-    if (value !== null && typeof value === 'object') {
-      const thinking = value as { type?: string; budget_tokens?: unknown }
-      return { mode: config.mode, anthropicType: thinking.type === 'disabled' ? 'disabled' : 'enabled', budget: String(thinking.budget_tokens ?? 4096), effort: 'medium' }
-    }
-    return { mode: config.mode, anthropicType: 'enabled', budget: '4096', effort: typeof value === 'string' && value ? value : 'medium' }
-  } catch {
-    return emptyThinkingForm
-  }
-}
-
-function buildThinking(form: ThinkingFormState, protocol: Protocol): { config: ThinkingConfig | null; error?: string } {
-  if (form.mode === 'off') return { config: null }
-  let value: unknown
-  if (protocol === 'anthropic') {
-    if (form.anthropicType === 'disabled') {
-      value = { type: 'disabled' }
-    } else {
-      const budget = Number(form.budget)
-      if (!Number.isInteger(budget) || budget < 1024) return { config: null, error: 'budget_tokens 需为 ≥1024 的整数' }
-      value = { type: 'enabled', budget_tokens: budget }
-    }
-  } else {
-    const effort = form.effort.trim()
-    if (!effort) return { config: null, error: 'reasoning_effort 不能为空' }
-    if (!(openaiEffortLevels as readonly string[]).includes(effort)) return { config: null, error: `reasoning_effort 仅支持 ${openaiEffortLevels.join(' / ')}` }
-    value = effort
-  }
-  return { config: { mode: form.mode, value } }
-}
-
-function thinkingBadge(thinkingJson: string | null): string | null {
-  try {
-    if (!thinkingJson) return null
-    const config = JSON.parse(thinkingJson) as ThinkingConfig
-    return config.mode === 'override' ? '思考·覆盖' : config.mode === 'default' ? '思考·默认' : null
-  } catch {
-    return null
-  }
-}
-
-// ---------- 路由配置 ----------
-
-type RoutingMode = RoutingConfig['mode']
-
-interface RoutingFormState {
-  mode: RoutingMode
-  max_attempts: string
-  cooldown_seconds: string
-  affinity_seconds: string
-}
-
-const emptyRoutingForm: RoutingFormState = { mode: 'single', max_attempts: '', cooldown_seconds: '', affinity_seconds: '' }
-
-function parseRoutingForm(json: string | null): RoutingFormState {
-  if (!json) return emptyRoutingForm
-  try {
-    const config = JSON.parse(json) as RoutingConfig
-    if (config.mode !== 'weighted' && config.mode !== 'failover') return emptyRoutingForm
-    return {
-      mode: config.mode,
-      max_attempts: config.max_attempts != null ? String(config.max_attempts) : '',
-      cooldown_seconds: config.cooldown_seconds != null ? String(config.cooldown_seconds) : '',
-      affinity_seconds: config.affinity_seconds != null ? String(config.affinity_seconds) : '',
-    }
-  } catch {
-    return emptyRoutingForm
-  }
-}
-
-function buildRoutingConfig(form: RoutingFormState): { config: RoutingConfig | null; error?: string } {
-  if (form.mode === 'single') return { config: { mode: 'single' } }
-  const optionalInt = (raw: string, label: string, min: number, max: number): { value?: number; error?: string } => {
-    const trimmed = raw.trim()
-    if (!trimmed) return {}
-    const parsed = Number(trimmed)
-    if (!Number.isInteger(parsed) || parsed < min || parsed > max) return { error: `${label} 需为 ${min}-${max} 的整数` }
-    return { value: parsed }
-  }
-  const attempts = optionalInt(form.max_attempts, '最大尝试数', 1, 10)
-  if (attempts.error) return { config: null, error: attempts.error }
-  const cooldown = optionalInt(form.cooldown_seconds, '冷却时长', 0, 3600)
-  if (cooldown.error) return { config: null, error: cooldown.error }
-  const affinity = optionalInt(form.affinity_seconds, '亲和时长', 0, 3600)
-  if (affinity.error) return { config: null, error: affinity.error }
-  return {
-    config: {
-      mode: form.mode,
-      ...(attempts.value !== undefined ? { max_attempts: attempts.value } : {}),
-      ...(cooldown.value !== undefined ? { cooldown_seconds: cooldown.value } : {}),
-      ...(affinity.value !== undefined ? { affinity_seconds: affinity.value } : {}),
-    },
-  }
-}
-
-const routingModeLabels: Record<RoutingMode, string> = {
-  single: 'single · 仅当前目标',
-  weighted: 'weighted · 加权随机',
-  failover: 'failover · 优先级故障转移',
-}
-
-function parseThinkingConfig(thinkingJson: string | null): ThinkingConfig | null {
-  if (!thinkingJson) return null
-  try {
-    const config = JSON.parse(thinkingJson) as ThinkingConfig
-    return config.mode === 'override' || config.mode === 'default' ? config : null
-  } catch {
-    return null
-  }
-}
-
-function ThinkingFields({ protocol, form, onChange }: { protocol: Protocol; form: ThinkingFormState; onChange: (form: ThinkingFormState) => void }) {
-  return (
-    <div className="space-y-3 rounded-md border p-3">
-      <div className="space-y-1.5">
-        <Label>思考等级</Label>
-        <Select value={form.mode} onValueChange={(value) => onChange({ ...form, mode: value as ThinkingFormState['mode'] })}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="off">不修改（原样透传）</SelectItem>
-            <SelectItem value="override">强制覆盖（忽略客户端携带值）</SelectItem>
-            <SelectItem value="default">仅默认值（客户端未携带时注入）</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      {form.mode !== 'off' && protocol === 'anthropic' && (
-        <div className="flex items-end gap-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs">thinking.type</Label>
-            <Select value={form.anthropicType} onValueChange={(value) => onChange({ ...form, anthropicType: value as 'enabled' | 'disabled' })}>
-              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="enabled">enabled</SelectItem>
-                <SelectItem value="disabled">disabled</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {form.anthropicType === 'enabled' && (
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <Label className="text-xs">budget_tokens（≥1024）</Label>
-              <Input value={form.budget} inputMode="numeric" onChange={(event) => onChange({ ...form, budget: event.target.value })} />
-            </div>
-          )}
-        </div>
-      )}
-      {form.mode !== 'off' && protocol === 'openai' && (
-        <div className="space-y-1.5">
-          <Label className="text-xs">reasoning_effort</Label>
-          <Select value={form.effort || 'medium'} onValueChange={(value) => onChange({ ...form, effort: value })}>
-            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {openaiEffortLevels.map((level) => <SelectItem key={level} value={level}>{level}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function TargetPanel({
-  alias,
-  providers,
-  models,
-  onAdd,
-  onActivate,
-  onDelete,
-  onReorder,
-  onWeight,
-  onRoutingConfig,
-}: {
-  alias: ModelAlias
-  providers: Provider[]
-  models: ProviderModel[]
-  onAdd: (provider_id: string, model_id: string) => void
-  onActivate: (target: AliasTarget) => void
-  onDelete: (target: AliasTarget) => void
-  onReorder: (targets: AliasTarget[]) => void
-  onWeight: (target: AliasTarget, weight: number) => void
-  onRoutingConfig: (config: RoutingConfig) => void
-}) {
-  const [providerId, setProviderId] = useState('')
-  const [modelId, setModelId] = useState('')
-  const [dragKey, setDragKey] = useState<string | null>(null)
-  const [routingForm, setRoutingForm] = useState<RoutingFormState>(() => parseRoutingForm(alias.routing_config_json))
-  const [routingError, setRoutingError] = useState<string | null>(null)
-  const availableProviders = providers.filter((p) => p.protocol === alias.protocol && p.enabled === 1)
-  // 未选 Provider 时搜索同协议全部已启用 Provider 的真实模型（选中后回填上方 Provider）；
-  // 已选 Provider 时仅展示该 Provider 的模型
-  const searchableModels = models.filter((m) => m.protocol === alias.protocol && m.provider_enabled === 1 && m.enabled === 1 && (!providerId || m.provider_id === providerId))
-  const existing = new Set(alias.targets.map((t) => `${t.provider_id}/${t.model_id}`))
-
-  useEffect(() => setRoutingForm(parseRoutingForm(alias.routing_config_json)), [alias.routing_config_json])
-
-  function move(target: AliasTarget, over: AliasTarget) {
-    if (target.id === over.id) return
-    const next = [...alias.targets]
-    const from = next.findIndex((item) => item.id === target.id)
-    const to = next.findIndex((item) => item.id === over.id)
-    if (from < 0 || to < 0) return
-    const [item] = next.splice(from, 1)
-    if (!item) return
-    next.splice(to, 0, item)
-    onReorder(next)
-  }
-
-  function moveStep(index: number, direction: 'up' | 'down') {
-    const toIndex = direction === 'up' ? index - 1 : index + 1
-    if (toIndex < 0 || toIndex >= alias.targets.length) return
-    const next = [...alias.targets]
-    const [item] = next.splice(index, 1)
-    if (!item) return
-    next.splice(toIndex, 0, item)
-    onReorder(next)
-  }
-
-  return (
-    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold">
-          {routingForm.mode === 'weighted' ? '候选目标（按权重随机分配）' : routingForm.mode === 'failover' ? '候选目标（按优先级故障转移）' : '候选目标（仅使用当前激活目标）'}
-        </div>
-        <Badge variant="secondary">{alias.targets.length} 个</Badge>
-      </div>
-      <div className="space-y-1.5">
-        {alias.targets.map((target, idx) => {
-          const available = target.provider_enabled === 1 && target.target_enabled === 1
-          return (
-            <div
-              key={target.id}
-              draggable
-              onDragStart={() => setDragKey(String(target.id))}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={() => {
-                if (dragKey) move(alias.targets.find((item) => String(item.id) === dragKey) ?? target, target)
-                setDragKey(null)
-              }}
-              className={`flex items-center gap-2 rounded border bg-card px-2.5 py-2 text-xs ${target.active ? 'border-primary/50' : ''}`}
-            >
-              <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground" />
-              <span className="w-5 text-center font-mono text-muted-foreground">{target.priority + 1}</span>
-              <input
-                type="radio"
-                checked={!!target.active}
-                disabled={!available}
-                onChange={() => onActivate(target)}
-                title="设为当前目标"
-              />
-              <span className="min-w-0 flex-1 truncate font-mono">{target.provider_name} / {target.model_id}</span>
-              <label className="flex shrink-0 items-center gap-1 text-muted-foreground" title="分配权重（weighted 模式生效；0 = 仅末位备选）">
-                权重
-                <Input
-                  type="number"
-                  min={0}
-                  max={10000}
-                  value={target.weight}
-                  className="h-7 w-16 text-xs"
-                  onChange={(e) => {
-                    const value = Number(e.target.value)
-                    if (value === 0 || (Number.isInteger(value) && value > 0 && value <= 10000)) {
-                      onWeight(target, value)
-                    }
-                  }}
-                />
-              </label>
-              {target.active && <Badge variant="outline">当前</Badge>}
-              {!target.provider_enabled && <Badge variant="destructive">Provider 已禁用</Badge>}
-              {target.provider_enabled === 1 && !target.target_enabled && <Badge variant="destructive">模型已禁用</Badge>}
-              <div className="flex shrink-0 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={idx === 0}
-                  onClick={() => moveStep(idx, 'up')}
-                  title="提高优先级"
-                  aria-label={`提高 ${target.model_id} 优先级`}
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={idx === alias.targets.length - 1}
-                  onClick={() => moveStep(idx, 'down')}
-                  title="降低优先级"
-                  aria-label={`降低 ${target.model_id} 优先级`}
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(target)} title="删除候选" aria-label={`删除候选 ${target.model_id}`}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </div>
-          )
-        })}
-        {!alias.targets.length && <p className="py-2 text-xs text-muted-foreground">暂无候选目标，映射当前不可调用。</p>}
-      </div>
-      <div className="space-y-2 border-t pt-3">
-        <Label className="text-xs">路由模式</Label>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <Select value={routingForm.mode} onValueChange={(value) => setRoutingForm({ ...routingForm, mode: value as RoutingMode })}>
-            <SelectTrigger className="h-8 flex-1 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {(Object.keys(routingModeLabels) as RoutingMode[]).map((mode) => (
-                <SelectItem key={mode} value={mode}>{routingModeLabels[mode]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {routingForm.mode !== 'single' && (
-            <>
-              <Input
-                type="number" min={1} max={10}
-                className="h-8 w-full text-xs sm:w-28"
-                value={routingForm.max_attempts}
-                onChange={(e) => setRoutingForm({ ...routingForm, max_attempts: e.target.value })}
-                placeholder="尝试数(默认全部)"
-                title="同一候选连续失败多少次后冷却；也限制单次请求最多尝试的候选数"
-              />
-              <Input
-                type="number" min={0} max={3600}
-                className="h-8 w-full text-xs sm:w-28"
-                value={routingForm.cooldown_seconds}
-                onChange={(e) => setRoutingForm({ ...routingForm, cooldown_seconds: e.target.value })}
-                placeholder="冷却秒(默认60)"
-                title="候选进入冷却后的持续时间"
-              />
-              <Input
-                type="number" min={0} max={3600}
-                className="h-8 w-full text-xs sm:w-28"
-                value={routingForm.affinity_seconds}
-                onChange={(e) => setRoutingForm({ ...routingForm, affinity_seconds: e.target.value })}
-                placeholder="亲和秒(默认0)"
-                title="探测/故障切换成功后，一段时间内固定使用该候选"
-              />
-            </>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full shrink-0 sm:w-auto"
-            onClick={async () => {
-              const built = buildRoutingConfig(routingForm)
-              if (built.error || !built.config) { setRoutingError(built.error ?? '路由配置无效'); return }
-              setRoutingError(null)
-              onRoutingConfig(built.config)
-            }}
-          >保存路由</Button>
-        </div>
-        {routingForm.mode !== 'single' && <p className="text-xs text-muted-foreground">候选连续失败达阈值后冷却并跳过；全部冷却时仅放行一个探测请求；探测/切换成功后亲和期内固定使用该候选。</p>}
-        {routingError && <p className="text-xs text-destructive">{routingError}</p>}
-      </div>
-      <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-end">
-        <div className="min-w-0 flex-1 space-y-1">
-          <Label className="text-xs">Provider</Label>
-          <div className="flex items-center gap-1">
-            <Select value={providerId} onValueChange={(value) => { setProviderId(value); setModelId('') }}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="选择 Provider" /></SelectTrigger>
-              <SelectContent>{availableProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent>
-            </Select>
-            {providerId && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-                title="清空"
-                aria-label="清空 Provider"
-                onClick={() => { setProviderId(''); setModelId('') }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          </div>
-        </div>
-        <div className="min-w-0 flex-1 space-y-1">
-          <Label className="text-xs">模型</Label>
-          <SearchableSelect
-            value={providerId && modelId ? `${providerId}/${modelId}` : ''}
-            onValueChange={(_value, option) => {
-              if (!option.meta) return
-              setProviderId(option.meta.provider_id)
-              setModelId(option.meta.model_id)
-            }}
-            className="h-8 text-xs"
-            ariaLabel="模型"
-            placeholder="模型名"
-            searchPlaceholder="模型名"
-            emptyText="没有匹配的真实模型"
-            options={searchableModels.map((model) => ({
-              value: `${model.provider_id}/${model.model_id}`,
-              label: model.display_name || model.model_id,
-              keywords: [model.model_id, ...(model.display_name ? [model.display_name] : []), model.provider_name],
-              group: model.provider_name,
-              disabled: existing.has(`${model.provider_id}/${model.model_id}`),
-              meta: model,
-            }))}
-          />
-        </div>
-        <Button size="sm" variant="outline" className="w-full shrink-0 sm:w-auto" disabled={!providerId || !modelId || existing.has(`${providerId}/${modelId}`)} onClick={() => { onAdd(providerId, modelId); setModelId('') }}><Plus className="h-3.5 w-3.5" /> 添加</Button>
-      </div>
-    </div>
-  )
 }
 
 export default function ModelAliases() {
@@ -455,8 +44,6 @@ export default function ModelAliases() {
   const [addOpen, setAddOpen] = useState(false)
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
-  const [addForm, setAddForm] = useState<{ protocol: Protocol; alias_name: string; group_id: string; provider_id: string; model_id: string }>({ protocol: 'openai', alias_name: '', group_id: '', provider_id: '', model_id: '' })
-  const [addThinking, setAddThinking] = useState<ThinkingFormState>(emptyThinkingForm)
   const [thinkingFor, setThinkingFor] = useState<ModelAlias | null>(null)
   const [thinkingForm, setThinkingForm] = useState<ThinkingFormState>(emptyThinkingForm)
   const [renaming, setRenaming] = useState<{ protocol: Protocol; id: string; name: string } | null>(null)
@@ -542,15 +129,6 @@ export default function ModelAliases() {
     qc.invalidateQueries({ queryKey: ['models'] })
   }
 
-  const addAliasMutation = useMutation({
-    mutationFn: () => {
-      const built = buildThinking(addThinking, addForm.protocol)
-      if (built.error) return Promise.reject(new Error(built.error))
-      return api('/api/aliases', { method: 'POST', body: JSON.stringify({ ...addForm, group_id: addForm.group_id || null, alias_name: addForm.alias_name.trim(), thinking: built.config ?? undefined }) })
-    },
-    onSuccess: () => { setAddOpen(false); setAddForm({ protocol: 'openai', alias_name: '', group_id: '', provider_id: '', model_id: '' }); setAddThinking(emptyThinkingForm); invalidate(); toast(true, '映射创建成功') },
-    onError: (error) => toast(false, error instanceof Error ? error.message : '创建失败'),
-  })
   const patchAliasMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => api('/api/aliases', { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => { invalidate(); toast(true, '映射已更新') },
@@ -581,29 +159,39 @@ export default function ModelAliases() {
   })
   const batchMoveGroupMutation = useMutation({
     mutationFn: async ({ items, groupId }: { items: ModelAlias[]; groupId: string | null }) => {
-      await Promise.all(items.map((a) =>
+      const results = await Promise.allSettled(items.map((a) =>
         api('/api/aliases', { method: 'PATCH', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name, group_id: groupId }) })
       ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: items.length, failed }
     },
-    onSuccess: () => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, '批量移动分组完成') },
+    onSuccess: ({ total, failed }) => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(failed === 0, failed === 0 ? '批量移动分组完成' : `批量移动完成：成功 ${total - failed}，失败 ${failed}`) },
     onError: (error) => toast(false, error instanceof Error ? error.message : '批量移动失败'),
   })
   const batchDeleteMutation = useMutation({
     mutationFn: async (items: ModelAlias[]) => {
-      await Promise.all(items.map((a) =>
+      const results = await Promise.allSettled(items.map((a) =>
         api('/api/aliases', { method: 'DELETE', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name }) })
       ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: items.length, failed }
     },
-    onSuccess: () => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, '批量删除完成') },
+    onSuccess: ({ total, failed }) => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(failed === 0, failed === 0 ? '批量删除完成' : `批量删除完成：成功 ${total - failed}，失败 ${failed}`) },
     onError: (error) => toast(false, error instanceof Error ? error.message : '批量删除失败'),
   })
   const batchSetEnabledMutation = useMutation({
     mutationFn: async ({ items, enabled }: { items: ModelAlias[]; enabled: number }) => {
-      await Promise.all(items.map((a) =>
+      const results = await Promise.allSettled(items.map((a) =>
         api('/api/aliases', { method: 'PATCH', body: JSON.stringify({ protocol: a.protocol, alias_name: a.alias_name, enabled }) })
       ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: items.length, failed, enabled }
     },
-    onSuccess: (_data, { enabled }) => { setSelected(new Set()); setSelectionMode(new Set()); invalidate(); toast(true, enabled ? '批量启用完成' : '批量禁用完成') },
+    onSuccess: ({ total, failed, enabled }) => {
+      setSelected(new Set()); setSelectionMode(new Set()); invalidate()
+      const action = enabled ? '批量启用' : '批量禁用'
+      toast(failed === 0, failed === 0 ? `${action}完成` : `${action}完成：成功 ${total - failed}，失败 ${failed}`)
+    },
     onError: (error) => toast(false, error instanceof Error ? error.message : '批量更新失败'),
   })
   const mergeMutation = useMutation({
@@ -936,15 +524,11 @@ export default function ModelAliases() {
     )
   }
 
-  const addProviders = (providers.data ?? []).filter((provider) => provider.protocol === addForm.protocol && provider.enabled === 1)
-  // 未选 Provider 时搜索同协议全部已启用 Provider 的真实模型（选中后回填 Provider）；已选 Provider 时仅展示该 Provider 的模型
-  const addModels = (models.data ?? []).filter((model) => model.protocol === addForm.protocol && model.provider_enabled === 1 && model.enabled === 1 && (!addForm.provider_id || model.provider_id === addForm.provider_id))
-  const addGroups = (groups.data ?? []).filter((group) => group.protocol === addForm.protocol)
-
   return <>
     {confirmDialog}
     <NoticeStack items={toasts.items.map((item) => ({ id: item.id, ok: item.ok, message: item.message, leaving: item.leaving, fadeMs: item.fadeMs }))} onDismiss={toasts.leave} />
-    {selectedAliases.length > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+    {/* 批量操作条：portal 到 body，避免 page-shell 动画 transform 裁切 fixed 定位 */}
+    {selectedAliases.length > 0 && createPortal(<div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedAliases.length} 个映射</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
       <Select
@@ -972,7 +556,7 @@ export default function ModelAliases() {
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ items: selectedAliases, enabled: 0 })} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
       <Button size="sm" variant="outline" onClick={async () => { void (async () => { if (await confirm({ title: '删除选中映射？', description: `确定删除选中的 ${selectedAliases.length} 个映射？`, confirmLabel: '删除', destructive: true })) batchDeleteMutation.mutate(selectedAliases) })() }} disabled={batchSetEnabledMutation.isPending || mergeMutation.isPending || batchMoveGroupMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
       <Button size="sm" variant="ghost" onClick={async () => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
-    </div>}
+    </div>, document.body)}
     <div className="space-y-6">
       <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="映射名" value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
           size="icon"
@@ -1073,148 +657,37 @@ export default function ModelAliases() {
       </DialogContent>
     </Dialog>
 
-    <Dialog open={addOpen} onOpenChange={setAddOpen}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>新建模型映射</DialogTitle>
-          <DialogDescription>选中模型后自动填充映射名。</DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain py-2 pr-1">
-          <div className="space-y-1.5">
-            <Label>协议</Label>
-            <Select value={addForm.protocol} onValueChange={(value) => setAddForm({ ...addForm, protocol: value as Protocol, group_id: '', provider_id: '', model_id: '' })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">openai</SelectItem>
-                <SelectItem value="anthropic">anthropic</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label>映射名</Label>
-              {addForm.model_id && (
-                <button type="button" className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => setAddForm((form) => ({ ...form, alias_name: form.model_id }))}>
-                  <TextCursorInput className="h-3 w-3" /> 填入真实模型名
-                </button>
-              )}
-            </div>
-            <Input value={addForm.alias_name} onChange={(event) => setAddForm({ ...addForm, alias_name: event.target.value })} placeholder="my-brain" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>分组（可选）</Label>
-            <Select value={addForm.group_id || 'none'} onValueChange={(value) => setAddForm({ ...addForm, group_id: value === 'none' ? '' : value })}>
-              <SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">未分组</SelectItem>
-                {addGroups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Provider</Label>
-            <div className="flex items-center gap-1">
-              <Select value={addForm.provider_id} onValueChange={(value) => setAddForm({ ...addForm, provider_id: value, model_id: '' })}>
-                <SelectTrigger><SelectValue placeholder="全部" /></SelectTrigger>
-                <SelectContent>
-                  {addProviders.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              {addForm.provider_id && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
-                  title="清空"
-                aria-label="清空 Provider"
-                onClick={() => setAddForm((form) => ({ ...form, provider_id: '', model_id: '' }))}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>当前目标</Label>
-            <SearchableSelect
-              value={addForm.provider_id && addForm.model_id ? `${addForm.provider_id}/${addForm.model_id}` : ''}
-              onValueChange={(_value, option) => {
-                if (!option.meta) return
-                const model = option.meta
-                setAddForm((form) => ({
-                  ...form,
-                  provider_id: model.provider_id,
-                  model_id: model.model_id,
-                  alias_name: form.alias_name.trim() ? form.alias_name : model.model_id,
-                }))
-              }}
-              ariaLabel="当前目标"
-              placeholder="模型名"
-              searchPlaceholder="模型名"
-              emptyText="无匹配结果"
-              options={addModels.map((model) => ({
-                value: `${model.provider_id}/${model.model_id}`,
-                label: model.display_name || model.model_id,
-                keywords: [model.model_id, ...(model.display_name ? [model.display_name] : []), model.provider_name],
-                group: model.provider_name,
-                meta: model,
-              }))}
-            />
-          </div>
-          <ThinkingFields protocol={addForm.protocol} form={addThinking} onChange={setAddThinking} />
-        </div>
-        <DialogFooter className="shrink-0 border-t pt-2 sm:border-t-0">
-          <Button variant="outline" onClick={() => setAddOpen(false)}>取消</Button>
-          <Button disabled={addAliasMutation.isPending || !addForm.alias_name.trim() || !addForm.provider_id || !addForm.model_id} onClick={() => addAliasMutation.mutate()}>创建</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <AliasCreateDialog
+      open={addOpen}
+      onOpenChange={setAddOpen}
+      groups={groups.data ?? []}
+      providers={providers.data ?? []}
+      models={models.data ?? []}
+      onCreated={invalidate}
+      toast={toast}
+    />
 
-    <Dialog open={thinkingFor !== null} onOpenChange={(open) => !open && setThinkingFor(null)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>思考等级 — {thinkingFor?.alias_name}</DialogTitle>
-          <DialogDescription>仅改写请求体顶层的 {thinkingFor?.protocol === 'openai' ? 'reasoning_effort' : 'thinking'} 字段，其余字段原样透传。</DialogDescription>
-        </DialogHeader>
-        {thinkingFor && <ThinkingFields protocol={thinkingFor.protocol} form={thinkingForm} onChange={setThinkingForm} />}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setThinkingFor(null)}>取消</Button>
-          <Button disabled={patchAliasMutation.isPending} onClick={saveThinking}><Check className="h-4 w-4" /> 保存</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <AliasThinkingDialog
+      alias={thinkingFor}
+      onAliasChange={setThinkingFor}
+      form={thinkingForm}
+      onFormChange={setThinkingForm}
+      onSave={saveThinking}
+      pending={patchAliasMutation.isPending}
+    />
 
     <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>重命名分组</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') saveRename(); if (event.key === 'Escape') setRenaming(null) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim()} onClick={saveRename}><Check className="h-4 w-4" /> 保存</Button></DialogFooter></DialogContent></Dialog>
 
-    <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>编辑映射</DialogTitle>
-          <DialogDescription>只修改映射名与所属分组；启用开关、思考等级和候选目标请在列表中单独操作。</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>映射名</Label>
-            <Input autoFocus value={editForm.alias_name} onChange={(event) => setEditForm({ ...editForm, alias_name: event.target.value })} placeholder="my-brain" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>分组</Label>
-            <Select value={editForm.group_id || 'none'} onValueChange={(value) => setEditForm({ ...editForm, group_id: value === 'none' ? '' : value })}>
-              <SelectTrigger><SelectValue placeholder="未分组" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">未分组</SelectItem>
-                {(groups.data ?? []).filter((group) => group.protocol === editing?.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setEditing(null)}>取消</Button>
-          <Button disabled={!editForm.alias_name.trim() || patchAliasMutation.isPending} onClick={saveEdit}><Check className="h-4 w-4" /> 保存</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <AliasEditDialog
+      editing={editing}
+      onEditingChange={setEditing}
+      groups={groups.data ?? []}
+      form={editForm}
+      onFormChange={setEditForm}
+      onSave={saveEdit}
+      pending={patchAliasMutation.isPending}
+    />
+
     <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
       <DialogContent>
         <DialogHeader>

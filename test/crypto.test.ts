@@ -1,6 +1,41 @@
-import { test } from 'node:test'
-import assert from 'node:assert'
-import { encrypt, decrypt } from '../src/crypto'
+import { after, test } from 'node:test'
+import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+
+const originalCwd = process.cwd()
+const tempRoot = mkdtempSync(join(tmpdir(), 'literouter-crypto-'))
+process.chdir(tempRoot)
+delete process.env.ENCRYPTION_KEY
+
+const warnings: string[] = []
+const originalWarn = console.warn
+console.warn = (...args: unknown[]) => {
+  warnings.push(args.map((a) => (typeof a === 'string' ? a : String(a))).join(' '))
+}
+
+const { encrypt, decrypt } = await import('../src/crypto')
+// 触发自动生成密钥
+encrypt('boot')
+console.warn = originalWarn
+
+after(() => {
+  process.chdir(originalCwd)
+  rmSync(tempRoot, { recursive: true, force: true })
+})
+
+test('generated ENCRYPTION_KEY is written to data/.generated-encryption-key and never printed', () => {
+  const keyPath = join(tempRoot, 'data', '.generated-encryption-key')
+  assert.ok(existsSync(keyPath), 'key file must be written')
+  const key = readFileSync(keyPath, 'utf8').trim()
+  assert.match(key, /^[0-9a-f]{64}$/)
+  for (const w of warnings) {
+    assert.ok(!w.includes(key), `warning must not contain the key: ${w}`)
+    assert.ok(!/ENCRYPTION_KEY=[0-9a-f]{64}/.test(w), `warning must not print ENCRYPTION_KEY=...: ${w}`)
+  }
+  assert.ok(warnings.some((w) => w.includes('ENCRYPTION_KEY') && w.includes('.env')), 'must instruct user to persist key in .env')
+})
 
 test('encrypt and decrypt round trip', () => {
   const plaintext = 'sensitive API key'

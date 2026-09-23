@@ -4,6 +4,22 @@ export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY)
 export const setToken = (token: string): void => localStorage.setItem(TOKEN_KEY, token)
 export const clearToken = (): void => localStorage.removeItem(TOKEN_KEY)
 
+/** 401 时优先 SPA 跳转登录页，避免整页刷新丢掉前端状态 */
+function redirectToLogin(): void {
+  clearToken()
+  try {
+    // BrowserRouter 监听 popstate，pushState + popstate 事件可在 SPA 内完成跳转
+    if (window.location.pathname !== '/login') {
+      window.history.pushState({}, '', '/login')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      return
+    }
+  } catch {
+    // fall through to full navigation
+  }
+  if (window.location.pathname !== '/login') window.location.href = '/login'
+}
+
 /**
  * 调用管理 API，自动解包 { ok: true, data: T } → T。
  * 401 自动清 token 跳转登录；非 2xx 抛 Error。
@@ -18,8 +34,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(path, { ...init, headers })
   if (res.status === 401 && path !== '/api/login') {
-    clearToken()
-    window.location.href = '/login'
+    redirectToLogin()
     throw new Error('unauthorized')
   }
 

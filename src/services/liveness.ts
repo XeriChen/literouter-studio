@@ -2,6 +2,7 @@ import { drainBody, getDispatcher, sendToUpstream, isTimeoutError } from '../pro
 import { buildAnthropicChatBody, extractAnthropicReply } from '../providers/anthropic'
 import { buildOpenAIChatBody, extractOpenAIReply } from '../providers/openai'
 import { buildProviderHeaders } from '../providers/headers'
+import { assertSafeOutboundUrl } from './url-guard'
 import { getProvider } from './providers'
 import type { ProviderRow, ThinkingConfig } from '../types'
 
@@ -44,6 +45,7 @@ export async function testModelLiveness(input: {
   const baseUrl = provider.base_url.replace(/\/+$/, '')
   const path = provider.protocol === 'openai' ? '/v1/chat/completions' : '/v1/messages'
   const url = `${baseUrl}${path}`
+  assertSafeOutboundUrl(url)
 
   const res = await sendToUpstream({
     method: 'POST',

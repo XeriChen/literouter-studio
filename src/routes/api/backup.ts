@@ -40,7 +40,8 @@ const backupSchema = z.object({
     group_id: nonEmptyText.nullable().default(null),
     enabled: z.union([z.literal(0), z.literal(1)]).default(1),
     thinking: thinkingConfigSchema.nullable().default(null),
-    routing_config: z.any().nullable().optional(),
+    /** 形状校验在 importBackup（与 aliases 写入路径同构），失败映射为 invalid_backup */
+    routing_config: z.unknown().nullable().optional(),
     targets: z.array(z.object({
       provider_id: nonEmptyText,
       model_id: nonEmptyText,
@@ -102,7 +103,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
         groups: data.groups,
         aliases: data.aliases.map((alias) => ({
           ...alias,
-          routing_config: alias.routing_config ?? null,
+          routing_config: (alias.routing_config ?? null) as import('../../services/backup').BackupData['aliases'][number]['routing_config'],
         })),
       })
       clearHealthState()

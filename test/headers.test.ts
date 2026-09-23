@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildUpstreamHeaders, buildUpstreamUrl } from '../src/providers/headers'
+import { buildUpstreamHeaders, buildUpstreamUrl, decryptAuthJson } from '../src/providers/headers'
 import type { ProviderRow } from '../src/types'
 
 const provider: ProviderRow = {
@@ -48,4 +48,15 @@ test('buildUpstreamUrl preserves query strings and removes duplicate base URL sl
     buildUpstreamUrl('https://upstream.example///', '/v1/chat/completions', '?stream=true'),
     'https://upstream.example/v1/chat/completions?stream=true',
   )
+})
+
+test('decryptAuthJson throws on decrypt failure instead of silently returning empty auth', () => {
+  assert.throws(
+    () => decryptAuthJson({ id: 'p1', name: 'bad', auth_json: '', auth_json_encrypted: 'ab:cd:ef' }),
+    /failed to decrypt auth_json/,
+  )
+})
+
+test('decryptAuthJson falls back to plaintext column when no encrypted column', () => {
+  assert.equal(decryptAuthJson({ id: 'p1', auth_json: '{"api_key":"plain"}' }), '{"api_key":"plain"}')
 })

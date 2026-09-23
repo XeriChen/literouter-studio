@@ -8,23 +8,16 @@ import {
   CircleAlert,
   CircleDollarSign,
   Copy,
-  Eraser,
   ExternalLink,
-  Eye,
-  EyeOff,
   FolderPlus,
   ListChecks,
   Loader2,
-  MoreHorizontal,
   Pencil,
   Plus,
   Power,
   RefreshCw,
-  Search,
   ServerOff,
   Trash2,
-  Undo2,
-  Unlock,
   Wifi,
   X,
 } from 'lucide-react'
@@ -33,6 +26,15 @@ import type { Provider, ProviderGroup, ProviderModel, BalanceResult } from '@/ap
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedNotice } from '@/hooks/useTimedNotice'
 import { useConfirm } from '@/components/ConfirmDialog'
+import {
+  EMPTY_FORM,
+  ProviderFormDialog,
+  formFromProvider,
+  type FormMode,
+  type ProviderForm,
+  type Protocol,
+} from '@/components/providers/ProviderFormDialog'
+import { ImportModelsDialog } from '@/components/providers/ImportModelsDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -49,45 +51,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-
-type Protocol = Provider['protocol']
-type FormMode = 'create' | 'edit' | 'copy'
-
-interface ProviderForm {
-  name: string
-  protocol: Protocol
-  group_id: string
-  base_url: string
-  api_key: string
-  access_token: string
-  anthropic_version: string
-  proxy_url: string
-  timeout_ms: string
-  custom_headers: string
-  model_filter: string
-  upstream_type: string
-  custom_auth_header_name: string
-  custom_auth_format: string
-}
-
-const EMPTY_FORM: ProviderForm = {
-  name: '',
-  protocol: 'openai',
-  group_id: '',
-  base_url: '',
-  api_key: '',
-  access_token: '',
-  anthropic_version: '',
-  proxy_url: '',
-  timeout_ms: '',
-  custom_headers: '{}',
-  model_filter: '',
-  upstream_type: '',
-  custom_auth_header_name: '',
-  custom_auth_format: '',
-}
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic']
 
@@ -149,28 +113,6 @@ export default function Providers() {
     qc.invalidateQueries({ queryKey: ['provider-groups'] })
     qc.invalidateQueries({ queryKey: ['models'] })
     qc.invalidateQueries({ queryKey: ['aliases'] })
-  }
-
-  function formFromProvider(provider: Provider, name = provider.name): ProviderForm {
-    const customAuth = typeof provider.auth.custom_auth === 'object' && provider.auth.custom_auth !== null
-      ? provider.auth.custom_auth as { header_name: string; format: string }
-      : null
-    return {
-      name,
-      protocol: provider.protocol,
-      group_id: provider.group_id ?? '',
-      base_url: provider.base_url,
-      api_key: (provider.auth.api_key as string | undefined) ?? '',
-      access_token: (provider.auth.access_token as string | undefined) ?? '',
-      anthropic_version: (provider.auth.version as string | undefined) ?? '',
-      proxy_url: provider.proxy_url ?? '',
-      timeout_ms: provider.timeout_ms == null ? '' : String(provider.timeout_ms),
-      custom_headers: JSON.stringify(provider.custom_headers ?? {}, null, 2),
-      model_filter: provider.model_filter ?? '',
-      upstream_type: provider.upstream_type ?? '',
-      custom_auth_header_name: customAuth?.header_name ?? '',
-      custom_auth_format: customAuth?.format ?? '',
-    }
   }
 
   function openCreate() {
@@ -238,7 +180,7 @@ export default function Providers() {
           format: form.custom_auth_format.trim(),
         }
       }
-      let custom_headers: Record<string, string> = {}
+      let custom_headers: Record<string, string>
       try {
         custom_headers = JSON.parse(form.custom_headers || '{}')
       } catch {
@@ -280,36 +222,43 @@ export default function Providers() {
 
   const batchSetEnabledMutation = useMutation({
     mutationFn: async ({ providerIds, enabled }: { providerIds: string[]; enabled: 0 | 1 }) => {
-      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })))
+      const results = await Promise.allSettled(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: providerIds.length, failed, enabled }
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: ({ total, failed, enabled }) => {
       setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
-      setResult({ message: variables.enabled ? '批量启用完成' : '批量禁用完成', ok: true })
+      const action = enabled ? '批量启用' : '批量禁用'
+      setResult({ message: failed === 0 ? `${action}完成` : `${action}完成：成功 ${total - failed}，失败 ${failed}`, ok: failed === 0 })
     },
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量更新失败', ok: false }),
   })
 
   const batchDeleteMutation = useMutation({
     mutationFn: async (providerIds: string[]) => {
-      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'DELETE' })))
+      const results = await Promise.allSettled(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'DELETE' })))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: providerIds.length, failed }
     },
-    onSuccess: () => {
+    onSuccess: ({ total, failed }) => {
       setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
-      setResult({ message: '批量删除完成', ok: true })
+      setResult({ message: failed === 0 ? '批量删除完成' : `批量删除完成：成功 ${total - failed}，失败 ${failed}`, ok: failed === 0 })
     },
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量删除失败', ok: false }),
   })
 
   const batchMoveMutation = useMutation({
     mutationFn: async ({ providerIds, groupId }: { providerIds: string[]; groupId: string | null }) => {
-      await Promise.all(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ group_id: groupId }) })))
+      const results = await Promise.allSettled(providerIds.map((id) => api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ group_id: groupId }) })))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: providerIds.length, failed }
     },
-    onSuccess: () => {
+    onSuccess: ({ total, failed }) => {
       setSelectedProviderIds(new Set()); setSelectionMode(new Set())
       invalidateProviderData()
-      setResult({ message: '批量移动分组完成', ok: true })
+      setResult({ message: failed === 0 ? '批量移动分组完成' : `批量移动完成：成功 ${total - failed}，失败 ${failed}`, ok: failed === 0 })
     },
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '批量移动失败', ok: false }),
   })
@@ -524,7 +473,7 @@ export default function Providers() {
               <TableCell className="font-medium">{provider.name}</TableCell>
               <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
               <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
-              <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
+              <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
               <TableCell className="pr-6"><div className="flex items-center justify-end gap-1">
                 {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="icon-button" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
                 <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
@@ -661,7 +610,8 @@ export default function Providers() {
       <div className="notice-layer px-4">{resultNotice}</div>,
       document.body,
     )}
-    {selectedProviderIds.size > 0 && <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
+    {/* 批量操作条：portal 到 body，与 NoticeStack 一致，避免 page-shell 动画 transform 影响 fixed 定位 */}
+    {selectedProviderIds.size > 0 && createPortal(<div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
       <span className="text-sm font-medium">已选 {selectedProviderIds.size} 个 Provider</span>
       <div className="hidden h-4 w-px bg-border sm:block" />
       <Select
@@ -680,7 +630,7 @@ export default function Providers() {
       <Button size="sm" variant="outline" onClick={() => batchSetEnabledMutation.mutate({ providerIds: [...selectedProviderIds], enabled: 0 })} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}>禁用</Button>
       <Button size="sm" variant="outline" onClick={() => { void (async () => { if (await confirm({ title: '删除选中 Provider？', description: `确定删除选中的 ${selectedProviderIds.size} 个 Provider？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) batchDeleteMutation.mutate([...selectedProviderIds]) })() }} disabled={batchSetEnabledMutation.isPending || batchMoveMutation.isPending || batchDeleteMutation.isPending}><Trash2 className="h-3.5 w-3.5" /> 删除</Button>
       <Button size="sm" variant="ghost" onClick={() => { setSelectedProviderIds(new Set()); setSelectionMode(new Set()) }} aria-label="清除 Provider 选择"><X className="h-3.5 w-3.5" /></Button>
-    </div>}
+    </div>, document.body)}
     <div className="page-shell space-y-6">
       <div className="page-heading">
         <div><div className="eyebrow mb-2 flex items-center gap-2"><Wifi className="h-3.5 w-3.5" /> 上游连接</div><h1 className="page-title">Providers</h1><p className="page-description">按协议和自定义分组管理 LLM 服务接入点、连通性与模型发现。</p></div>
@@ -688,6 +638,13 @@ export default function Providers() {
       </div>
 
       <div className="space-y-4">
+        {providers.isError && (
+          <div className="notice notice-error border border-white/[0.14] px-3.5 py-2.5">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>加载 Provider 失败：{providers.error instanceof Error ? providers.error.message : 'unknown'}</span>
+            <button type="button" className="ml-auto shrink-0 font-semibold underline underline-offset-4" onClick={() => providers.refetch()}>重试</button>
+          </div>
+        )}
         {PROTOCOLS.map((protocol) => {
           const protocolGroups = (providerGroups.data ?? []).filter((group) => group.protocol === protocol)
           const protocolRows = (providers.data ?? []).filter((provider) => provider.protocol === protocol)
@@ -702,129 +659,45 @@ export default function Providers() {
 
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>重命名 Provider 分组</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter' && renaming?.name.trim()) renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() }) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim() || renameGroupMutation.isPending} onClick={() => renaming && renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() })}>保存</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setApiKeyVisible(false) }}>
-        <DialogContent className="grid max-h-[calc(100dvh-1rem)] w-[calc(100%-1rem)] max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-md p-0 sm:max-h-[calc(100dvh-2rem)] sm:w-full">
-          <DialogHeader className="border-b px-4 py-4 pr-12 text-left sm:px-6 sm:py-5">
-            <DialogTitle>{formMode === 'edit' ? '编辑 Provider' : formMode === 'copy' ? '复制 Provider' : '新增 Provider'}</DialogTitle>
-            <DialogDescription>API Key 会以明文存储在本机数据库中，请妥善保管。</DialogDescription>
-            {resultNotice}
-          </DialogHeader>
-          <div
-            className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6"
-            role="region"
-            aria-label="Provider 配置"
-            tabIndex={0}
-          >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label htmlFor="provider-name">名称</Label><Input id="provider-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="如：OpenAI 官方" /></div><div className="space-y-1.5"><Label>协议</Label><Select disabled={formMode === 'edit'} value={form.protocol} onValueChange={(value) => setForm({ ...form, protocol: value as Protocol, group_id: value === form.protocol ? form.group_id : '' })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select></div></div>
-            <div className="space-y-1.5"><Label>分组（可选）</Label><div className="flex gap-2"><Select value={form.group_id || 'none'} onValueChange={(value) => setForm({ ...form, group_id: value === 'none' ? '' : value })}><SelectTrigger className="flex-1"><SelectValue placeholder="未分组" /></SelectTrigger><SelectContent><SelectItem value="none">未分组</SelectItem>{(providerGroups.data ?? []).filter((group) => group.protocol === form.protocol).map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" size="icon" onClick={() => openGroupDialog(form.protocol, 'provider')} aria-label="新建 Provider 分组" title="新建 Provider 分组"><FolderPlus className="h-4 w-4" /></Button></div></div>
-            <div className="space-y-1.5"><Label htmlFor="provider-base-url">Base URL</Label><Input id="provider-base-url" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} placeholder="https://api.openai.com" /><p className="text-xs text-muted-foreground">不含 /v1 后缀，网关会自动拼接</p></div>
-            <div className="space-y-1.5"><Label htmlFor="provider-api-key">API Key</Label><div className="flex gap-2"><div className="relative min-w-0 flex-1"><Input className="pr-10" type={apiKeyVisible ? 'text' : 'password'} value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="sk-..." id="provider-api-key" /><Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2" onClick={() => setApiKeyVisible((visible) => !visible)} aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}>{apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button></div><Button type="button" variant="outline" className="shrink-0" onClick={decodeApiKey} title="Base64 解码并回填为明文"><Unlock className="h-3.5 w-3.5" /> 解码</Button></div><p className="text-xs text-muted-foreground">如粘贴的是 Base64 编码的 Key，点击「解码」直接转成明文</p></div>
-            {form.protocol === 'anthropic' && <div className="space-y-1.5"><Label>Anthropic Version（可选）</Label><Input value={form.anthropic_version} onChange={(event) => setForm({ ...form, anthropic_version: event.target.value })} placeholder="2023-06-01（留空使用默认值）" /></div>}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="space-y-1.5"><Label>代理 URL（可选）</Label><Input value={form.proxy_url} onChange={(event) => setForm({ ...form, proxy_url: event.target.value })} placeholder="http://127.0.0.1:7890" /></div><div className="space-y-1.5"><Label>超时毫秒</Label><Input value={form.timeout_ms} onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })} placeholder="120000（0 表示不超时）" /></div></div>
-            <div className="space-y-1.5"><Label>上游类型（可选）</Label><Select value={form.upstream_type || 'none'} onValueChange={(value) => setForm({ ...form, upstream_type: value === 'none' ? '' : value })}><SelectTrigger><SelectValue placeholder="未指定" /></SelectTrigger><SelectContent><SelectItem value="none">未指定</SelectItem><SelectItem value="newapi">New API</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">标记为 New API 或 Sub2API 可查询账户额度；可填 Access Token 查询用户总余额</p></div>
-            {(form.upstream_type === 'newapi' || form.upstream_type === 'sub2api') && <div className="space-y-1.5"><Label>Access Token（可选，用户总余额）</Label><Input value={form.access_token} onChange={(event) => setForm({ ...form, access_token: event.target.value })} placeholder="eyJ... / PAT" /><p className="text-xs text-muted-foreground">{form.upstream_type === 'newapi' ? <>控制台登录态 / PAT，用于 <span className="font-mono">GET /api/user/self</span> 查询<strong>用户总余额</strong>（quota/500000=USD）；令牌额度仍可用 API Key 查 billing。该字段不参与代理转发</> : <>余额默认走 <span className="font-mono">/v1/usage</span>（API Key）。填 Sub2API 控制台 JWT 可查询<strong>用户总余额</strong>（<span className="font-mono">/api/v1/auth/me</span>）；该路由仅放行 JWT 时也依赖此字段。不参与代理转发</>}</p></div>}
-            <div className="space-y-1.5"><Label>自定义请求头</Label><Textarea value={form.custom_headers} onChange={(event) => setForm({ ...form, custom_headers: event.target.value })} rows={3} className="font-mono text-xs" placeholder='{"X-Custom": "value"}' /><p className="text-xs text-muted-foreground">JSON 格式，不可覆盖 authorization / x-api-key / accept-encoding</p></div>
-            <div className="space-y-1.5"><Label>自定义认证头（可选）</Label><div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><Input value={form.custom_auth_header_name} onChange={(event) => setForm({ ...form, custom_auth_header_name: event.target.value })} placeholder="X-API-Key" /><Input value={form.custom_auth_format} onChange={(event) => setForm({ ...form, custom_auth_format: event.target.value })} placeholder="Bearer {key}" /></div><p className="text-xs text-muted-foreground">自定义认证头名称和格式，{'{key}'} 会被替换为 API Key。留空使用默认认证方式</p></div>
-            <div className="space-y-1.5"><Label>模型过滤规则（可选）</Label><Input value={form.model_filter} onChange={(event) => setForm({ ...form, model_filter: event.target.value })} placeholder="grok-*,mimo-*" /><p className="text-xs text-muted-foreground">逗号分隔的前缀匹配规则，拉取时只入库匹配的模型。留空不过滤。例：gpt-*,claude-*</p></div>
-          </div>
-          <DialogFooter className="gap-2 border-t bg-background px-4 py-3 sm:space-x-0 sm:px-6"><Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button><Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || !form.base_url.trim()}>{saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}{formMode === 'edit' ? '保存修改' : formMode === 'copy' ? '创建副本' : '创建'}</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ProviderFormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        formMode={formMode}
+        form={form}
+        onFormChange={setForm}
+        apiKeyVisible={apiKeyVisible}
+        onApiKeyVisibleChange={setApiKeyVisible}
+        resultNotice={resultNotice}
+        providerGroups={providerGroups.data ?? []}
+        onOpenGroupDialog={openGroupDialog}
+        decodeApiKey={decodeApiKey}
+        savePending={saveMutation.isPending}
+        onSave={() => saveMutation.mutate()}
+      />
 
-      <Dialog open={!!fetchDialog} onOpenChange={(open) => { if (!open) setFetchDialog(null) }}>
-        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
-          <DialogHeader className="shrink-0">
-            <DialogTitle>选择要导入的模型</DialogTitle>
-            <DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription>
-          </DialogHeader>
-          {upstreamLoading ? (
-            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> 正在拉取模型列表...
-            </div>
-          ) : (
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain py-1 pr-1">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-8 text-sm" placeholder="模型名" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} />
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>
-                  已选 {selectedModels.size} / {upstreamModels.length}
-                  {modelSearch.trim() ? `（筛选 ${filteredUpstream.length} 个）` : ''}
-                  {importedFetchedIds.length > 0 && <>，已导入 {importedFetchedIds.length} 个</>}
-                </span>
-                <div className="flex flex-wrap items-center gap-2">
-                  {importedFetchedIds.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      disabled={cleanupImportedMutation.isPending}
-                      title="删除该 Provider 全部拉取导入的模型（手动添加的模型不受影响）"
-                      onClick={async () => {
-                        if (await confirm({ title: '一键清理导入模型？', description: `确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`, confirmLabel: '清理', destructive: true })) {
-                          cleanupImportedMutation.mutate({ providerId: fetchDialog!.providerId })
-                        }
-                      }}
-                    >
-                      <Eraser className="h-3.5 w-3.5" />
-                      {cleanupImportedMutation.isPending ? '清理中...' : `一键清理已导入（${importedFetchedIds.length}）`}
-                    </Button>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <button className="hover:underline" onClick={() => setSelectedModels(new Set([...selectedModels, ...filteredUpstream]))}>全选</button>
-                    <button className="hover:underline" onClick={() => { const filtered = new Set(filteredUpstream); setSelectedModels(new Set([...selectedModels].filter((id) => !filtered.has(id)))) }}>全不选</button>
-                  </div>
-                </div>
-              </div>
-              <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">
-                {filteredUpstream.map((id) => {
-                  const imported = importedById.get(id)
-                  const isFetched = imported?.source === 'fetched'
-                  return (
-                    <div key={id} className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${isFetched ? 'bg-muted/40' : 'hover:bg-muted'}`}>
-                      <Checkbox checked={selectedModels.has(id)} onCheckedChange={() => toggleUpstreamModel(id)} aria-label={`选择 ${id}`} />
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs" title={id}>{id}</span>
-                      {imported && <Badge variant={isFetched ? 'secondary' : 'outline'} className="shrink-0">{isFetched ? '已导入' : '已添加'}</Badge>}
-                      {isFetched && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="icon-button h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                          disabled={cancelImportMutation.isPending}
-                          title="取消导入（删除该导入模型，可重新导入）"
-                          aria-label={`取消导入 ${id}`}
-                          onClick={async () => {
-                            if (await confirm({ title: '取消导入？', description: `取消导入「${id}」？将从该 Provider 删除此模型。`, confirmLabel: '取消导入', destructive: true })) {
-                              cancelImportMutation.mutate({ providerId: fetchDialog!.providerId, modelId: id })
-                            }
-                          }}
-                        >
-                          <Undo2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  )
-                })}
-                {!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}
-              </div>
-              <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs">
-                <Checkbox checked={createAlias} onCheckedChange={(checked) => setCreateAlias(checked === true)} className="mt-0.5" />
-                <span>
-                  <span className="font-medium">同时创建同名映射</span>
-                  <span className="block text-muted-foreground">取消勾选只登记模型，不创建同名映射；未建映射的模型无法被代理请求。</span>
-                </span>
-              </label>
-            </div>
-          )}
-          <DialogFooter className="shrink-0 border-t pt-2 sm:border-t-0">
-            <Button variant="outline" onClick={() => setFetchDialog(null)}>取消</Button>
-            <Button disabled={selectedModels.size === 0 || importModelsMutation.isPending} onClick={() => fetchDialog && importModelsMutation.mutate({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>
-              {importModelsMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ImportModelsDialog
+        fetchDialog={fetchDialog}
+        onFetchDialogChange={setFetchDialog}
+        upstreamModels={upstreamModels}
+        upstreamLoading={upstreamLoading}
+        selectedModels={selectedModels}
+        onSelectedModelsChange={setSelectedModels}
+        modelSearch={modelSearch}
+        onModelSearchChange={setModelSearch}
+        createAlias={createAlias}
+        onCreateAliasChange={setCreateAlias}
+        filteredUpstream={filteredUpstream}
+        importedById={importedById}
+        importedFetchedIds={importedFetchedIds}
+        toggleUpstreamModel={toggleUpstreamModel}
+        confirm={confirm}
+        cleanupPending={cleanupImportedMutation.isPending}
+        onCleanup={(providerId) => cleanupImportedMutation.mutate({ providerId })}
+        cancelPending={cancelImportMutation.isPending}
+        onCancelImport={(input) => cancelImportMutation.mutate(input)}
+        importPending={importModelsMutation.isPending}
+        onImport={(input) => importModelsMutation.mutate(input)}
+      />
     </div>
     </>
   )

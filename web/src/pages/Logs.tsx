@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, RotateCw, Trash2, ScrollText, Settings2 } from 'lucide-react'
 import { api } from '@/api/client'
@@ -46,6 +46,9 @@ const ACTION_LABELS: Record<string, string> = {
   reorder: '重排优先级',
   merge: '合并',
 }
+
+/** Radix SelectItem 的 value 不能为空串，用哨兵值表示「全部」，提交查询时再映射回空。 */
+const SELECT_ALL = 'all'
 
 type LogPeriod = '' | 'today' | 'week' | 'month'
 
@@ -107,10 +110,8 @@ function AccessLogsTab() {
   const [protocol, setProtocol] = useState('')
   const [providerId, setProviderId] = useState('')
   const [model, setModel] = useState('')
-  const [debouncedModel, setDebouncedModel] = useState('')
   const [status, setStatus] = useState('')
   const [period, setPeriod] = useState<LogPeriod>('')
-  const modelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const providers = useQuery({
     queryKey: ['providers'],
@@ -118,12 +119,12 @@ function AccessLogsTab() {
   })
 
   const logs = useQuery({
-    queryKey: ['logs', page, protocol, providerId, debouncedModel, status, period],
+    queryKey: ['logs', page, protocol, providerId, model, status, period],
     queryFn: () => {
       const p = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
       if (protocol) p.set('protocol', protocol)
       if (providerId) p.set('provider_id', providerId)
-      const modelFilter = (model || debouncedModel).trim()
+      const modelFilter = model.trim()
       if (modelFilter) p.set('model', modelFilter)
       if (status.trim()) p.set('status', status.trim())
       if (period) p.set('period', period)
@@ -188,18 +189,18 @@ function AccessLogsTab() {
 
       <div className="flex flex-wrap items-center gap-2">
         <PeriodFilter value={period} onChange={(value) => { setPeriod(value); setPage(1) }} />
-        <Select value={protocol} onValueChange={(v) => { setProtocol(v); setPage(1) }}>
+        <Select value={protocol || SELECT_ALL} onValueChange={(v) => { setProtocol(v === SELECT_ALL ? '' : v); setPage(1) }}>
           <SelectTrigger className="w-28"><SelectValue placeholder="协议" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部协议</SelectItem>
+            <SelectItem value={SELECT_ALL}>全部协议</SelectItem>
             <SelectItem value="openai">openai</SelectItem>
             <SelectItem value="anthropic">anthropic</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={providerId} onValueChange={(v) => { setProviderId(v); setPage(1) }}>
+        <Select value={providerId || SELECT_ALL} onValueChange={(v) => { setProviderId(v === SELECT_ALL ? '' : v); setPage(1) }}>
           <SelectTrigger className="w-40"><SelectValue placeholder="Provider" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部 Provider</SelectItem>
+            <SelectItem value={SELECT_ALL}>全部 Provider</SelectItem>
             {(providers.data ?? []).map((p) => (
               <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
             ))}
@@ -215,7 +216,6 @@ function AccessLogsTab() {
           value={model}
           onValueChange={(v) => {
             setModel(v)
-            setDebouncedModel(v)
             setPage(1)
           }}
         />
@@ -230,6 +230,14 @@ function AccessLogsTab() {
           onValueChange={(v) => { setStatus(v); setPage(1) }}
         />
       </div>
+
+      {logs.isError && (
+        <div className="notice notice-error border border-white/[0.14] px-3.5 py-2.5">
+          <ScrollText className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>加载访问日志失败：{logs.error instanceof Error ? logs.error.message : 'unknown'}</span>
+          <button type="button" className="ml-auto shrink-0 font-semibold underline underline-offset-4" onClick={() => logs.refetch()}>重试</button>
+        </div>
+      )}
 
       <Card className="console-surface shadow-none">
         <CardContent className="p-0">
@@ -328,16 +336,24 @@ function AuditLogsTab() {
 
       <div className="flex flex-wrap items-center gap-2">
         <PeriodFilter value={period} onChange={(value) => { setPeriod(value); setPage(1) }} />
-        <Select value={resource} onValueChange={(v) => { setResource(v); setPage(1) }}>
+        <Select value={resource || SELECT_ALL} onValueChange={(v) => { setResource(v === SELECT_ALL ? '' : v); setPage(1) }}>
           <SelectTrigger className="w-40"><SelectValue placeholder="资源类型" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部类型</SelectItem>
+            <SelectItem value={SELECT_ALL}>全部类型</SelectItem>
             {Object.entries(RESOURCE_LABELS).map(([value, label]) => (
               <SelectItem key={value} value={value}>{label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
+
+      {auditLogs.isError && (
+        <div className="notice notice-error border border-white/[0.14] px-3.5 py-2.5">
+          <Settings2 className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>加载配置操作日志失败：{auditLogs.error instanceof Error ? auditLogs.error.message : 'unknown'}</span>
+          <button type="button" className="ml-auto shrink-0 font-semibold underline underline-offset-4" onClick={() => auditLogs.refetch()}>重试</button>
+        </div>
+      )}
 
       <Card className="console-surface shadow-none">
         <CardContent className="p-0">

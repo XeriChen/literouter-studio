@@ -23,12 +23,13 @@
 | `pnpm dev:server` | 仅后端，tsx watch |
 | `pnpm dev:web` | 仅前端，Vite（/api、/openai、/anthropic 已代理到 3000） |
 | `pnpm typecheck` | `tsc --noEmit` 类型检查 |
+| `pnpm lint` | ESLint |
 | `pnpm test` | Node 原生单元测试（由 tsx 执行） |
 | `pnpm test:e2e` | Playwright 浏览器冒烟测试（先确保 `web/dist` 已构建） |
-| `pnpm check` | 类型检查 + 单元测试 + 前端生产构建（适用范围见第 8 节） |
+| `pnpm check` | 类型检查 + lint + 单元测试 + 前端生产构建（适用范围见第 8 节） |
 | `pnpm build:web` | 前端构建到 `web/dist` |
 | `pnpm start` | 生产模式：Hono 托管 API + 前端静态文件 |
-| `scripts/deploy.sh` | 本地生产机从远端拉取并部署（见 README「从远端拉取部署」） |
+| `scripts/deploy.sh` | 本地生产机从远端拉取并部署（见 README「部署与 CD 逻辑（本地作为生产机）」） |
 | `scripts/dev-worktree.sh` | 挂载/复用 worktree（默认 `dev` 分支，路径 `../literouter-dev`）并以 3001/5174 启动开发实例 |
 | `scripts/rss-sampler.sh` | 网关内存「外部」采样器（由 systemd 用户单元 `literouter-rss-sampler.service` 常驻），网关卡死时仍持续记录 cgroup/进程内存曲线到 `data/rss-sampler.log` |
 
@@ -58,9 +59,9 @@
 
 ## 6. 硬性约定
 
-- **凡需指定真实模型的管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）；`GET /api/models` 仅列出模型，不需要 body。
+- **凡需指定真实模型（`model_id`）的管理 API 一律通过 Request Body 传参**（`provider_id` / `model_id` 放 body，不用路径参数），因 `model_id` 可能含 `/`（如 `openai/gpt-4`）；纯 Provider 管理端点可用路径参数 `:id`（数字主键）；`GET /api/models` 仅列出模型，不需要 body。
 - **Provider 分组只用于管理展示**：按协议隔离，每个 Provider 最多归属一个组；删除分组只解除归属，批量删除成员才会删除 Provider 及其关联数据，分组本身不参与代理路由；批量移动只能移入同协议分组或未分组，分组启用滑块以原子操作统一启用/禁用成员。
-- **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选但只路由到唯一 active 目标，严禁请求期轮询/随机/故障转移；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
+- **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选；默认 **single** 模式只路由到唯一 `active` 目标；**weighted / failover** 按映射 `routing_config` 消费候选（加权随机 / 优先级故障转移，含冷却、单探测与亲和），禁止在请求期发明配置之外的第四种策略；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - 两协议代理入口分别挂 `/openai`、`/anthropic`；端点的版本段自动归一化（缺 `/v1` 自动补齐、多重 `/v1` 自动去重，见 `src/proxy/path.ts`）。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
 - **双分支模型与 CD 逻辑**：`main` 只作为生产镜像——生产机仅通过 `scripts/deploy.sh` 快进拉取，禁止在主仓库提交或保留未推送提交；`dev` 是开发线，在 worktree 中编码、提交并推送到 `origin/dev`。发布 = dev 快进合入 main（`git push origin dev:main` 或 GitHub PR）后在生产仓库跑 `scripts/deploy.sh`；推送 ≠ 部署，部署是显式动作。生产机上不要跑 `git reset --hard` / `git checkout --`，会静默丢掉未提交改动。
@@ -86,7 +87,7 @@
 | 只读审查、文档、规则、纯整理 | 核对内容、链接、命令和引用的一致性；有修改时运行 `git diff --check`；Skill 变更再检查 frontmatter 与安装副本，无需构建或应用测试 |
 | 局部 TypeScript 逻辑 | `pnpm typecheck` 与相关现有测试；按回归风险补充有意义的测试 |
 | 局部 UI | 涉及 TS 时类型检查，运行 `pnpm build:web` 并验证受影响的交互；布局变化检查相关桌面和移动视口 |
-| 核心代理、鉴权、数据库、共享逻辑、依赖或构建配置 | `pnpm check` 加受影响的边界验证；涉及浏览器行为或生产托管时运行适用 E2E |
+| 核心代理、鉴权、数据库、共享逻辑、依赖或构建配置 | `pnpm check`（含 lint）加受影响的边界验证；涉及浏览器行为或生产托管时运行适用 E2E |
 
 - 单元测试可按文件运行，例如 `pnpm exec tsx --test test/path.test.ts`；E2E 可用 `pnpm exec playwright test --grep '<用例名>'` 选择相关场景。现有用例未覆盖变更风险时补充针对性验证。
 - E2E 前确认 `web/dist` 已按当前前端构建、目标服务对应当前修改，并核对所需 Token 和测试数据；实际启动、复用服务和 Token 回退行为见 README。相关关键用例跳过不算验证完成，模拟 API 的 UI 用例也不证明真实后端链路可用。

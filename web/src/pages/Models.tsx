@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Box, ChevronDown, ChevronRight, ListChecks, Loader2, Plus, Search, Trash2, X } from 'lucide-react'
 import { api } from '@/api/client'
@@ -106,6 +107,7 @@ function RealModelsList() {
         body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id, enabled: m.enabled ? 0 : 1 }),
       }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); qc.invalidateQueries({ queryKey: ['aliases'] }) },
+    onError: (err) => addToast(false, `切换启用失败：${err instanceof Error ? err.message : 'unknown'}`, 0),
   })
 
   const addMutation = useMutation({
@@ -120,12 +122,14 @@ function RealModelsList() {
       qc.invalidateQueries({ queryKey: ['models'] })
       qc.invalidateQueries({ queryKey: ['aliases'] })
     },
+    onError: (err) => addToast(false, `添加模型失败：${err instanceof Error ? err.message : 'unknown'}`, 0),
   })
 
   const delMutation = useMutation({
     mutationFn: (m: ProviderModel) =>
       api('/api/models', { method: 'DELETE', body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id }) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
+    onError: (err) => addToast(false, `删除模型失败：${err instanceof Error ? err.message : 'unknown'}`, 0),
   })
 
   function modelKey(m: ProviderModel) {
@@ -148,33 +152,40 @@ function RealModelsList() {
 
   const batchDeleteMutation = useMutation({
     mutationFn: async (items: ProviderModel[]) => {
-      await Promise.all(items.map((m) =>
+      const results = await Promise.allSettled(items.map((m) =>
         api('/api/models', { method: 'DELETE', body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id }) })
       ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: items.length, failed }
     },
-    onSuccess: () => {
+    onSuccess: ({ total, failed }) => {
       setSelected(new Set()); setSelectionMode(false)
       qc.invalidateQueries({ queryKey: ['models'] })
       qc.invalidateQueries({ queryKey: ['aliases'] })
-      addToast(true, '批量删除完成', 0)
+      addToast(failed === 0, failed === 0 ? '批量删除完成' : `批量删除完成：成功 ${total - failed}，失败 ${failed}`, 0)
     },
+    onError: (err) => addToast(false, `批量删除失败：${err instanceof Error ? err.message : 'unknown'}`, 0),
   })
 
   const batchSetEnabledMutation = useMutation({
     mutationFn: async ({ items, enabled }: { items: ProviderModel[]; enabled: number }) => {
-      await Promise.all(items.map((m) =>
+      const results = await Promise.allSettled(items.map((m) =>
         api('/api/models', {
           method: 'PATCH',
           body: JSON.stringify({ provider_id: m.provider_id, model_id: m.model_id, enabled }),
         })
       ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { total: items.length, failed, enabled }
     },
-    onSuccess: (_data, { enabled }) => {
+    onSuccess: ({ total, failed, enabled }) => {
       setSelected(new Set()); setSelectionMode(false)
       qc.invalidateQueries({ queryKey: ['models'] })
       qc.invalidateQueries({ queryKey: ['aliases'] })
-      addToast(true, enabled ? '批量启用完成' : '批量禁用完成', 0)
+      const action = enabled ? '批量启用' : '批量禁用'
+      addToast(failed === 0, failed === 0 ? `${action}完成` : `${action}完成：成功 ${total - failed}，失败 ${failed}`, 0)
     },
+    onError: (err) => addToast(false, `批量更新失败：${err instanceof Error ? err.message : 'unknown'}`, 0),
   })
 
   const selectedModels = useMemo(() => {
@@ -350,8 +361,8 @@ function RealModelsList() {
   return (
     <>
     {confirmDialog}
-    {/* Batch action bar */}
-    {selectedModels.length > 0 && (
+    {/* Batch action bar：portal 到 body，避免 page-shell 动画 transform 裁切 fixed 定位 */}
+    {selectedModels.length > 0 && createPortal(
       <div style={{ bottom: `calc(${chromeInset}px + 1rem)` }} className="fixed inset-x-3 z-[90] mx-auto flex max-w-fit flex-wrap items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2.5 shadow-xl sm:gap-3 sm:px-5 sm:py-3">
         <span className="text-sm font-medium">已选 {selectedModels.length} 个模型</span>
         <div className="hidden h-4 w-px bg-border sm:block" />
@@ -374,7 +385,8 @@ function RealModelsList() {
         <Button size="sm" variant="ghost" aria-label="清除选择" onClick={() => { setSelected(new Set()); setSelectionMode(false) }}>
           <X className="h-3.5 w-3.5" />
         </Button>
-      </div>
+      </div>,
+      document.body,
     )}
 
     <NoticeStack

@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, SendHorizontal, Trash2 } from 'lucide-react'
+import { SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { authHeaders } from '@/api/client'
 import type { ModelAlias } from '@/api/types'
+import { useBottomInset } from '@/hooks/useBottomInset'
 import { Button } from '@/components/ui/button'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { Textarea } from '@/components/ui/textarea'
 import { SseDeltaParser } from '@/lib/sse'
 
 export interface ChatMessage {
+  id: string
   role: 'user' | 'assistant'
   content: string
 }
@@ -21,12 +23,35 @@ function storageKey(protocol: string, aliasName: string): string {
   return `chat:${protocol}:${aliasName}`
 }
 
+function newMessageId(): string {
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * Anthropic 要求 messages 严格交替 user/assistant 且以 user 开头。
+ * 连续同 role 合并，避免上游 400 拒绝。
+ */
+function normalizeAnthropicMessages(messages: ChatMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const merged: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  for (const message of messages) {
+    const last = merged[merged.length - 1]
+    if (last && last.role === message.role) {
+      last.content = `${last.content}\n\n${message.content}`
+    } else {
+      merged.push({ role: message.role, content: message.content })
+    }
+  }
+  while (merged.length && merged[0]!.role !== 'user') merged.shift()
+  return merged
+}
+
 export function ChatUI({ protocol, alias }: ChatUIProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomInset = useBottomInset()
 
   // ——— 持久化：按 protocol+alias 存取对话 ———
   const persistKey = alias ? storageKey(protocol, alias.alias_name) : ''
@@ -44,13 +69,19 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
       const parsed: unknown = saved ? JSON.parse(saved) : []
       setMessages(
         Array.isArray(parsed)
-          ? parsed.filter(
-            (message): message is ChatMessage =>
-              typeof message === 'object'
-              && message !== null
-              && (message.role === 'user' || message.role === 'assistant')
-              && typeof message.content === 'string',
-          )
+          ? parsed
+            .filter(
+              (message): message is { id?: string; role: 'user' | 'assistant'; content: string } =>
+                typeof message === 'object'
+                && message !== null
+                && ((message as { role?: unknown }).role === 'user' || (message as { role?: unknown }).role === 'assistant')
+                && typeof (message as { content?: unknown }).content === 'string',
+            )
+            .map((message) => ({
+              id: typeof message.id === 'string' && message.id ? message.id : newMessageId(),
+              role: message.role,
+              content: message.content,
+            }))
           : [],
       )
     } catch {
@@ -82,7 +113,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
   const send = useCallback(async () => {
     if (!input.trim() || !alias || streaming) return
 
-    const userMsg: ChatMessage = { role: 'user', content: input.trim() }
+    const userMsg: ChatMessage = { id: newMessageId(), role: 'user', content: input.trim() }
     const history = [...messages, userMsg]
     setMessages(history)
     persist(history)
@@ -95,10 +126,14 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     const path = protocol === 'openai' ? '/openai/v1/chat/completions' : '/anthropic/v1/messages'
     const payload: Record<string, unknown> = {
       model: alias.alias_name,
-      messages: history.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
     }
-    if (protocol === 'anthropic') payload.max_tokens = 4096
+    if (protocol === 'anthropic') {
+      payload.messages = normalizeAnthropicMessages(history)
+      payload.max_tokens = 4096
+    } else {
+      payload.messages = history.map((m) => ({ role: m.role, content: m.content }))
+    }
 
     let reply = ''
     let rafId: number | null = null
@@ -108,10 +143,11 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     const flush = () => {
       if (pendingReply) {
         reply = pendingReply
-        setMessages([...history, { role: 'assistant', content: reply }])
+        setMessages([...history, { id: assistantDraftId, role: 'assistant', content: reply }])
       }
       rafId = null
     }
+    const assistantDraftId = newMessageId()
 
     try {
       const res = await fetch(path, {
@@ -124,7 +160,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
       if (!res.ok) {
         const errBody = await res.text().catch(() => '')
         const errMsg = `HTTP ${res.status}${errBody ? ': ' + errBody.slice(0, 200) : ''}`
-        const errorMsg: ChatMessage = { role: 'assistant', content: `错误：${errMsg}` }
+        const errorMsg: ChatMessage = { id: assistantDraftId, role: 'assistant', content: `错误：${errMsg}` }
         const updated = [...history, errorMsg]
         setMessages(updated)
         persist(updated)
@@ -154,7 +190,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
       if (rafId !== null) cancelAnimationFrame(rafId)
       if (pendingReply) reply = pendingReply
 
-      const finalMsgs = [...history, { role: 'assistant' as const, content: reply || '(空回复)' }]
+      const finalMsgs = [...history, { id: assistantDraftId, role: 'assistant' as const, content: reply || '(空回复)' }]
       setMessages(finalMsgs)
       persist(finalMsgs)
     } catch (err) {
@@ -162,7 +198,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
         // 用户主动停止，保留已收到的部分回复
         if (reply || pendingReply) {
           if (pendingReply) reply = pendingReply
-          const partial = [...history, { role: 'assistant' as const, content: reply + ' [已中断]' }]
+          const partial = [...history, { id: assistantDraftId, role: 'assistant' as const, content: reply + ' [已中断]' }]
           setMessages(partial)
           persist(partial)
         }
@@ -170,6 +206,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
         const reason = err instanceof Error ? err.message : String(err)
         const partialReply = pendingReply || reply
         const errorMsg: ChatMessage = {
+          id: assistantDraftId,
           role: 'assistant',
           content: partialReply ? `${partialReply}\n\n[请求失败：${reason}]` : `请求失败：${reason}`,
         }
@@ -195,8 +232,8 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
             选择模型映射后开始对话
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+        {messages.map((m) => (
+          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
               className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                 m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'
@@ -217,7 +254,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
         )}
       </div>
 
-      <div className="border-t p-4">
+      <div className="border-t p-4" style={bottomInset > 0 ? { paddingBottom: `calc(1rem + ${bottomInset}px)` } : undefined}>
         <div className="flex items-end gap-2">
           <Textarea
             value={input}
@@ -240,7 +277,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
           )}
           {streaming ? (
             <Button variant="outline" size="icon" aria-label="停止生成" title="停止生成" onClick={() => abortRef.current?.abort()}>
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Square className="h-4 w-4" />
             </Button>
           ) : (
             <Button size="icon" aria-label="发送消息" title="发送消息" onClick={send} disabled={!input.trim() || !alias}>

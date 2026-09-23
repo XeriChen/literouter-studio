@@ -136,6 +136,19 @@ describe('buildProviderHeaders - custom auth', () => {
     assert.equal(headers['X-Auth'], 'abc-abc')
   })
 
+  test('does not interpret $ replacement patterns in api_key', () => {
+    const apiKey = "a$&b$'c$`d$1e$$f"
+    const provider = makeProvider({
+      protocol: 'openai',
+      auth_json: JSON.stringify({
+        api_key: apiKey,
+        custom_auth: { header_name: 'X-Auth', format: 'Bearer {key}' },
+      }),
+    })
+    const headers = buildProviderHeaders(provider)
+    assert.equal(headers['X-Auth'], `Bearer ${apiKey}`)
+  })
+
   test('Anthropic with custom auth still includes anthropic-version', () => {
     const provider = makeProvider({
       protocol: 'anthropic',

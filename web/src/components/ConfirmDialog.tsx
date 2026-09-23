@@ -51,13 +51,22 @@ export function ConfirmDialog({
   )
 }
 
-/** 把 window.confirm 换成与 Settings 一致的确认对话框；返回 true 表示用户确认。 */
+/** 把 window.confirm 换成与 Settings 一致的确认对话框；返回 true 表示用户确认。并发调用会排队，不会覆盖前一个 resolve。 */
 export function useConfirm() {
-  const [current, setCurrent] = useState<PendingConfirm | null>(null)
+  const [queue, setQueue] = useState<PendingConfirm[]>([])
+  const current = queue[0] ?? null
 
   const confirm = useCallback((options: ConfirmOptions) => {
     return new Promise<boolean>((resolve) => {
-      setCurrent({ ...options, resolve })
+      setQueue((prev) => [...prev, { ...options, resolve }])
+    })
+  }, [])
+
+  const settle = useCallback((ok: boolean) => {
+    setQueue((prev) => {
+      const [head, ...rest] = prev
+      head?.resolve(ok)
+      return rest
     })
   }, [])
 
@@ -68,14 +77,8 @@ export function useConfirm() {
       description={current.description}
       confirmLabel={current.confirmLabel}
       destructive={current.destructive}
-      onCancel={() => {
-        current.resolve(false)
-        setCurrent(null)
-      }}
-      onConfirm={() => {
-        current.resolve(true)
-        setCurrent(null)
-      }}
+      onCancel={() => settle(false)}
+      onConfirm={() => settle(true)}
     />
   ) : null
 
