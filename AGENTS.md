@@ -30,6 +30,7 @@
 | `pnpm start` | 生产模式：Hono 托管 API + 前端静态文件 |
 | `scripts/deploy.sh` | 本地生产机从远端拉取并部署（见 README「从远端拉取部署」） |
 | `scripts/dev-worktree.sh` | 挂载/复用 worktree（默认 `dev` 分支，路径 `../literouter-dev`）并以 3001/5174 启动开发实例 |
+| `scripts/rss-sampler.sh` | 网关内存「外部」采样器（由 systemd 用户单元 `literouter-rss-sampler.service` 常驻），网关卡死时仍持续记录 cgroup/进程内存曲线到 `data/rss-sampler.log` |
 
 环境约束：Node ≥ 24，统一使用 **pnpm 11.26.0**（见 `packageManager`），必须用 `tsx` 直接运行后端 TS 源码。
 
