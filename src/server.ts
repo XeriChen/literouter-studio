@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { loadEnvFile } from 'node:process'
 import { app } from './app'
 import './db'
-import { db, getSetting } from './db'
+import { db, getSetting, hasEncryptedProviderAuth } from './db'
+import { assertKeyReadyForStoredSecrets } from './crypto'
 import { getAdminToken } from './services/auth'
 import { getSettings, getLogRetentionDays } from './services/settings'
 import { cleanOldLogs } from './services/logs'
@@ -19,6 +20,10 @@ try {
 } catch {
   // 无 .env：按真实环境变量或默认值运行
 }
+
+// fail-closed：库里已有加密凭据却拿不到原密钥（env 与持久化文件都缺失）时拒绝启动，
+// 避免静默换钥后全部凭据不可解密。必须在 loadEnvFile 之后、开始对外服务之前执行。
+assertKeyReadyForStoredSecrets(hasEncryptedProviderAuth())
 
 // 首次启动初始化数据库并自动生成 admin_token
 getAdminToken()

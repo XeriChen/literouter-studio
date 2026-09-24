@@ -113,7 +113,7 @@ scripts/dev-worktree.sh        # 默认挂 dev 分支，路径 ../literouter-dev
 - `log_retention_days` 在后端启动时清理代理日志和审计日志；0 表示不自动清理。
 - 后端内置 RSS 看门狗：进程内存超过 `GATEWAY_RSS_SNAPSHOT_BYTES`（默认 1.5 GiB，设 0 关闭）时向 `data/` 写堆快照用于定位内存泄漏，两次快照至少间隔 5 分钟。
 - 数据库路径是启动进程当前目录下的 `data/gateway.db`，可用 `GATEWAY_DATA_DIR` 覆盖数据目录，请始终从项目根目录通过 pnpm 脚本启动。测试进程（`NODE_TEST_CONTEXT`）只允许把库解析到系统临时目录，否则启动即报错，避免误删真实配置。
-- `ENCRYPTION_KEY` 用于加解密 Provider 凭据：启动时依次取进程环境变量与项目根目录的 `.env`（已被 Git 忽略）。两者都没有时进程内随机生成一把密钥，并写入 `data/.generated-encryption-key`（权限 0600）；**不会打印到 stdout**。请尽快把该文件中的密钥写入 `.env`，否则重启后已存凭据将无法解密。
+- `ENCRYPTION_KEY` 用于加解密 Provider 凭据，按三级来源解析：进程环境变量/项目根目录 `.env`（已被 Git 忽略）→ 数据目录下的 `.generated-encryption-key`（上次启动自动生成，权限 0600，**重启时自动读回复用**）→ 两者皆无时随机生成并写入该文件（**不会打印到 stdout**）。建议尽快把密钥迁入 `.env`，确认生效后删除密钥文件。若库中已有加密凭据但 env 与密钥文件都缺失（如文件被误删），网关会拒绝启动而不是静默换钥——恢复原 `.env` 或密钥文件后再启动。
 - 当前为无正式用户的开发阶段，schema v11 是直接基线；遇到 schema 不兼容时可删除 `data/gateway.db` 重建，不承诺兼容早期开发版数据库或备份。
 
 ## 客户端接入

@@ -2,15 +2,9 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import Database from 'better-sqlite3'
+import { getDataDir } from '../paths'
 
-/**
- * 数据库目录：`GATEWAY_DATA_DIR` 优先，否则取进程当前目录下的 `data`。
- * 测试必须让解析结果落在系统临时目录内（import 前 `process.chdir(mkdtempSync(...))`，
- * 或设置 `GATEWAY_DATA_DIR`）。
- */
-const dataDir = process.env.GATEWAY_DATA_DIR
-  ? path.resolve(process.env.GATEWAY_DATA_DIR)
-  : path.resolve(process.cwd(), 'data')
+const dataDir = getDataDir()
 
 // 防呆：node:test 子进程（NODE_TEST_CONTEXT）只允许打开临时目录里的库。
 // 历史事故：某个测试文件静态 import 本模块、又没切 cwd，结果 DELETE/INSERT 直接打在仓库真实库上，
@@ -32,6 +26,14 @@ mkdirSync(dataDir, { recursive: true })
 export const db = new Database(path.join(dataDir, 'gateway.db'))
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
+
+/** 是否存在已加密的 Provider 凭据（启动密钥护栏使用）。 */
+export function hasEncryptedProviderAuth(): boolean {
+  const row = db
+    .prepare("SELECT COUNT(*) AS n FROM providers WHERE auth_json_encrypted IS NOT NULL AND auth_json_encrypted != ''")
+    .get() as { n: number }
+  return row.n > 0
+}
 
 /**
  * 开发阶段当前 schema 基线（v11）。旧数据库允许直接删除 data/gateway.db 后重建，

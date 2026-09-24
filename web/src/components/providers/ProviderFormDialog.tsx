@@ -101,7 +101,7 @@ export function ProviderFormDialog({
       <DialogContent className="grid max-h-[calc(100dvh-1rem)] w-[calc(100%-1rem)] max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-md p-0 sm:max-h-[calc(100dvh-2rem)] sm:w-full">
         <DialogHeader className="border-b px-4 py-4 pr-12 text-left sm:px-6 sm:py-5">
           <DialogTitle>{formMode === 'edit' ? '编辑 Provider' : formMode === 'copy' ? '复制 Provider' : '新增 Provider'}</DialogTitle>
-          <DialogDescription>API Key 会以明文存储在本机数据库中，请妥善保管。</DialogDescription>
+          <DialogDescription>API Key 使用 AES-256-GCM 加密后存储在本机数据库中；备份导出文件内为明文 JSON，请妥善保管。</DialogDescription>
           {resultNotice}
         </DialogHeader>
         <div

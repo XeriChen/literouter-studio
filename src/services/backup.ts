@@ -171,7 +171,7 @@ function parseAuthJson(authJson: string): BackupData['providers'][number]['auth'
 
 export function exportBackup(): BackupData {
   // 读原始行并用严格解密：解密失败必须让导出失败，绝不产出一份悄悄丢掉密钥的备份。
-  // （listProviders 走的是「失败回退明文列」的宽松路径，明文列恒为空，导出会静默丢密钥。）
+  // listProviders 等所有读取路径同样走严格解密，明文列（auth_json）加密后恒为空串。
   const providerRows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
   const providers = providerRows.map((p) => ({
     id: p.id,
