@@ -69,14 +69,31 @@ const browserGlobals = {
 
 export default [
   {
+    // ESLint 不读 .gitignore（含各级嵌套 .gitignore），本地工具/会话状态目录必须显式忽略，
+    // 否则 agent 工具产生的临时 .ts 文件会直接判错并让 pnpm check / 部署门禁失败。
     ignores: [
       'web/dist/**',
       'node_modules/**',
       'data/**',
       'temp/**',
       'test-results/**',
-      '.playwright-cli/**',
       'coverage/**',
+      '.remember/**',
+      '.pi/**',
+      '.claude/**',
+      '.agents/**',
+      '.mimocode/**',
+      '.opencode/**',
+      '.codebuddy/**',
+      '.zcode/**',
+      '.trae/**',
+      '.qoder/**',
+      '.superpowers/**',
+      'docs/superpowers/**',
+      '.playwright-cli/**',
+      '.playwright-mcp/**',
+      'gui-test-screenshots/**',
+      'playwright-report/**',
     ],
   },
   js.configs.recommended,
