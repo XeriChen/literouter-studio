@@ -5,6 +5,12 @@ interface DispatcherOptions {
   connectTimeout: number
   headersTimeout: number
   bodyTimeout: number
+  /**
+   * 上游一律走 HTTP/1.1。undici v8 起 `allowH2` 默认为 true，若上游 ALPN 选中 h2 就会
+   * 进入 undici 的 h2 客户端（client-h2.js）路径；网关从未选择该协议（入站也仅 h1），
+   * 且该路径在 2026-09-29 的内存突发事件中是唯一热点。显式关闭以移除该不确定性。
+   */
+  allowH2: boolean
 }
 
 const dispatcherCache = new Map<string, Dispatcher>()
@@ -12,7 +18,7 @@ const dispatcherCache = new Map<string, Dispatcher>()
 /** 按 (proxy_url, timeout_ms) 缓存复用 dispatcher；时间戳口径与 ARCHITECTURE.md §6 一致（bodyTimeout 恒为 0） */
 export function getDispatcher(proxyUrl: string | null | undefined, timeoutMs: number): Dispatcher {
   const timeout = timeoutMs || 0
-  const opts: DispatcherOptions = { connectTimeout: timeout, headersTimeout: timeout, bodyTimeout: 0 }
+  const opts: DispatcherOptions = { connectTimeout: timeout, headersTimeout: timeout, bodyTimeout: 0, allowH2: false }
   const key = `${proxyUrl ?? 'direct'}|${timeout}`
   let dispatcher = dispatcherCache.get(key)
   if (!dispatcher) {

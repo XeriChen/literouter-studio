@@ -202,7 +202,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 上游传输、请求头或 dispatcher 改动核对相关的第 1–6 项，生产托管改动核对第 7 项；路由、请求体、日志或测活改动同时核对本节及第 5 节的对应约定。跨模块改动扩大覆盖范围，文档或无关界面改动不触发整份清单。
 
-1. undici v8：超时配置在 **Agent 构造参数**（`connectTimeout`/`headersTimeout`/`bodyTimeout:0` 恒设，timeout=0 时全 0），`request()` 层不接收这些参数。
+1. undici v8：超时配置在 **Agent 构造参数**（`connectTimeout`/`headersTimeout`/`bodyTimeout:0` 恒设，timeout=0 时全 0），`request()` 层不接收这些参数。同一处显式设 `allowH2: false`：undici v8 起该开关默认为 true，上游 ALPN 选中 h2 时会启用 undici 的 h2 客户端路径；网关入站仅 h1、也从未选择上游 h2，故统一锁定 HTTP/1.1（所有上游均支持 h1，SSE 透传行为不变）。
 2. 响应 body 是 Node Readable：排空用 `.dump()`，透传 `new Response(readable)`。
 3. `accept-encoding: identity` 防上游压缩破坏 SSE。
 4. 客户端断连（`c.req.raw.signal`）立即 abort 上游；AbortError 静默，不写日志。

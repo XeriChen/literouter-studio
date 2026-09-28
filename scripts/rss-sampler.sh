@@ -111,14 +111,22 @@ proc_field() {
 
 # --- 突发捕获（perf 外部采样）------------------------------------------------
 #
-# 只统计「栈里含大块内存写（memmove/memcpy/memset）的样本」中出现的 JS 帧并计次——
-# 突发就是这些大块写，计数最高的 JS 帧即分配点。
-# perf script 每个样本是一行表头 + 若干缩进帧，样本间空行分隔。
+# perf script 每个样本是一行表头 + 若干缩进帧（叶子在前、逐级向上），样本间空行分隔。
+# 只统计「栈里含大块内存写」的样本中出现的 JS 帧并计次——突发就是这些拷贝，计数最高的
+# JS 帧即分配点。除 libc 的 memmove/memcpy/memset 外，Node 侧的大块写不以这些名字出现：
+# HTTP/2 出站缓冲是 CopyDataIntoOutgoing / nghttp2_session_pack_data，流读取是 ...OnRead。
+# 只匹配 libc 名字会漏掉整条非 libc 拷贝路径（2026-09-29 那次报告里 JS 段就是空的）。
+COPY_FRAME_RE='memmove|memcpy|memset|CopyDataIntoOutgoing|pack_data|::OnRead'
 js_frames_in_copies() {
-  awk '
+  awk -v re="$COPY_FRAME_RE" '
     /^[[:space:]]/ {
-      if (!haswrite && ($0 ~ /memmove|memcpy|memset/)) haswrite = 1
-      if (index($0, "JS:")) { f = $0; sub(/^[[:space:]]+/, "", f); frames[nframes++] = f }
+      if (!haswrite && $0 ~ re) haswrite = 1
+      if (index($0, "JS:")) {
+        f = $0
+        sub(/^[[:space:]]*[0-9a-f]+[[:space:]]+/, "", f)  # 去样本帧地址前缀
+        sub(/\+0x[0-9a-f]+.*$/, "", f)                    # 去内联偏移与 (map) 后缀
+        frames[nframes++] = f
+      }
       next
     }
     { flush() }
@@ -128,6 +136,20 @@ js_frames_in_copies() {
       haswrite = 0; nframes = 0; delete frames
     }
   ' | sort -rn | head -30
+}
+
+# 统计所有样本里出现的每一帧（原生 + JS）。top symbols 只给叶子，这里含调用者，
+# 能看出热函数是被谁调起来的（例如 h2 发送路径的调用方），且不依赖 JS 帧是否存在。
+frames_all() {
+  awk '
+    /^[[:space:]]/ {
+      f = $0
+      sub(/^[[:space:]]*[0-9a-f]+[[:space:]]+/, "", f)
+      sub(/\+0x[0-9a-f]+.*$/, "", f)
+      count[f]++
+    }
+    END { for (k in count) printf "%d %s\n", count[k], k }
+  ' | sort -rn | head -40
 }
 
 start_burst_capture() {
@@ -171,6 +193,7 @@ start_burst_capture() {
 
     local stamp; stamp="$(date +%Y%m%dT%H%M%S%z)"
     local data="$CAPTURE_DIR/perf-burst-$stamp.data"
+    local scripttxt="$CAPTURE_DIR/perf-script-$stamp.txt"
     local report="$CAPTURE_DIR/burst-$stamp.txt"
     local mapfile="/tmp/perf-$pid.map"
     local err=''
@@ -196,12 +219,17 @@ start_burst_capture() {
       # 内核地址在本机不可符号化（kallsyms 受限），全是噪声，直接滤掉
       timeout 120 perf report -i "$data" --stdio --no-children -g none 2>/dev/null \
         | awk '$1 ~ /%$/ && $0 !~ /\[unknown\]/ {print}' | head -30
+
+      # perf script 很慢（实测数十秒到 3 分钟），只跑一次落盘，两个聚合共用；有 timeout 兜底
+      timeout 180 perf script -i "$data" >"$scripttxt" 2>/dev/null || true
       printf '\n=== JS frames in large-memory-write stacks (count) ===\n'
-      timeout 180 perf script -i "$data" 2>/dev/null | js_frames_in_copies
+      js_frames_in_copies <"$scripttxt"
+      printf '\n=== all stack frames (count, reveals callers) ===\n'
+      frames_all <"$scripttxt"
     } >"$report" 2>&1
 
     [[ -r $mapfile ]] && cp -f "$mapfile" "$CAPTURE_DIR/perf-map-$stamp.map" 2>/dev/null
-    rm -f "$data"
+    rm -f "$data" "$scripttxt"
     emit "BURST-CAPTURE done report=$report"
 
     # 只保留最近 KEEP_CAPTURES 份报告（连同其 perf map）
