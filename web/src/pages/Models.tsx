@@ -410,6 +410,7 @@ function RealModelsList() {
             <Input
               className="h-8 w-40 pl-8 text-xs"
               placeholder="模型名"
+              aria-label="搜索真实模型"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value)

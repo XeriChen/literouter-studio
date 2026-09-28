@@ -241,47 +241,87 @@ function AccessLogsTab() {
 
       <Card className="console-surface shadow-none">
         <CardContent className="p-0">
-          <Table className="data-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-6">时间</TableHead>
-                <TableHead>路径</TableHead>
-                <TableHead>模型</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>真实模型</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="pr-6">耗时</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(logs.data?.rows ?? []).map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
-                  <TableCell className="max-w-[180px] truncate font-mono text-xs">{r.path}</TableCell>
-                  <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.model ?? '-'}</TableCell>
-                  <TableCell className="max-w-[120px] truncate text-xs">{r.provider_name ?? '-'}</TableCell>
-                  <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.resolved_model ?? '-'}</TableCell>
-                  <TableCell>{statusBadge(r.status)}</TableCell>
-                  <TableCell className="pr-6 text-xs text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</TableCell>
-                </TableRow>
-              ))}
-              {!logs.data?.rows.length && !logs.isLoading && (
+          <div className="hidden sm:block">
+            <Table className="data-table">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={7} className="h-32 text-center">
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <ScrollText className="h-8 w-8" />
-                      <p className="text-sm">暂无代理访问日志</p>
-                    </div>
-                  </TableCell>
+                  <TableHead className="pl-6">时间</TableHead>
+                  <TableHead>路径</TableHead>
+                  <TableHead>模型</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>真实模型</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead className="pr-6">耗时</TableHead>
                 </TableRow>
-              )}
-              {logs.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {(logs.data?.rows ?? []).map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
+                    <TableCell className="max-w-[180px] truncate font-mono text-xs">{r.path}</TableCell>
+                    <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.model ?? '-'}</TableCell>
+                    <TableCell className="max-w-[120px] truncate text-xs">{r.provider_name ?? '-'}</TableCell>
+                    <TableCell className="max-w-[140px] truncate font-mono text-xs">{r.resolved_model ?? '-'}</TableCell>
+                    <TableCell>{statusBadge(r.status)}</TableCell>
+                    <TableCell className="pr-6 text-xs text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</TableCell>
+                  </TableRow>
+                ))}
+                {!logs.data?.rows.length && !logs.isLoading && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-32 text-center">
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <ScrollText className="h-8 w-8" />
+                        <p className="text-sm">暂无代理访问日志</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {logs.isLoading && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="divide-y divide-foreground/10 sm:hidden">
+            {(logs.data?.rows ?? []).map((r) => (
+              <div key={r.id} className="space-y-1.5 p-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>
+                    {formatLogClock(r.created_at)}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {statusBadge(r.status)}
+                    <span className="font-mono text-muted-foreground">{r.latency_ms != null ? `${r.latency_ms}ms` : '-'}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 font-mono">
+                  <span className="truncate font-medium text-foreground">{r.model ?? '-'}</span>
+                  <span className="truncate text-muted-foreground text-[11px]">{r.path}</span>
+                </div>
+                {(r.provider_name || r.resolved_model) && (
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <span className="truncate">{r.provider_name ?? '-'}</span>
+                    <span>/</span>
+                    <span className="truncate font-mono">{r.resolved_model ?? '-'}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+            {!logs.data?.rows.length && !logs.isLoading && (
+              <div className="flex flex-col items-center justify-center gap-2 p-8 text-muted-foreground">
+                <ScrollText className="h-8 w-8" />
+                <p className="text-sm">暂无代理访问日志</p>
+              </div>
+            )}
+            {logs.isLoading && (
+              <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+                加载中...
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -357,45 +397,77 @@ function AuditLogsTab() {
 
       <Card className="console-surface shadow-none">
         <CardContent className="p-0">
-          <Table className="data-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-6">时间</TableHead>
-                <TableHead>资源</TableHead>
-                <TableHead>操作</TableHead>
-                <TableHead>对象</TableHead>
-                <TableHead>详情</TableHead>
-                <TableHead className="pr-6">状态</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(auditLogs.data?.rows ?? []).map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
-                  <TableCell className="text-xs">{RESOURCE_LABELS[r.resource] ?? r.resource}</TableCell>
-                  <TableCell className="text-xs">{ACTION_LABELS[r.action] ?? r.action}</TableCell>
-                  <TableCell className="max-w-[160px] truncate font-mono text-xs">{r.target ?? '-'}</TableCell>
-                  <TableCell className="max-w-[360px] truncate text-xs" title={r.detail ?? undefined}>{r.detail ?? '-'}</TableCell>
-                  <TableCell className="pr-6">{statusBadge(r.status)}</TableCell>
-                </TableRow>
-              ))}
-              {!auditLogs.data?.rows.length && !auditLogs.isLoading && (
+          <div className="hidden sm:block">
+            <Table className="data-table">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center">
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <Settings2 className="h-8 w-8" />
-                      <p className="text-sm">暂无配置操作日志</p>
-                    </div>
-                  </TableCell>
+                  <TableHead className="pl-6">时间</TableHead>
+                  <TableHead>资源</TableHead>
+                  <TableHead>操作</TableHead>
+                  <TableHead>对象</TableHead>
+                  <TableHead>详情</TableHead>
+                  <TableHead className="pr-6">状态</TableHead>
                 </TableRow>
-              )}
-              {auditLogs.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {(auditLogs.data?.rows ?? []).map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="whitespace-nowrap pl-6 font-mono text-xs text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>{formatLogClock(r.created_at)}</TableCell>
+                    <TableCell className="text-xs">{RESOURCE_LABELS[r.resource] ?? r.resource}</TableCell>
+                    <TableCell className="text-xs">{ACTION_LABELS[r.action] ?? r.action}</TableCell>
+                    <TableCell className="max-w-[160px] truncate font-mono text-xs">{r.target ?? '-'}</TableCell>
+                    <TableCell className="max-w-[360px] truncate text-xs" title={r.detail ?? undefined}>{r.detail ?? '-'}</TableCell>
+                    <TableCell className="pr-6">{statusBadge(r.status)}</TableCell>
+                  </TableRow>
+                ))}
+                {!auditLogs.data?.rows.length && !auditLogs.isLoading && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="h-32 text-center">
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <Settings2 className="h-8 w-8" />
+                        <p className="text-sm">暂无配置操作日志</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {auditLogs.isLoading && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">加载中...</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="divide-y divide-foreground/10 sm:hidden">
+            {(auditLogs.data?.rows ?? []).map((r) => (
+              <div key={r.id} className="space-y-1.5 p-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-muted-foreground" title={new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}>
+                    {formatLogClock(r.created_at)}
+                  </span>
+                  {statusBadge(r.status)}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[11px]">{RESOURCE_LABELS[r.resource] ?? r.resource}</Badge>
+                  <span className="font-medium text-foreground">{ACTION_LABELS[r.action] ?? r.action}</span>
+                  {r.target && <span className="truncate font-mono text-muted-foreground">({r.target})</span>}
+                </div>
+                {r.detail && <p className="text-[11px] text-muted-foreground break-all">{r.detail}</p>}
+              </div>
+            ))}
+            {!auditLogs.data?.rows.length && !auditLogs.isLoading && (
+              <div className="flex flex-col items-center justify-center gap-2 p-8 text-muted-foreground">
+                <Settings2 className="h-8 w-8" />
+                <p className="text-sm">暂无配置操作日志</p>
+              </div>
+            )}
+            {auditLogs.isLoading && (
+              <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+                加载中...
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 

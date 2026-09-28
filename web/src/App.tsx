@@ -18,7 +18,14 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function PageFallback() {
   return (
-    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">加载中...</div>
+    <div className="page-shell space-y-6 animate-pulse">
+      <div className="space-y-2 border-b border-foreground/10 pb-6">
+        <div className="h-3 w-20 rounded bg-muted" />
+        <div className="h-8 w-44 rounded bg-muted" />
+        <div className="h-4 w-72 rounded bg-muted" />
+      </div>
+      <div className="h-64 rounded-lg border border-foreground/10 bg-card/40" />
+    </div>
   )
 }
 

@@ -250,6 +250,7 @@ export default function Settings() {
               type="file"
               accept="application/json,.json"
               className="hidden"
+              aria-label="导入备份文件"
               onChange={(e) => {
                 const f = e.target.files?.[0] ?? null
                 if (f) {

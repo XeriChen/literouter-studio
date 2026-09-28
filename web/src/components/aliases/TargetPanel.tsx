@@ -189,9 +189,9 @@ export function TargetPanel({
                   }}
                 />
               </label>
-              {target.active && <Badge variant="outline">当前</Badge>}
-              {!target.provider_enabled && <Badge variant="destructive">Provider 已禁用</Badge>}
-              {target.provider_enabled === 1 && !target.target_enabled && <Badge variant="destructive">模型已禁用</Badge>}
+              {Boolean(target.active) && <Badge variant="outline">当前</Badge>}
+              {target.provider_enabled === 0 && <Badge variant="destructive">Provider 已禁用</Badge>}
+              {target.provider_enabled === 1 && target.target_enabled === 0 && <Badge variant="destructive">模型已禁用</Badge>}
               <div className="flex shrink-0 items-center gap-0.5">
                 <Button
                   variant="ghost"

@@ -451,7 +451,7 @@ export default function ModelAliases() {
                   }
                 }}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Eraser className="h-3.5 w-3.5" />
               </Button>
               <Button
                 variant="ghost"
@@ -558,7 +558,7 @@ export default function ModelAliases() {
       <Button size="sm" variant="ghost" onClick={async () => { setSelected(new Set()); setSelectionMode(new Set()) }} aria-label="清除选择"><X className="h-3.5 w-3.5" /></Button>
     </div>, document.body)}
     <div className="space-y-6">
-      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="映射名" value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
+      <div className="page-heading"><div><div className="eyebrow mb-2 flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> 路由键</div><h1 className="page-title">模型映射</h1><p className="page-description">按协议和分组管理映射；每个映射只会使用一个当前目标。</p></div><div className="flex flex-wrap items-center gap-2"><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="h-8 w-40 pl-8 text-xs" placeholder="映射名" aria-label="搜索模型映射" value={search} onChange={(e) => { setSearch(e.target.value); if (searchTimer.current) clearTimeout(searchTimer.current); searchTimer.current = setTimeout(() => setDebouncedSearch(e.target.value), 200) }} /></div><Select value={protocol} onValueChange={(value) => setProtocol(value as 'all' | Protocol)}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部协议</SelectItem><SelectItem value="openai">openai</SelectItem><SelectItem value="anthropic">anthropic</SelectItem></SelectContent></Select><Button
           size="icon"
           variant="outline"
           className="relative h-8 w-8 shrink-0"

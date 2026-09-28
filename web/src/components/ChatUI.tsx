@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SendHorizontal, Square, Trash2 } from 'lucide-react'
+import { Check, Copy, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { authHeaders } from '@/api/client'
 import type { ModelAlias } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { Textarea } from '@/components/ui/textarea'
 import { SseDeltaParser } from '@/lib/sse'
+import { copyText } from '@/lib/clipboard'
 
 export interface ChatMessage {
   id: string
@@ -49,6 +50,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomInset = useBottomInset()
@@ -235,14 +237,41 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+              className={`group relative max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                 m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'
               }`}
             >
               {m.role === 'user' ? (
                 <div className="whitespace-pre-wrap">{m.content}</div>
               ) : (
-                <MarkdownRenderer content={m.content} />
+                <>
+                  <MarkdownRenderer content={m.content} />
+                  <div className="mt-1 flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyText(m.content)
+                        setCopiedId(m.id)
+                        setTimeout(() => setCopiedId((curr) => curr === m.id ? null : curr), 1500)
+                      }}
+                      className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:bg-background/40"
+                      title="复制消息内容"
+                      aria-label="复制消息内容"
+                    >
+                      {copiedId === m.id ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-500" />
+                          <span className="text-emerald-500">已复制</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          <span>复制</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           </div>

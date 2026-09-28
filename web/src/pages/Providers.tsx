@@ -461,32 +461,69 @@ export default function Providers() {
     const someSelected = rows.some((provider) => selectedProviderIds.has(provider.id))
     const cols = isActive ? 6 : 5
     return (
-      <Table className="data-table">
-        <TableHeader><TableRow>
-          {isActive && <TableHead className="w-10 pl-4"><Checkbox checked={allSelected ? true : someSelected ? 'indeterminate' : false} onCheckedChange={() => toggleRowsSelection(rows)} aria-label="选择当前分组全部 Provider" /></TableHead>}
-          <TableHead>名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead>
-        </TableRow></TableHeader>
-        <TableBody>
+      <>
+        <div className="hidden sm:block">
+          <Table className="data-table">
+            <TableHeader><TableRow>
+              {isActive && <TableHead className="w-10 pl-4"><Checkbox checked={allSelected ? true : someSelected ? 'indeterminate' : false} onCheckedChange={() => toggleRowsSelection(rows)} aria-label="选择当前分组全部 Provider" /></TableHead>}
+              <TableHead>名称</TableHead><TableHead>协议</TableHead><TableHead>Base URL</TableHead><TableHead>状态</TableHead><TableHead className="pr-6 text-right">操作</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map((provider) => (
+                <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
+                  {isActive && <TableCell className="pl-4"><Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} /></TableCell>}
+                  <TableCell className="font-medium">{provider.name}</TableCell>
+                  <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
+                  <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
+                  <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
+                  <TableCell className="pr-6"><div className="flex items-center justify-end gap-1">
+                    {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="icon-button" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
+                    <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="icon-button" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="icon-button" aria-label={`编辑 ${provider.name}`} title="编辑" onClick={() => openEdit(provider)}><Pencil className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除 ${provider.name}`} title="删除" onClick={() => { void (async () => { if (await confirm({ title: '删除 Provider？', description: `确定删除 Provider「${provider.name}」？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) deleteMutation.mutate(provider.id) })() }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div></TableCell>
+                </TableRow>
+              ))}
+              {!rows.length && <TableRow><TableCell colSpan={cols} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="divide-y divide-foreground/10 sm:hidden">
           {rows.map((provider) => (
-            <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
-              {isActive && <TableCell className="pl-4"><Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} /></TableCell>}
-              <TableCell className="font-medium">{provider.name}</TableCell>
-              <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
-              <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
-              <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
-              <TableCell className="pr-6"><div className="flex items-center justify-end gap-1">
-                {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="icon-button" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
-                <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button" aria-label={`编辑 ${provider.name}`} title="编辑" onClick={() => openEdit(provider)}><Pencil className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="icon-button hover:text-destructive" aria-label={`删除 ${provider.name}`} title="删除" onClick={() => { void (async () => { if (await confirm({ title: '删除 Provider？', description: `确定删除 Provider「${provider.name}」？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) deleteMutation.mutate(provider.id) })() }}><Trash2 className="h-3.5 w-3.5" /></Button>
-              </div></TableCell>
-            </TableRow>
+            <div key={provider.id} className={`space-y-2 p-3 text-xs ${selectedProviderIds.has(provider.id) ? 'bg-muted/50' : ''}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {isActive && <Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} />}
+                  <span className="font-semibold text-foreground truncate">{provider.name}</span>
+                  <Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'} className="text-[10px] shrink-0">{provider.protocol}</Badge>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[11px] text-muted-foreground">{provider.enabled ? '已启用' : '已禁用'}</span>
+                  <Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} />
+                </div>
+              </div>
+              <div className="min-w-0">
+                <a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline" title={provider.base_url}>
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{provider.base_url}</span>
+                </a>
+              </div>
+              <div className="flex items-center justify-end gap-1 pt-1 border-t border-foreground/5">
+                {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`编辑 ${provider.name}`} title="编辑" onClick={() => openEdit(provider)}><Pencil className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" aria-label={`删除 ${provider.name}`} title="删除" onClick={() => { void (async () => { if (await confirm({ title: '删除 Provider？', description: `确定删除 Provider「${provider.name}」？关联的模型也会一并删除。`, confirmLabel: '删除', destructive: true })) deleteMutation.mutate(provider.id) })() }}><Trash2 className="h-3.5 w-3.5" /></Button>
+              </div>
+            </div>
           ))}
-          {!rows.length && <TableRow><TableCell colSpan={cols} className="h-16 text-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</TableCell></TableRow>}
-        </TableBody>
-      </Table>
+          {!rows.length && <div className="h-16 flex items-center justify-center text-xs text-muted-foreground">暂无 Provider，可从右上角新增。</div>}
+        </div>
+      </>
     )
   }
 
