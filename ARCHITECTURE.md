@@ -66,19 +66,21 @@ data/gateway.db    按 process.cwd() 定位并在运行时自动创建（不入�
 | 表 | 说明 |
 | :--- | :--- |
 | `provider_groups` | Provider 管理分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
-| `providers` | 上游 Provider：可选归组，protocol(openai/anthropic)、base_url、auth_json_encrypted（AES-256-GCM 加密存储）、custom_headers_json、proxy_url、timeout_ms、model_filter、upstream_type(newapi/sub2api，余额能力判别)、enabled |
+| `providers` | 上游 Provider：可选归组，protocol(openai/anthropic)、base_url、auth_json_encrypted（AES-256-GCM 加密存储，含单 Key 或多 Key 池）、custom_headers_json、proxy_url、timeout_ms、model_filter、upstream_type(newapi/sub2api，余额能力判别)、enabled |
 | `provider_models` | 真实模型：PK(provider_id, model_id)，display_name、enabled、source(fetched/manual)、fetched_at |
 | `model_alias_groups` | 映射分组：PK(protocol, id)，同协议组名唯一；只用于管理展示 |
 | `model_aliases` | **映射层**：PK(protocol, alias_name)，可归组，拥有独立 enabled 开关；`thinking_json` 为可选思考等级配置（`{mode:override/default, value:协议原生值}`）；`routing_config_json` 为路由配置（`{mode:'single'|'weighted'|'failover', ...}`，默认 single） |
 | `model_alias_targets` | 映射候选：指向真实模型，带 priority/active/weight（默认 100，0-10000）；single 模式只用 active，weighted 按 weight 加权随机分配，failover 按 priority 故障转移（代理路径实际消费这些字段） |
 | `settings` | key/value：admin_token、host、port、global_timeout_ms、log_retention_days、health_check_interval_seconds |
-| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读）；prompt_tokens/completion_tokens/total_tokens 为被动解析的用量（响应未携带 usage 时为 null），attempt 为多候选重试的第几次尝试（1 起） |
+| `logs` | 代理访问日志（模型请求），latency_ms 为首包耗时；model=请求映射名，provider_name/resolved_model=实际路由的提供商名与真实模型名（冗余存储，删除 Provider/真实模型后日志仍可读）；prompt_tokens/completion_tokens/total_tokens 为被动解析的用量（响应未携带 usage 时为 null），attempt 为本次请求第几次实际出站尝试（跨 Key 与候选，从 1 起） |
 | `balance_snapshots` | 余额日快照：UNIQUE(provider_id, day_key)，后写覆盖；仅查询成功且 balance 非空时落库；不含在备份内（派生数据） |
 | `audit_logs` | 配置操作日志（管理 API 增删改/测活/备份/登录等），字段：resource/target/action/detail/status |
 
 当前处于无正式用户的开发阶段，schema v11 直接作为基线；相关 schema 开发任务中允许破坏性变更及删除 `data/gateway.db` 重建，不保留历史 v1–v5 运行时迁移路径（仅保留 v6→v11 的守卫式加列/建表）。该许可不作为日常整理或排障的默认步骤。正式部署前需重新确认迁移与兼容策略。
 
 **密钥加密（schema v9 新增）：** Provider 的 `auth_json` 使用 AES-256-GCM 加密存储为 `auth_json_encrypted`。加密密钥按三级来源解析：环境变量/项目根 `.env` 的 `ENCRYPTION_KEY`（64 位十六进制字符串）→ 数据目录下的 `.generated-encryption-key`（上次启动自动生成、0600，**重启时自动读回复用**）→ 两者皆无时现场随机生成并写入该文件，同时提示尽快迁入 `.env`（**不打印密钥到 stdout**）。启动护栏（`assertKeyReadyForStoredSecrets`，`src/crypto.ts`，在 `loadEnvFile` 之后、对外服务之前执行）：若数据库已存在加密凭据而密钥只能现场新生成（env 与密钥文件都缺失），或 env 密钥格式非法、持久化文件内容损坏，网关直接抛错拒绝启动（fail-closed），防止静默换钥导致凭据永久不可解密。密钥文件与数据库共用同一数据目录解析（支持 `GATEWAY_DATA_DIR`）。备份导出/导入仍使用明文 JSON 格式（`auth_json` 字段），导入时自动加密存储。
+
+**Provider Key 池：** 旧配置 `auth.api_key` 保持单 Key 语义；多 Key 使用同一加密 `auth_json` 中的 `auth.api_keys:[{id,name,key,enabled}]` 和 `auth.key_strategy`（`polling` 默认、`random`、`priority`）。ID 在 Provider 内唯一且稳定；数组顺序即 priority 顺序。禁用的 Key 不参与代理。Key 池只决定同一 Provider 的上游认证头，不更改请求体；候选的 `weight` 仍仅决定候选分配，不参与 Key 选择。管理页可逐把增删、启停和排序；`GET /api/providers`/详情额外返回不含密钥的 `key_health:[{id,cooldown_until}]`，池与状态均随备份配置恢复或进程重启分别恢复/清空。
 
 ## 5. 核心概念：模型映射（路由键）
 
@@ -107,7 +109,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 
 | 端点 | 用途 |
 | :--- | :--- |
-| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改）；GET 列表包含每个 Provider 的 `last_called_at`（代理访问日志中的最近请求时间，无记录为 null） |
+| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改）；`auth` 支持单 `api_key` 或多 `api_keys`/`key_strategy`；GET 含 `last_called_at` 与 Key 冷却摘要 `key_health` |
 | `GET/POST/PATCH/DELETE /provider-groups` | Provider 分组 CRUD；删除组只解除成员归属 |
 | `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-toggle`、`POST /provider-groups/batch-delete` | 原子批量启用/禁用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
@@ -159,11 +161,11 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 model
      → model 查已启用映射的全部可用候选（findRoute，按 priority ASC 排序）
      → buildCandidateOrder 按路由模式生成尝试顺序 → pickCandidate 经健康状态机选出本次候选
-     → 按候选真实模型名定点改写 body → 构造上游 URL（过 assertSafeOutboundUrl 兜底校验）
+     → 按候选真实模型名定点改写 body → 选择该 Provider 可用 Key → 构造上游 URL（过 assertSafeOutboundUrl 兜底校验）
      → undici 请求(dispatcher 按 proxy_url+timeout 缓存)
      → 收到响应头 → 立即写日志(latency = 本次尝试首包耗时, attempt=第几次尝试)
-     → 2xx/3xx/4xx(除可重试状态) 原样透传并计成功；5xx/401/403/408/429 或网络错误
-       （均发生在首个字节写给客户端之前）→ 记失败并尝试下一候选；候选耗尽后返回最后错误
+     → 2xx/3xx/普通 4xx 原样透传；5xx/401/402/403/408/429 或明确未发送的连接错误
+       （均发生在首个字节写给客户端之前）→ 冷却该 Key 并试同 Provider 下一 Key；Key 用尽才换候选
 ```
 
 路由模式（`src/services/routing.ts` 的 `buildCandidateOrder`）：
@@ -172,14 +174,15 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - **failover**：`priority ASC, id ASC` 严格顺序
 
 健康状态机（`src/services/health.ts`，纯进程内，重启即清空）：
-- **重试上限**：单次请求最多尝试 `min(max_attempts, 候选数)` 个候选；max_attempts 未配置 = 尝试全部
-- **冷却**：同一候选跨请求连续失败达阈值（固定为 1）后，`cooldown_seconds`（默认 60）内被选路跳过；`cooldown_seconds=0` 关闭冷却
-- **single 模式免疫**：single 模式（默认）保持 v8 行为，失败不进入冷却、成功不计亲和，避免单候选因上游偶发故障停摆
-- **单探测**：全部候选都在冷却时，仅放行一个请求到最早到期的候选做探测（探测位独占 120s TTL），其余请求立刻 503 `no_available_target`
+- **重试上限**：单次请求最多尝试 `min(max_attempts, 候选数)` 个候选；max_attempts 未配置 = 尝试全部。一个候选内最多尝试当时可用的每把 Key 一次；Key 尝试不占候选预算
+- **候选冷却**：无 Key 池的候选失败后，以 `Retry-After`/限流重置头指定的时长或 `cooldown_seconds`（默认 60）冷却；`cooldown_seconds: 0` 显式关闭冷却，此时上游 `Retry-After` 也不再生效；Key 池候选由 Key 各自的状态控制，避免候选冷却掩盖已恢复的 Key
+- **Key 冷却**：401/402/403 冷却整把 Key；429/408/5xx/明确未发送的连接错误按真实模型冷却该 Key。优先采用 `Retry-After`（秒或 HTTP 日期）和 Anthropic/OpenAI 限流重置头，最长 1 小时，否则用 `cooldown_seconds`（显式配 0 同样关闭 Key 冷却，含 `Retry-After`）。普通 4xx 是请求错误，不切 Key、不冷却。状态只在进程内，修改 Provider 认证或导入备份时清空
+- **single 模式**：旧单 Key 配置保持原有行为，不进入候选冷却、成功不计亲和；多 Key 配置仍启用 Key 自身的冷却和恢复探测
+- **单探测**：代理选路在候选或 Key 冷却到期后仅放行一个请求探测；探测完成前并发请求跳过该成员。代理请求不会在冷却未到期时提前探测（另行启用的周期健康探针可主动请求冷却中的候选）；无可用候选返回 503 `no_available_target`，无可用 Key 返回 503 `no_available_key`
 - **亲和**：探测或故障切换后的成功可在 `affinity_seconds` 内把后续请求固定到该候选（未配置则不启用）
 - **客户端取消不计失败**；探测请求被取消时立即释放探测位
 
-重试只在「首个响应字节写给客户端之前」进行：一旦透传流开始，不再切换候选。每 attempt 各写一条访问日志（`attempt` 列），客户端最终收到的是最后一个候选的结果。
+重试只在「首个响应字节写给客户端之前」进行：一旦透传流开始，不再切换 Key 或候选。响应头前的传输异常也可能发生在上游已收到请求之后，只有连接建立前的错误（如连接超时/拒绝、DNS 失败）可确认未发送并重试；响应头超时、连接中断等结果不明时直接返回 504/502，防止重复计费。每次实际上游尝试各写一条访问日志（`attempt` 列）。单 Key 的 single 模式保持原有 401/403/408/429 直接透传；多 Key 的 single 模式先换 Key，用尽后包装为 502/504 或返回无可用 Key 的 503。上游提供 `Retry-After` 时，包装错误也保留该头。
 
 被动 usage 统计（`src/proxy/usage.ts`）：透传流内扫描未转义的 JSON token 键（`prompt_tokens`/`completion_tokens`/`total_tokens`/`input_tokens`/`output_tokens` 及 Anthropic cache token 键），同键取最后一次出现；**绝不向任何请求注入字段**（因此 OpenAI 流式仅当客户端自行开启 `stream_options.include_usage` 时可见 usage，未携带时列为 null，属预期精度边界）。字符串值内的引号必然被转义，模型输出内容不会误触发计数。
 
@@ -190,8 +193,8 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - `src/proxy/body.ts` 先按 `Content-Length` 快速拒绝超限请求，再通过 `ReadableStream` 分块读取，累计超过 50 MiB 时立即取消读取。
 - 代理只接受顶层 JSON object 且 `model` 必须是非空字符串。解析器保留原文中顶层 `model` 字符串及 `thinking`/`reasoning_effort` 值的字节范围，路由成功后做定点替换（模型名恒替换；思考字段按映射配置的 override/default 改写，缺失时在对象开头注入）；不重新序列化 JSON，因此空白、字段顺序、数字精度、转义和其他同名字段都保持不变。重复键遵循 `JSON.parse` 的最后一个键语义；思考字段重复时仅替换最后一次出现的值。
 - 上游响应 body 是 Node `Readable`：成功与 3xx/4xx 响应用 `new Response(readable)` 透传，5xx 或无需返回 body 时调用 `.dump()` 排空；上游缺少 `content-type` 时默认补 `application/json`。
-- 上游 3xx/4xx 保留状态码与响应体（401/403/408/429 除外——它们被视为「该候选的故障」，在首字节前触发换候选重试；候选耗尽后客户端收到 502/504 包装；single 模式仅一次尝试，这些状态直接透传原始响应，含 `Retry-After` 等头）；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
-- 转发请求丢弃 hop-by-hop、客户端认证和 `content-length`，强制 `accept-encoding: identity`；Provider 认证头最后写入，`custom_headers` 不能覆盖 `authorization`、`x-api-key`、`api-key` 或 `accept-encoding`。
+- 上游 3xx/普通 4xx 保留状态码与响应体（401/402/403/408/429 视为凭据或上游故障，按上文重试；候选耗尽后客户端收到 502/504 包装；旧单 Key 的 single 模式仍直接透传这些状态）；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
+- 转发请求丢弃 hop-by-hop、客户端认证和 `content-length`，强制 `accept-encoding: identity`；Provider 认证头最后写入，`custom_headers` 不能覆盖网关已写入的认证/协议头和 `accept-encoding`；未配置 Key 的 Provider 不写入认证头，可用 `custom_headers` 自带（如 `authorization`）。
 - 收到上游响应头即写访问日志：`latency_ms` 是首包耗时，`status` 记录上游原始状态，`model` 记请求的映射名，`provider_name` / `resolved_model` 记实际路由的提供商名称与真实模型名（冗余落库）。因此上游 5xx 虽向客户端转换为 502，日志仍保留实际的上游 5xx；映射/超时等网关失败则记录网关状态与 `error_code`。
 
 ### 生产静态资源与 SPA 回退
@@ -206,7 +209,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 2. 响应 body 是 Node Readable：排空用 `.dump()`，透传 `new Response(readable)`。
 3. `accept-encoding: identity` 防上游压缩破坏 SSE。
 4. 客户端断连（`c.req.raw.signal`）立即 abort 上游；AbortError 静默，不写日志。
-5. `custom_headers` 禁覆盖 `authorization` / `x-api-key` / `api-key` / `accept-encoding`。
+5. `custom_headers` 禁覆盖网关已写入的认证头与 `accept-encoding`；无 Key 的 Provider 未写入认证头，可用它自带认证。
 6. 日志在收到响应头时立即写入（首包），`latency_ms`=本次尝试请求→响应头；每 attempt 一条日志，`attempt` 列区分重试序号。
 7. 生产 SPA fallback：仅非 `/api`、非静态资源的 GET 回 index.html；`/api` 未匹配 404 JSON。
 
@@ -225,6 +228,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
 - Providers 页按协议和自定义分组折叠展示；页头可按 Provider 名称或地址即时搜索、按分组筛选，并将分组按创建时间或组内最近一次代理调用时间排序（无调用排后，未分组也参与排序）。筛选只改变展示，分组启停与清空仍作用于完整分组。支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。`upstream_type` 选为 New API 或 Sub2API 时表单额外出现「Access Token」输入项（可选，仅用于余额查询、不参与代理转发）：newapi 用它查用户总余额 `GET /api/user/self`，sub2api 用它查/回退 `GET /api/v1/auth/me`。拉取导入弹窗按已入库状态标记每行「已导入」（source='fetched'）或「已添加」（手动添加），支持对已导入模型单个「取消导入」（删除该真实模型，同名映射保留），以及一键清理该 Provider 全部拉取导入的模型（手动添加不受影响）；上游列表拉取失败时弹窗仍可重试并清理已导入模型，状态查询失败时也可直接调用清理 API。Provider 卡片右上角显示余额查询按钮（仅 `upstream_type` 为 newapi/sub2api 时可见），点击以结果提示展示 newapi 系的用户总余额/令牌额度明细与令牌到期日（sub2api 展示用户余额、无限额/剩余、已用成本与套餐限额）；查询带缓存，避免重复打上游。
 - Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
+- Provider 表单可管理同渠道多把 Key：逐把命名、启停、删除和重排，选择轮询/随机/顺序优先策略；列表展示已启用数量及进程内冷却摘要。复制 Provider 会复制当前 Key 池配置，不复制运行时冷却状态。
 - Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选；候选面板内可直接编辑路由模式（single/weighted/failover 与尝试数/冷却/亲和参数）和各候选的分配权重；分组支持「导入映射」——在弹窗内模糊搜索映射名后批量移入；新增候选与新建映射的模型选择为可搜索下拉（按模型 ID/显示名/Provider 名模糊匹配，已存在的候选置灰）：新增候选的搜索覆盖同协议全部已启用 Provider 的模型并按 Provider 分组展示，选中后自动回填 Provider 与模型；新建映射在所选 Provider 内搜索，选中模型后可一键把真实模型名填为映射名（映射名为空时自动填入）；页头「清理无效映射」一键删除无任何候选目标（候选指向的真实模型/Provider 已不存在）的映射，确认后按当前协议筛选范围批量删除）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
 - Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
@@ -246,6 +250,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 10. **路径归一化的边界**：代理端点 v1 段归一化后，未知 POST 路径会原样转发上游、由上游回 4xx，网关不再本地判 `not_found`；非模型列表的 GET 按「只接受 POST」规则返回 405。路径中任何 `v1` 段（忽略大小写）都会被剔除——若未来上游真有含字面 `v1` 段的端点会被误伤（当前两协议端点集不存在）。
 11. **加密密钥管理（schema v9 新增）**：Provider 认证数据使用 AES-256-GCM 加密存储。密钥三级来源：环境变量/`.env` 的 `ENCRYPTION_KEY`（64 位十六进制字符串）→ 数据目录下自动读回的 `.generated-encryption-key`（0600，重启复用）→ 两者皆无时现场随机生成并落盘，提示写入 `.env`（不打印密钥）。启动护栏：已有加密凭据却只能现场生成新密钥（env 与文件都缺失/非法）时拒绝启动，防止凭据静默永久不可解密。备份导出为明文 JSON（便于迁移和审查），导入时自动加密存储。解密策略：代理转发、配置读取与备份导出统一走严格解密——任一 Provider 解密失败即抛错（代理路径转 502 `upstream_error`，备份导出为 `backup_export_failed`），绝不静默回退空凭据出站或产出缺密钥的备份。读取路径统一使用 `src/providers/headers.ts` 的解密助手，禁止直接使用原始 `auth_json` 列（该列加密后恒为空串）。
 12. **路由模式边界（v11 起真实落地）**：weighted 模式的加权随机在每次请求时独立执行，不保证严格按权重比例分配（短期流量可能偏离预期比例）；failover 与 weighted 的失败切换只发生在首个响应字节写给客户端之前，透传流开始后的失败不会重试；健康状态（冷却/探测位/亲和）纯进程内存储，重启即清空，多实例部署不共享（本项目按单进程设计，见第 2 条）。`max_attempts` 仅表示「单次请求尝试上限」；连续失败冷却阈值固定为 1，与 `max_attempts` 无关。路由配置缺失或非法时回退到 single 模式。
+    - 多 Key 时 `max_attempts` 只限制候选数，同一候选内换 Key 不消耗该预算；Key 的认证故障跨模型冷却，限流及上游故障按真实模型冷却。Key 健康状态也只在内存中，Provider 认证更新会清除该 Provider 的状态。管理测试/拉模型/余额读取首把启用 Key，不执行代理层 Key 池故障转移。
 13. **被动 usage 的精度边界（v11 新增）**：用量解析只统计客户端可见响应中的 usage——OpenAI 流式默认不回 usage（客户端未开 `stream_options.include_usage` 时日志列为 null）；Anthropic SSE 取 message_start/message_delta 的累计值。usage 键识别依赖「JSON 字符串值内引号必然转义」这一性质，若上游返回非法 JSON（键未转义）可能误计。
 14. **余额能力泛化（v10→v11 演进）**：余额查询按 `upstream_type` 经能力描述符（`src/services/upstream-capabilities.ts`）判别，不支持时返回 400 `balance_unsupported` 而非抛错；`GET /api/providers/:id/balance` 带 60s TTL 缓存与在途去重（`?force=1` 跳过缓存直连上游，但非 force 的重复查询受 10s 最小间隔保护）；查询成功且 balance 非空时 upsert 当日快照（`balance_snapshots`，后写覆盖）。快照与用量均为派生数据，不含在备份内。错误信息经 `redactText` 脱敏后才写入审计日志。
     - **newapi 系令牌额度走 OpenAI 兼容 billing；用户总余额走 access_token + `/api/user/self`**：令牌额度用代理 `sk-` 密钥（TokenAuth）调 `GET {base}/v1/dashboard/billing/subscription` 与 `/usage?start_date&end_date`（base_url 结尾带不带 `/v1` 均兼容；one-api/new-api/veloera 系 fork 同时注册 `/dashboard` 与 `/v1/dashboard`），公式与 new-api 自身探测上游渠道一致：`剩余 = hard_limit_usd - total_usage/100`（total_usage 单位为美分），并从 `access_until`（unix 秒，0=永不过期）解析 `expires_at`。**用户总余额**：Provider 配置了 `access_token`（控制台登录态 JWT/PAT，表单「Access Token」字段，不参与代理转发）时额外调用控制台 `GET {root}/api/user/self`（UserAuth；sk- 密钥打该接口会 401，与 all-api-hub/newapi-ai-check-in 同源），解析信封 `data.quota`/`data.used_quota`，按 new-api 默认 `QuotaPerUnit=500000` 换算美元（站点自定义该常数时展示会偏移）。两侧都成功则 `balance` 以**用户总余额**为准，balances 输出「用户余额/用户已用 + 令牌剩余/令牌已用/令牌总额」；仅 billing 成功则保持原令牌额度语义；仅 access_token 成功则只报用户余额。subscription 是令牌侧必要数据；usage 返回非 200/坏响应时降级为只报 `hard_limit_usd`（此时「剩余」实为总额度，balances 不输出「已用」）；subscription 以 HTTP 200 返回 `{error}` 体时按上游错误处理。站点切到 CNY/Tokens 额度展示模式时 `*_usd` 字段实际不是美元，调用方无从识别，统一仍标 USD。**无限额令牌**：new-api 的 GetSubscription 对 `token.UnlimitedQuota` 硬编码 `hard_limit_usd = 100000000`（三种额度展示模式下同值），网关精确匹配该哨兵后在**仅 billing**路径返回 `unlimited=true`、`balance=null`，balances 只保留「已用」用量项（usage 也不可用则为空数组）；若同时取到用户总余额，则主余额为有限的用户余额（`unlimited=false`），并保留令牌侧「已用」明细。哨兵差 1（99999999）的真实大额额度仍按有限额度计算。经典 one-api 的无限额哨兵是 400，与真实 400 美元额度无法区分，故意不识别（误判真实额度为无限额更糟）。sub2api 主路径走**数据面** `GET {base}/v1/usage`（Bearer = 代理 API Key，与推理同源，cc-switch 的用量脚本打的也是这个端点；不是已不存在的 `/api/v1/users/profile`）：`mode === "unrestricted"` 或 `remaining < 0` 判为无限额（`balance=null`，balances 只留「已用」= `usage.total.cost`），否则 `balance` 取 `remaining`，缺失时按「限额 - 窗口用量」最紧的一档（日/周/月，limit 为 0 表示该窗口不限）推算、再退到顶层 `balance`；balances 输出「剩余 / 已用 / 各窗口限额」，`expires_at` 取 `subscription.expires_at`（远未来时间戳按永不过期处理）。配置了 `access_token` 且与 API Key 不同时，另调控制台 `GET {base}/api/v1/auth/me` 取**用户总余额**并合并（balances 置顶「用户余额」，主余额优先用户侧）；`/v1/usage` 以 401/403 拒绝时回退控制台端点：返回 `{code, message, data}` 信封（`code != 0` 即上游错误，含 HTTP 200 返回业务错误的场景；401/403 归为鉴权错误），取 `data.balance`（美元，兼容数字字符串）作为余额；凭据顺序为 `access_token`（Provider 表单「Access Token」字段，仅用于余额查询、不参与代理转发）优先、`api_key` 兜底，仅 API Key 被拒时错误信息提示补填 JWT。

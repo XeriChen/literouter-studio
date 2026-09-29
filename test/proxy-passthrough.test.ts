@@ -17,6 +17,8 @@ const providers = await import('../src/services/providers')
 const models = await import('../src/services/models')
 const { getAdminToken } = await import('../src/services/auth')
 const { proxyRoutes } = await import('../src/routes/proxy')
+const { isSafeToRetryTransportError } = await import('../src/proxy')
+const { getHealthSnapshot } = await import('../src/services/health')
 
 let upstream: Server | undefined
 let upstreamPort = 0
@@ -102,7 +104,7 @@ test('failover mode still wraps retryable 4xx as 502 instead of passing it throu
     res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '30' })
     res.end(JSON.stringify({ error: { message: 'rate limited', type: 'rate_limit_error' } }))
   })
-  await setupSingleAlias('http://127.0.0.1:' + upstreamPort, 'failover-alias', { mode: 'failover', max_attempts: 1, cooldown_seconds: 30 })
+  await setupSingleAlias('http://127.0.0.1:' + upstreamPort, 'failover-alias', { mode: 'failover', max_attempts: 1, cooldown_seconds: 60 })
 
   const app = appWithProxy()
   const res = await app.request('http://localhost/openai/v1/chat/completions', {
@@ -112,9 +114,11 @@ test('failover mode still wraps retryable 4xx as 502 instead of passing it throu
   })
 
   assert.equal(res.status, 502)
-  assert.equal(res.headers.get('retry-after'), null)
+  assert.equal(res.headers.get('retry-after'), '30')
   const body = await res.json() as { error: { code: string } }
   assert.equal(body.error.code, 'upstream_rate_limited')
+  const remaining = getHealthSnapshot('openai/failover-alias').cooldowns[0]!.until - Date.now()
+  assert.ok(remaining > 25_000 && remaining <= 30_000)
 })
 
 test('single mode still wraps upstream 5xx as 502', async () => {
@@ -223,4 +227,90 @@ test('proxy fails closed when provider credentials cannot be decrypted', async (
   assert.equal(res.status, 502)
   const body = await res.json() as { error: { code: string } }
   assert.equal(body.error.code, 'upstream_error')
+})
+
+test('failover exhausts provider keys before moving to the next candidate', async () => {
+  const seen: Array<{ key: string | undefined; body: string }> = []
+  upstreamPort = await startUpstream((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      const key = req.headers.authorization
+      seen.push({ key, body: Buffer.concat(chunks).toString() })
+      if (key === 'Bearer sk-last') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{"ok":true}')
+      } else {
+        res.writeHead(429, { 'retry-after': '20' })
+        res.end('{"error":"quota"}')
+      }
+    })
+  })
+  const base = 'http://127.0.0.1:' + upstreamPort
+  const first = providers.createProvider({ name: 'pool-first', protocol: 'openai', group_id: null, base_url: base, auth_json: JSON.stringify({ api_keys: [
+    { id: 'a', name: 'A', key: 'sk-a', enabled: true },
+    { id: 'b', name: 'B', key: 'sk-b', enabled: true },
+  ], key_strategy: 'priority' }), custom_headers_json: '{}', proxy_url: null, timeout_ms: null, model_filter: null })
+  const second = providers.createProvider({ name: 'pool-second', protocol: 'openai', group_id: null, base_url: base, auth_json: JSON.stringify({ api_key: 'sk-last' }), custom_headers_json: '{}', proxy_url: null, timeout_ms: null, model_filter: null })
+  models.addModel({ provider_id: first.id, model_id: 'real-model', display_name: null })
+  models.addModel({ provider_id: second.id, model_id: 'real-model', display_name: null })
+  models.addAlias({ protocol: 'openai', alias_name: 'pool-failover', provider_id: first.id, model_id: 'real-model', routing_config: { mode: 'failover' } })
+  models.addAliasTarget({ protocol: 'openai', alias_name: 'pool-failover', provider_id: second.id, model_id: 'real-model' })
+
+  const res = await appWithProxy().request('http://localhost/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' },
+    body: '{"model":"pool-failover", "messages":[], "metadata":{"model":"untouched"}}',
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(seen.map((item) => item.key), ['Bearer sk-a', 'Bearer sk-b', 'Bearer sk-last'])
+  assert.ok(seen.every((item) => item.body === '{"model":"real-model", "messages":[], "metadata":{"model":"untouched"}}'))
+})
+
+test('request error is passed through without switching keys', async () => {
+  const seen: string[] = []
+  upstreamPort = await startUpstream((req, res) => {
+    seen.push(req.headers.authorization ?? '')
+    res.writeHead(400, { 'content-type': 'application/json' })
+    res.end('{"error":"invalid_parameter"}')
+  })
+  const provider = providers.createProvider({ name: 'pool-400', protocol: 'openai', group_id: null, base_url: 'http://127.0.0.1:' + upstreamPort, auth_json: JSON.stringify({ api_keys: [
+    { id: 'a', name: 'A', key: 'sk-a', enabled: true },
+    { id: 'b', name: 'B', key: 'sk-b', enabled: true },
+  ] }), custom_headers_json: '{}', proxy_url: null, timeout_ms: null, model_filter: null })
+  models.addModel({ provider_id: provider.id, model_id: 'real-model', display_name: null })
+  models.addAlias({ protocol: 'openai', alias_name: 'pool-invalid', provider_id: provider.id, model_id: 'real-model', routing_config: { mode: 'failover' } })
+  const res = await appWithProxy().request('http://localhost/openai/v1/chat/completions', {
+    method: 'POST', headers: { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'pool-invalid', messages: [] }),
+  })
+  assert.equal(res.status, 400)
+  assert.deepEqual(seen, ['Bearer sk-a'])
+})
+
+test('headers timeout does not replay an ambiguously sent request on another key', async () => {
+  const seen: string[] = []
+  upstreamPort = await startUpstream((req) => {
+    seen.push(req.headers.authorization ?? '')
+    req.resume()
+  })
+  const provider = providers.createProvider({ name: 'pool-timeout', protocol: 'openai', group_id: null, base_url: 'http://127.0.0.1:' + upstreamPort, auth_json: JSON.stringify({ api_keys: [
+    { id: 'a', name: 'A', key: 'sk-a', enabled: true },
+    { id: 'b', name: 'B', key: 'sk-b', enabled: true },
+  ] }), custom_headers_json: '{}', proxy_url: null, timeout_ms: 150, model_filter: null })
+  models.addModel({ provider_id: provider.id, model_id: 'real-model', display_name: null })
+  models.addAlias({ protocol: 'openai', alias_name: 'pool-timeout', provider_id: provider.id, model_id: 'real-model' })
+  const res = await appWithProxy().request('http://localhost/openai/v1/chat/completions', {
+    method: 'POST', headers: { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'pool-timeout', messages: [] }),
+  })
+  assert.equal(res.status, 504)
+  assert.deepEqual(seen, ['Bearer sk-a'])
+})
+
+test('only connection-stage transport errors are safe to retry', () => {
+  assert.equal(isSafeToRetryTransportError(Object.assign(new Error('connect'), { code: 'UND_ERR_CONNECT_TIMEOUT' })), true)
+  assert.equal(isSafeToRetryTransportError(new Error('wrapped', { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) })), true)
+  assert.equal(isSafeToRetryTransportError(Object.assign(new Error('headers'), { code: 'UND_ERR_HEADERS_TIMEOUT' })), false)
+  assert.equal(isSafeToRetryTransportError(Object.assign(new Error('socket'), { code: 'UND_ERR_SOCKET' })), false)
 })

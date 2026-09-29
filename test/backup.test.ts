@@ -86,6 +86,21 @@ test('backup import stores auth encrypted (plaintext column empty) and preserves
   assert.deepEqual(JSON.parse(restored.auth_json), auth)
 })
 
+test('backup roundtrip preserves multi-key order, enablement and selection strategy', () => {
+  const auth = { api_keys: [
+    { id: 'first', name: 'Primary', key: 'sk-one', enabled: true },
+    { id: 'second', name: 'Standby', key: 'sk-two', enabled: false },
+  ], key_strategy: 'priority' }
+  const created = providers.createProvider({ name: 'pool-backup', protocol: 'openai', group_id: null, base_url: 'https://example.test', auth_json: JSON.stringify(auth), custom_headers_json: '{}', proxy_url: null, timeout_ms: null, model_filter: null })
+  const exported = backup.exportBackup()
+  assert.deepEqual(exported.providers.find((item) => item.id === created.id)?.auth, auth)
+  backup.importBackup(exported)
+  assert.deepEqual(JSON.parse(providers.getProvider(created.id)!.auth_json), auth)
+  const raw = db.prepare('SELECT auth_json, auth_json_encrypted FROM providers WHERE id = ?').get(created.id) as { auth_json: string; auth_json_encrypted: string | null }
+  assert.equal(raw.auth_json, '')
+  assert.ok(raw.auth_json_encrypted)
+})
+
 test('backup import accepts legacy plaintext auth entries and encrypts them', () => {
   const legacy = {
     token: 'any-token',
@@ -253,6 +268,51 @@ test('backup import rejects invalid routing_config shape', () => {
   assert.throws(() => backup.importBackup(badWeight), /invalid alias target weight/)
 })
 
+test('backup import rejects malformed key pool auth', () => {
+  const base = {
+    token: 'any-token',
+    settings: {},
+    providers: [{
+      id: 'auth-check-provider',
+      name: 'auth-check',
+      protocol: 'openai' as const,
+      group_id: null,
+      base_url: 'https://example.test',
+      auth: {} as Record<string, unknown>,
+      custom_headers: {},
+      proxy_url: null,
+      timeout_ms: null,
+      model_filter: null,
+      upstream_type: null,
+      enabled: 1 as const,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }],
+    provider_groups: [],
+    models: [],
+    groups: [],
+    aliases: [],
+  }
+  const withAuth = (auth: Record<string, unknown>) => ({ ...base, providers: [{ ...base.providers[0]!, auth }] })
+
+  assert.throws(() => backup.importBackup(withAuth({ api_keys: [] })), /invalid provider auth api_keys/)
+  assert.throws(() => backup.importBackup(withAuth({ api_keys: [
+    { id: 'k1', name: 'K1', key: 'sk-1', enabled: true },
+    { id: 'k1', name: 'K2', key: 'sk-2', enabled: true },
+  ] })), /duplicate provider auth key id/)
+  assert.throws(() => backup.importBackup(withAuth({
+    api_key: 'sk-single',
+    api_keys: [{ id: 'k1', name: 'K1', key: 'sk-1', enabled: true }],
+  })), /api_key and api_keys cannot be combined/)
+  assert.throws(() => backup.importBackup(withAuth({
+    api_keys: [{ id: 'k1', name: 'K1', key: 'sk-1', enabled: true }],
+    key_strategy: 'bogus',
+  })), /invalid provider auth key_strategy/)
+
+  // 校验失败的导入不得改动现有数据
+  assert.equal(providers.getProvider('auth-check-provider'), undefined)
+})
+
 test('backup import API maps invalid routing_config to invalid_backup', async () => {
   const res = await api.request('http://localhost/backup', {
     method: 'POST',
@@ -279,4 +339,28 @@ test('backup import API maps invalid routing_config to invalid_backup', async ()
   const body = await res.json() as { ok: boolean; error: { code: string } }
   assert.equal(body.ok, false)
   assert.equal(body.error.code, 'invalid_backup')
+})
+
+test('provider API validates multi-key config and preserves it on enabled-only update', async () => {
+  const auth = { api_keys: [
+    { id: 'key-a', name: 'A', key: 'sk-a', enabled: true },
+    { id: 'key-b', name: 'B', key: 'sk-b', enabled: false },
+  ], key_strategy: 'priority' }
+  const input = { name: 'api-pool', protocol: 'openai', base_url: 'https://example.test', auth }
+  const headers = { authorization: `Bearer ${getAdminToken()}`, 'content-type': 'application/json' }
+  const created = await api.request('http://localhost/providers', { method: 'POST', headers, body: JSON.stringify(input) })
+  assert.equal(created.status, 200)
+  const body = await created.json() as { data: { id: string } }
+  const id = body.data.id
+  assert.deepEqual(JSON.parse(providers.getProvider(id)!.auth_json), auth)
+
+  const toggled = await api.request(`http://localhost/providers/${id}`, { method: 'PUT', headers, body: JSON.stringify({ enabled: 0 }) })
+  assert.equal(toggled.status, 200)
+  assert.deepEqual(JSON.parse(providers.getProvider(id)!.auth_json), auth)
+
+  const invalid = await api.request('http://localhost/providers', { method: 'POST', headers, body: JSON.stringify({
+    ...input, auth: { api_keys: [auth.api_keys[0], { ...auth.api_keys[1], id: 'key-a' }] },
+  }) })
+  assert.equal(invalid.status, 400)
+  providers.deleteProvider(id)
 })

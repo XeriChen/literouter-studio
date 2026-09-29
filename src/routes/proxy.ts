@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { Readable } from 'node:stream'
 import { authMiddleware } from '../middlewares/auth'
 import { buildUpstreamHeaders, buildUpstreamUrl, HOP_BY_HOP_HEADERS } from '../providers/headers'
-import { getDispatcher, isAbortError, isTimeoutError, sendToUpstream, drainBody, type UpstreamResponse } from '../proxy'
+import { getDispatcher, isAbortError, isSafeToRetryTransportError, isTimeoutError, sendToUpstream, drainBody, type UpstreamResponse } from '../proxy'
 import { normalizeUpstreamPath } from '../proxy/path'
 import { createUsageParser } from '../proxy/usage'
 import {
@@ -16,7 +16,8 @@ import {
 } from '../proxy/body'
 import { findRoute, listAliasNames, type RouteCandidate } from '../services/models'
 import { buildCandidateOrder, parseRoutingConfig } from '../services/routing'
-import { pickCandidate, reportSuccess, reportFailure, reportClientCancel } from '../services/health'
+import { pickCandidate, reportSuccess, reportFailure, reportClientCancel, getHealthSnapshot } from '../services/health'
+import { hasKeyPool, pickKey, reportKeyFailure, reportKeySuccess, releaseKeyProbe, retryAfterMs, nextKeyRetrySeconds } from '../services/key-pool'
 import { writeLog, updateLogResponseBytes, updateLogUsage } from '../services/logs'
 import { getGlobalTimeoutMs } from '../services/settings'
 import { assertSafeOutboundUrl, OutboundUrlError } from '../services/url-guard'
@@ -37,11 +38,11 @@ function clientIp(c: Context): string | null {
 }
 
 /** 这些上游状态视为「该候选的故障」，可在首字节写出前换下一候选重试；其余 4xx 属客户端问题，原样透传 */
-const RETRYABLE_STATUS = new Set([401, 403, 408, 429])
+const RETRYABLE_STATUS = new Set([401, 402, 403, 408, 429])
 
 function retryableStatusError(status: number): { code: string; clientStatus: number } {
   if (status === 429) return { code: 'upstream_rate_limited', clientStatus: 502 }
-  if (status === 401 || status === 403) return { code: 'upstream_auth_error', clientStatus: 502 }
+  if (status === 401 || status === 402 || status === 403) return { code: 'upstream_auth_error', clientStatus: 502 }
   if (status === 408) return { code: 'upstream_timeout', clientStatus: 504 }
   return { code: 'upstream_error', clientStatus: 502 }
 }
@@ -68,12 +69,14 @@ function countResponse(body: Readable, logId: number): ReadableStream<Uint8Array
 }
 
 interface AttemptOutcome {
-  kind: 'done' | 'retryable'
+  kind: 'done' | 'retryable' | 'terminal'
   response?: Response
   /** 重试耗尽后对客户端的最终状态码与错误码 */
   clientStatus?: number
   code?: string
   message?: string
+  upstreamStatus?: number | null
+  retryHeaders?: Record<string, string>
 }
 
 /** 把上游响应原样转给客户端（过滤逐跳头），并挂字节统计/usage 解析；保留 Retry-After 等头 */
@@ -90,8 +93,8 @@ function buildPassthroughResponse(res: UpstreamResponse, logId: number): Respons
 
 /**
  * 单次候选尝试：发请求、写该次 attempt 的日志行，返回透传响应或「可重试失败」标记。
- * 在首个字节写给客户端之前（即本函数返回 done 之前）失败都可以安全重试；
- * 一旦 done 的 Response 开始向客户端流动，调用方不得再切换候选。
+ * 仅明确收到可重试状态或确认请求未发送的连接错误允许重试；响应头前的其他
+ * 传输错误结果不明，不得重放。一旦 done 的 Response 开始流动也不得切换。
  */
 async function forwardAttempt(params: {
   c: Context
@@ -99,16 +102,16 @@ async function forwardAttempt(params: {
   upstreamPath: string
   method: string
   outBody: Uint8Array
-  startedAt: number
   protocol: 'openai' | 'anthropic'
   requestedModel: string
   resolvedModel: string
   requestBytes: number
   attempt: number
-  /** single 模式（恒为单次尝试）：4xx 可重试状态直接透传原始响应（含 Retry-After），不包装成 502/504 */
+  apiKey?: string
+  /** 旧单 Key 的 single 模式：4xx 可重试状态直接透传原始响应 */
   passthroughRetryable4xx?: boolean
 }): Promise<AttemptOutcome> {
-  const { c, provider, upstreamPath, method, outBody, startedAt, protocol, requestedModel, resolvedModel, requestBytes, attempt, passthroughRetryable4xx } = params
+  const { c, provider, upstreamPath, method, outBody, protocol, requestedModel, resolvedModel, requestBytes, attempt, passthroughRetryable4xx, apiKey } = params
   const attemptStartedAt = Date.now()
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -122,7 +125,7 @@ async function forwardAttempt(params: {
     res = await sendToUpstream({
       method,
       url,
-      headers: buildUpstreamHeaders(provider, c.req.raw.headers),
+      headers: buildUpstreamHeaders(provider, c.req.raw.headers, apiKey),
       body: outBody,
       signal: clientSignal,
       dispatcher: getDispatcher(provider.proxy_url, timeoutMs),
@@ -148,7 +151,7 @@ async function forwardAttempt(params: {
       request_bytes: requestBytes,
       attempt,
     })
-    return { kind: 'retryable', clientStatus: status, code, message }
+    return { kind: isSafeToRetryTransportError(err) ? 'retryable' : 'terminal', clientStatus: status, code, message, upstreamStatus: null }
   }
 
   // 收到上游响应头，立即写日志（latency = 该次尝试的首包耗时）
@@ -175,7 +178,7 @@ async function forwardAttempt(params: {
     }
     await drainBody(res.body)
     const { code, clientStatus } = retryableStatusError(res.status)
-    return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})` }
+    return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})`, upstreamStatus: res.status, retryHeaders: Object.fromEntries(res.headers.entries()) }
   }
 
   return { kind: 'done', response: buildPassthroughResponse(res, logId) }
@@ -263,57 +266,87 @@ proxyRoutes.all('*', async (c) => {
     const maxAttempts = config.mode === 'single' ? 1 : Math.min(config.max_attempts ?? ordered.length, ordered.length)
 
     try {
-      let lastFailure: { clientStatus: number; code: string; message: string } | null = null
+      let lastFailure: { clientStatus: number; code: string; message: string; retryAfter?: string } | null = null
       const attemptedTargetIds = new Set<number>()
+      let outboundAttempt = 0
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const remaining = ordered.filter((target) => !attemptedTargetIds.has(target.id))
         const pick = pickCandidate(aliasKey, remaining, config)
         if (!pick) {
           // 剩余候选全部冷却中且探测位被占用，或已无剩余候选：快速失败
+          const earliest = getHealthSnapshot(aliasKey).cooldowns[0]?.until
+          if (earliest) c.header('Retry-After', String(Math.max(1, Math.ceil((earliest - Date.now()) / 1000))))
+          else if (lastFailure?.retryAfter) c.header('Retry-After', lastFailure.retryAfter)
           return logAndFail(c, protocol, path, 'POST', model, startedAt, 503, 'no_available_target', lastFailure ? lastFailure.message : 'no available route target')
         }
         attemptedTargetIds.add(pick.target.id)
         const candidate: RouteCandidate = route.candidates.find((item) => item.target.id === pick.target.id)!
+        let activeKey: { id: string; isProbe: boolean } | null = null
         try {
           const outBody = rewriteProxyBody(parsed, candidate.model.model_id, route.thinking)
-          const outcome = await forwardAttempt({
-            c,
-            provider: candidate.provider,
-            upstreamPath,
-            method: 'POST',
-            outBody,
-            startedAt,
-            protocol,
-            requestedModel: model,
-            resolvedModel: candidate.model.model_id,
-            requestBytes,
-            attempt,
-            passthroughRetryable4xx: config.mode === 'single',
-          })
-          if (outcome.kind === 'done') {
-            // single 模式：保持 v8 行为，不参与健康状态机
-            if (config.mode !== 'single') {
-              reportSuccess(aliasKey, candidate.target.id, config, {
-                // 探测成功或故障切换后的成功才进入亲和期，普通命中不亲和
-                armAffinity: pick.isProbe || attempt > 1,
-              })
+          const pool = hasKeyPool(candidate.provider)
+          const excluded = new Set<string>()
+          let failed = false
+          let candidateRetryAfterMs: number | undefined
+          do {
+            const keyPick = pool ? pickKey(candidate.provider, candidate.model.model_id, excluded) : null
+            if (pool && !keyPick) break
+            if (keyPick) {
+              activeKey = { id: keyPick.credential.id, isProbe: keyPick.isProbe }
+              excluded.add(keyPick.credential.id)
             }
-            return outcome.response!
+            const outcome = await forwardAttempt({
+              c,
+              provider: candidate.provider,
+              upstreamPath,
+              method: 'POST',
+              outBody,
+              protocol,
+              requestedModel: model,
+              resolvedModel: candidate.model.model_id,
+              requestBytes,
+              attempt: ++outboundAttempt,
+              apiKey: keyPick?.credential.key,
+              passthroughRetryable4xx: config.mode === 'single' && !pool,
+            })
+            if (outcome.kind === 'done') {
+              if (keyPick) {
+                if (outcome.response!.status < 400) reportKeySuccess(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
+                else releaseKeyProbe(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
+              }
+              if (config.mode !== 'single' && outcome.response!.status < 400) {
+                reportSuccess(aliasKey, candidate.target.id, config, { armAffinity: pick.isProbe || attempt > 1 })
+              } else if (pick.isProbe) {
+                reportClientCancel(aliasKey, candidate.target.id)
+              }
+              return outcome.response!
+            }
+            if (outcome.kind === 'terminal') {
+              if (keyPick?.isProbe) releaseKeyProbe(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
+              if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
+              return proxyError(c, outcome.clientStatus!, outcome.message!, outcome.code!)
+            }
+            failed = true
+            lastFailure = { clientStatus: outcome.clientStatus!, code: outcome.code!, message: outcome.message!, retryAfter: outcome.retryHeaders?.['retry-after'] }
+            candidateRetryAfterMs = outcome.retryHeaders ? retryAfterMs(outcome.retryHeaders) ?? undefined : undefined
+            if (keyPick) reportKeyFailure(candidate.provider.id, keyPick.credential.id, candidate.model.model_id, outcome.upstreamStatus ?? null, config.cooldown_seconds ?? 60, outcome.retryHeaders)
+            activeKey = null
+          } while (pool)
+          if (!failed) {
+            const retrySeconds = pool ? nextKeyRetrySeconds(candidate.provider, candidate.model.model_id) : null
+            lastFailure = { clientStatus: 503, code: 'no_available_key', message: 'no available provider key', retryAfter: retrySeconds ? String(retrySeconds) : undefined }
           }
-          lastFailure = { clientStatus: outcome.clientStatus!, code: outcome.code!, message: outcome.message! }
-          // single 模式：保持 v8 行为，失败不进入冷却
-          if (config.mode !== 'single') {
-            reportFailure(aliasKey, candidate.target.id, config)
-          }
+          // Key 池候选不做候选级冷却：冷却已按 Key 粒度记录，候选级冷却会误伤池内其他可用 Key
+          if (config.mode !== 'single' && failed && !pool) reportFailure(aliasKey, candidate.target.id, config, Date.now(), candidateRetryAfterMs)
         } catch (err) {
-          // forwardAttempt 只会向外抛客户端取消；取消不是候选的失败，但需释放探测位
-          if (isAbortError(err) || c.req.raw.signal.aborted) {
-            if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
-          }
+          // 取消不计失败；任何未完成的尝试都必须释放探测位。
+          if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
+          if (activeKey?.isProbe) releaseKeyProbe(candidate.provider.id, activeKey.id, candidate.model.model_id)
           throw err
         }
       }
       // 所有候选尝试均失败（每 attempt 已写日志，不再补写）；single 模式的 4xx 已在最后一次尝试内透传
+      if (lastFailure?.retryAfter) c.header('Retry-After', lastFailure.retryAfter)
       return proxyError(c, lastFailure?.clientStatus ?? 502, lastFailure?.message ?? 'upstream error', lastFailure?.code ?? 'upstream_error')
     } finally {
       releaseProxyBody(parsed)

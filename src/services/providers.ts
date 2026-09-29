@@ -7,6 +7,8 @@ import { buildAnthropicModelsUrl } from '../providers/anthropic'
 import { buildOpenAIModelsUrl } from '../providers/openai'
 import { buildProviderHeaders, decryptAuthJson } from '../providers/headers'
 import { getGlobalTimeoutMs } from './settings'
+import { clearKeyPoolState } from './key-pool'
+import { clearHealthState } from './health'
 import { importModels as importModelsForProvider, repairAliasTargetsInTransaction } from './models'
 import type { ProviderGroupRow, ProviderProtocol, ProviderRow } from '../types'
 
@@ -151,6 +153,11 @@ export function updateProvider(id: string, patch: Partial<ProviderRow>): Provide
   if (sets.includes('proxy_url') || sets.includes('timeout_ms')) {
     invalidateAllDispatchers()
   }
+  if (sets.includes('auth_json')) {
+    clearKeyPoolState(id)
+    const aliases = db.prepare('SELECT DISTINCT protocol, alias_name FROM model_alias_targets WHERE provider_id = ?').all(id) as Array<{ protocol: string; alias_name: string }>
+    for (const alias of aliases) clearHealthState(`${alias.protocol}/${alias.alias_name}`)
+  }
   return getProvider(id)!
 }
 
@@ -160,6 +167,7 @@ export function deleteProvider(id: string): void {
     repairAliasTargetsInTransaction()
   })()
   invalidateAllDispatchers()
+  clearKeyPoolState(id)
 }
 
 export function getProviderModelsUrl(provider: ProviderRow): string {

@@ -5,6 +5,7 @@ import { invalidateAllDispatchers } from '../proxy'
 import { getAdminToken, setAdminToken } from './auth'
 import { validateThinkingValue } from './models'
 import { getSettings, updateSettings, type SettingsKey } from './settings'
+import { clearKeyPoolState } from './key-pool'
 import type { RoutingConfig } from './routing'
 import type { ProviderRow, ThinkingConfig } from '../types'
 
@@ -25,7 +26,7 @@ export interface BackupData {
     protocol: 'openai' | 'anthropic'
     group_id: string | null
     base_url: string
-    auth: Record<string, string | { header_name: string; format: string }>
+    auth: Record<string, unknown>
     custom_headers: Record<string, string>
     proxy_url: string | null
     timeout_ms: number | null
@@ -85,6 +86,32 @@ function assertValidRoutingConfig(config: unknown, aliasLabel: string): asserts 
   checkRange(c.cooldown_seconds, 0, 3600, 'cooldown_seconds')
 }
 
+/** 与写入路径 authSchema 同构：Key 池形状非法必须拒绝，不能导入后代理期才暴露 no_available_key */
+function assertValidAuth(auth: Record<string, unknown>, providerLabel: string): void {
+  if (auth.api_keys !== undefined) {
+    if (!Array.isArray(auth.api_keys) || auth.api_keys.length === 0) {
+      throw new Error(`invalid provider auth api_keys: ${providerLabel}`)
+    }
+    const ids = new Set<string>()
+    for (const item of auth.api_keys) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`invalid provider auth api_keys entry: ${providerLabel}`)
+      }
+      const entry = item as Record<string, unknown>
+      if (typeof entry.id !== 'string' || !entry.id) throw new Error(`invalid provider auth key id: ${providerLabel}`)
+      if (ids.has(entry.id)) throw new Error(`duplicate provider auth key id: ${providerLabel}/${entry.id}`)
+      ids.add(entry.id)
+      if (typeof entry.name !== 'string' || !entry.name.trim()) throw new Error(`invalid provider auth key name: ${providerLabel}/${entry.id}`)
+      if (typeof entry.key !== 'string' || !entry.key) throw new Error(`invalid provider auth key secret: ${providerLabel}/${entry.id}`)
+      if (typeof entry.enabled !== 'boolean') throw new Error(`invalid provider auth key enabled: ${providerLabel}/${entry.id}`)
+    }
+    if (auth.api_key !== undefined) throw new Error(`provider auth api_key and api_keys cannot be combined: ${providerLabel}`)
+  }
+  if (auth.key_strategy !== undefined && auth.key_strategy !== 'polling' && auth.key_strategy !== 'random' && auth.key_strategy !== 'priority') {
+    throw new Error(`invalid provider auth key_strategy: ${providerLabel}`)
+  }
+}
+
 function validateBackupGraph(data: BackupData): void {
   const providerGroups = new Map<string, BackupData['provider_groups'][number]>()
   const providerGroupNames = new Set<string>()
@@ -103,6 +130,7 @@ function validateBackupGraph(data: BackupData): void {
     if (provider.group_id && !providerGroups.has(JSON.stringify([provider.protocol, provider.group_id]))) {
       throw new Error(`provider group not found: ${provider.protocol}/${provider.group_id}`)
     }
+    assertValidAuth(provider.auth, provider.id)
     providers.set(provider.id, provider)
   }
 
@@ -272,4 +300,5 @@ export function importBackup(data: BackupData): void {
   })
   tx()
   invalidateAllDispatchers()
+  clearKeyPoolState()
 }

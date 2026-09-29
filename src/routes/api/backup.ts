@@ -88,7 +88,7 @@ export function registerBackupRoutes(api: Hono<Env>): void {
           protocol: provider.protocol,
           group_id: provider.group_id ?? null,
           base_url: provider.base_url,
-          auth: provider.auth as Record<string, string | { header_name: string; format: string }>,
+          auth: provider.auth,
           custom_headers: provider.custom_headers as Record<string, string>,
           proxy_url: provider.proxy_url ?? null,
           timeout_ms: provider.timeout_ms ?? null,

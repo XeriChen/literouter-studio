@@ -34,7 +34,7 @@
 | 代理访问日志 | `GET /api/logs?page=&page_size=&protocol=&provider_id=&model=&status=` | model=映射名；provider_name/resolved_model=实际路由 |
 | 配置操作日志 | `GET /api/audit-logs?page=&page_size=&resource=` | resource 可选 provider/model/alias/… |
 
-Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_url, auth(键值对), custom_headers(键值对), proxy_url, timeout_ms, model_filter, enabled(0|1)`；列表项另有 `last_called_at`。
+Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_url, auth, custom_headers(键值对), proxy_url, timeout_ms, model_filter, enabled(0|1)`；列表项另有 `last_called_at`。列表与详情还返回 `key_health:[{id,cooldown_until}]`（进程内状态，不含密钥）；`auth` 会回显明文 Key，读取时须脱敏。
 
 - `timeout_ms`：`null` = 用全局 `global_timeout_ms`；`0` = 永不超时（连接/响应头仍受管理操作 30s 兜底）；正整数 = 毫秒。
 - **Provider 名称不强制唯一**：重名创建会生成同名新实例，不会报错。结合名称、协议、地址与用户目标识别对象，靠 `id` 区分实例；已有足够且有效的查询结果可复用。
@@ -46,6 +46,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 操作 | 端点 | Body / 说明 |
 | :--- | :--- | :--- |
 | 新建 Provider | `POST /api/providers` | `{name, protocol, base_url, auth?, custom_headers?, group_id?, proxy_url?, timeout_ms?, model_filter?}`；auth 统一用 `{"api_key":"…"}`（裸 token，不含 `Bearer ` 前缀）：openai 协议会自动拼成 `authorization: Bearer <api_key>`，anthropic 协议会自动映射到 `x-api-key`。不要写成 `{"authorization":"Bearer sk-…"}`，网关不读该字段会导致上游 401。base_url 不带尾部 `/v1`（见第 0 节） |
+| 多 Key 配置 | `POST /api/providers` / `PUT /api/providers/:id` | `auth:{"api_keys":[{"id":"稳定唯一 ID","name":"显示名","key":"裸 Key","enabled":true}],"key_strategy":"polling"}`；策略可选 `polling`（默认轮询）、`random`、`priority`（数组顺序优先）。同一 `auth` 不能同时含 `api_key` 和 `api_keys`；Key 池至少一项，最多 100 项。PUT 传完整 `auth` 才替换池，纯 enabled 更新不会改认证配置 |
 | 更新 Provider | `PUT /api/providers/:id` | 部分更新；`protocol` 不可改；可传 `enabled:0\|1` |
 | 删除 Provider | `DELETE /api/providers/:id` | 级联删除其模型与映射候选，触发 active 目标修复 |
 | 测连通 | `POST /api/providers/:id/test` | 无 body；401/403 判认证失败，其余 HTTP 响应（含 404/502）判网络可达；结果不证明模型推理或映射链路可用 |
@@ -78,7 +79,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 - **weighted**：全候选按 `weight` 加权随机分配；weight 0 仅作末位备选，全 0 均匀随机。
 - **failover**：按 priority 升序尝试，失败自动切换下一候选。
 
-weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选路时跳过；全部冷却时仅放行一个探测请求（其余立即 503）；探测/切换成功后可按配置进入短时亲和期。
+weighted/failover 下，单 Key 候选失败后冷却并在选路时跳过；Key 池候选先逐把尝试可用 Key，仅全部失败/不可用时换下一候选。冷却到期后只放行一个恢复探测请求，冷却未到期不提前探测；探测/切换成功后可按配置进入短时亲和期。`max_attempts` 限制候选数，不限制同一候选中的 Key 数。
 
 | 操作 | 端点 | Body / 说明 |
 | :--- | :--- | :--- |
@@ -130,7 +131,7 @@ weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选�
 | 404 | `not_found` | 路径错误 |
 | 405 | `method_not_allowed` | 方法用错 |
 | 503 | `provider_disabled` | 核对 Provider 启用状态和任务目标；已有授权涵盖启用或恢复服务时再修正，查询排障不自动启用 |
-| 503 | `no_available_target` | weighted/failover 模式下全部候选冷却且探测位被占用；稍后重试或检查候选健康状态 |
+| 503 | `no_available_target` / `no_available_key` | 候选或 Provider Key 均不可用（冷却未到期、恢复探测占用或手动禁用）；按 `Retry-After` 稍后重试并检查对应状态 |
 | 400 | `balance_unsupported` | 该 Provider 的 upstream_type 不提供余额端点 |
 | 400 | `outbound_url_invalid` | 上游 URL 形状非法（协议/凭据/控制字符），核对 base_url |
 | 502 | `upstream_error` | 上游不可达/5xx/管理侧上游失败 |
@@ -157,6 +158,6 @@ weighted/failover 下，候选跨请求连续失败达阈值后冷却并在选�
 2. 映射可路由要求「映射 enabled + 至少一个可用候选（其 Provider enabled + 真实模型 enabled）」。全部候选不可用时返回 `503 provider_disabled`；映射不存在或禁用返回 `404 model_not_found`。single 模式使用 active 候选；weighted/failover 使用全部可用候选。
 3. 代理入口：OpenAI `/openai/v1/*`、Anthropic `/anthropic/v1/*`，除 `GET */v1/models` 外只收 POST。
 4. 删除 active 候选、或删除/禁用其 Provider 与真实模型时，在配置事务内按 priority 选择首个可用候选修复 active。没有可用候选时映射保留但不可调用，按实际路由状态返回 404/503；重新启用旧目标不会替换已经可用的 active。
-5. weighted/failover 模式的失败重试只发生在「首个响应字节写给客户端之前」；候选连续失败达 max_attempts 次后冷却 cooldown_seconds（默认 60），全部冷却时其余请求立即 503 `no_available_target`。健康状态纯进程内，重启即清空。
-6. 上游 4xx 原样透传给客户端；401/403/408/429 属「候选故障」，会在首字节前换候选，候选耗尽后包装为 502（`upstream_auth_error`/`upstream_rate_limited`）或 504（`upstream_timeout`）；single 模式恒为单次尝试，这四种状态直接透传原始状态码、响应体与 `Retry-After` 等头，不包装。5xx 一律包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是本次尝试的首包耗时，`attempt` 是第几次尝试。
+5. 重试只发生在「首个响应字节写给客户端之前」。单 Key 的 weighted/failover 候选失败后冷却；Key 池先尝试同 Provider 其他 Key，用尽才换候选。401/402/403 冷却整把 Key，429/408/5xx/明确未发送的连接错误按真实模型冷却该 Key；优先采用 `Retry-After` 或限流重置头（最多一小时），否则用 `cooldown_seconds`（默认 60；显式配 0 关闭冷却，含 `Retry-After`）。响应头超时或连接中断结果不明时终止，不换 Key/候选以免重放。冷却到期只放行一个探测，未到期不探测。健康状态纯进程内，重启即清空。
+6. 普通上游 4xx 原样透传且不切 Key；401/402/403/408/429 按上项故障转移，耗尽后包装为 502（`upstream_auth_error`/`upstream_rate_limited`）或 504（`upstream_timeout`），无可用 Key 为 503 `no_available_key`。旧单 Key 的 single 模式直接透传这些 4xx（含 `Retry-After`）；多 Key 的 single 模式会先换 Key。5xx 一律包装为 502，超时 504；访问日志在收到响应头时立即落库，`latency_ms` 是本次尝试的首包耗时，`attempt` 是本次请求第几次出站（跨 Key 与候选）。
 7. 已启用的 Provider 导入/新增真实模型会自动建同名映射，但同名映射已存在时只追加 inactive 候选，不切 active。

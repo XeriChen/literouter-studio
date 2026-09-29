@@ -9,7 +9,7 @@
 
 import { db, getSetting } from '../db'
 import { parseRoutingConfig } from './routing'
-import { getHealthSnapshot, reportFailure, reportSuccess } from './health'
+import { getHealthSnapshot, reportClientCancel, reportFailure, reportSuccess, reserveCandidateProbe } from './health'
 import { buildProviderHeaders } from '../providers/headers'
 import { getDispatcher, sendToUpstream, drainBody } from '../proxy'
 import { assertSafeOutboundUrl } from './url-guard'
@@ -83,7 +83,10 @@ function probeBody(protocol: ProviderProtocol, modelId: string): Uint8Array {
 /** 执行一轮探测，返回探测的候选数量。 */
 export async function probeCoolingTargetsOnce(): Promise<number> {
   const candidates = collectCooledCandidates()
+  let probed = 0
   for (const candidate of candidates) {
+    if (!reserveCandidateProbe(candidate.aliasKey, candidate.targetId)) continue
+    probed++
     const config = parseRoutingConfig(candidate.routingConfigJson)
     try {
       const baseUrl = candidate.provider.base_url.replace(/\/+$/, '')
@@ -99,10 +102,12 @@ export async function probeCoolingTargetsOnce(): Promise<number> {
       })
       const okStatus = res.status >= 200 && res.status < 300
       await drainBody(res.body)
-      // 只计 5xx/401/403/429 或网络错误为失败；4xx（如 o 系列/gpt-5 拒绝 max_tokens:1）不计失败
+      // 只计 5xx/401/402/403/408/429 或网络错误为失败；普通 4xx（如拒绝 max_tokens:1）不计失败
       if (okStatus) reportSuccess(candidate.aliasKey, candidate.targetId, config, { armAffinity: false })
-      else if (res.status >= 500 || res.status === 401 || res.status === 403 || res.status === 429) {
+      else if (res.status >= 500 || res.status === 401 || res.status === 402 || res.status === 403 || res.status === 408 || res.status === 429) {
         reportFailure(candidate.aliasKey, candidate.targetId, config)
+      } else {
+        reportClientCancel(candidate.aliasKey, candidate.targetId)
       }
       // 其他 4xx 静默忽略，不影响冷却状态
     } catch {
@@ -110,7 +115,7 @@ export async function probeCoolingTargetsOnce(): Promise<number> {
       reportFailure(candidate.aliasKey, candidate.targetId, config)
     }
   }
-  return candidates.length
+  return probed
 }
 
 function currentIntervalSeconds(): number {

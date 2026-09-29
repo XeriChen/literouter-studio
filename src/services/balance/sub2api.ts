@@ -257,8 +257,7 @@ async function querySub2ApiConsoleProfile(
 /** 取 Provider 配置里的 api_key（仅用于组装更具指向性的错误提示） */
 function providerApiKey(provider: ProviderRow): string | null {
   try {
-    const auth = JSON.parse(provider.auth_json) as Record<string, unknown>
-    return typeof auth.api_key === 'string' && auth.api_key ? auth.api_key : null
+    return readProviderAuthTokens(provider.auth_json).apiKey
   } catch {
     return null
   }

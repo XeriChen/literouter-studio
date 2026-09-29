@@ -70,8 +70,8 @@ test('renders grouped aliases and candidate controls', async ({ page }) => {
   await expect(page).toHaveURL(/\/$/)
   await page.goto('/models')
 
-  // 模型映射 tab 按钮而非页面标题
-  await expect(page.getByRole('button', { name: '模型映射' })).toBeVisible()
+  // 模型映射 tab（Radix TabsTrigger，role=tab）而非页面标题
+  await expect(page.getByRole('tab', { name: '模型映射' })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建分组/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /新建映射/ })).toBeVisible()
   await expect(page.getByText('未分组').first()).toBeVisible()
@@ -109,6 +109,7 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   }]
   let groupToggleEnabled: number | undefined
   let movedGroupId: string | null | undefined
+  let savedKeyAuth: { api_keys?: Array<{ key: string; enabled: boolean }>; key_strategy?: string } | undefined
   await page.route('**/api/provider-groups', async (route) => {
     if (route.request().method() === 'POST') {
       const body = JSON.parse(route.request().postData() ?? '{}') as { protocol: 'openai' | 'anthropic'; name: string }
@@ -152,8 +153,9 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   })
   await page.route('**/api/providers/provider-primary', async (route) => {
     if (route.request().method() === 'PUT') {
-      const body = JSON.parse(route.request().postData() ?? '{}') as { group_id?: string | null }
+      const body = JSON.parse(route.request().postData() ?? '{}') as { group_id?: string | null; auth?: typeof savedKeyAuth }
       movedGroupId = body.group_id
+      if (body.auth) savedKeyAuth = body.auth
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data: { id: 'provider-primary' } }) })
       return
     }
@@ -189,7 +191,12 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   await expect(editKey).toHaveAttribute('type', 'password')
   await editDialog.getByRole('button', { name: '显示 API Key' }).click()
   await expect(editKey).toHaveAttribute('type', 'text')
-  await editDialog.getByRole('button', { name: '取消' }).click()
+  await editDialog.getByRole('button', { name: '添加' }).click()
+  await editDialog.getByLabel('API Key 2').fill('second-secret')
+  await page.screenshot({ path: testInfo.outputPath('provider-multikey-dialog.png') })
+  await editDialog.getByRole('button', { name: '保存修改' }).click()
+  await expect.poll(() => savedKeyAuth?.api_keys?.map((key) => key.key)).toEqual(['secret-key', 'second-secret'])
+  expect(savedKeyAuth?.key_strategy).toBe('polling')
 
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByText('Production').first()).toBeVisible()
@@ -200,11 +207,15 @@ test('renders provider groups and supports provider bulk actions', async ({ page
   const formRegion = mobileDialog.getByRole('region', { name: 'Provider 配置' })
   await expect(mobileDialog.getByRole('heading', { name: '新增 Provider' })).toBeVisible()
   await expect(mobileDialog.getByRole('button', { name: '创建', exact: true })).toBeVisible()
+  await mobileDialog.getByRole('button', { name: '添加' }).click()
+  await mobileDialog.getByLabel('API Key 2').fill('mobile-second-key')
+  await page.screenshot({ path: testInfo.outputPath('provider-multikey-mobile.png') })
 
   const dialogBox = await mobileDialog.boundingBox()
   expect(dialogBox).not.toBeNull()
   expect(dialogBox!.y).toBeGreaterThanOrEqual(0)
   expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(844)
+  expect(await mobileDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
 
   const scrollMetrics = await formRegion.evaluate((element) => ({
     clientHeight: element.clientHeight,
@@ -502,7 +513,7 @@ test('aligns models table headers with row content', async ({ page }, testInfo) 
   await assertTableColumnsAlign(aliasTable)
   await page.screenshot({ path: testInfo.outputPath('models-alias-columns.png') })
 
-  await page.getByRole('button', { name: '真实模型' }).click()
+  await page.getByRole('tab', { name: '真实模型' }).click()
   // 真实模型按 Provider 分组且默认折叠
   await page.locator('section[aria-label="真实模型分组"] button[aria-expanded]').first().click()
   const realTable = page.locator('section[aria-label="真实模型分组"] table').first()
@@ -726,8 +737,9 @@ test('imports aliases into a group and cleans up invalid aliases', async ({ page
   // 一键删除无效映射（无候选目标）
   const cleanup = page.getByRole('button', { name: /清理无效映射与无效候选/ })
   await expect(cleanup).toBeVisible()
-  page.on('dialog', (confirmDialog) => confirmDialog.accept())
   await cleanup.click()
+  // 确认走的是自定义 ConfirmDialog（非原生 confirm）
+  await page.getByRole('dialog').getByRole('button', { name: '清理', exact: true }).click()
   await expect.poll(() => deleted).toEqual(['dead-alias'])
   await expect(page.getByText('已清理 1 个无效映射')).toBeVisible()
 })

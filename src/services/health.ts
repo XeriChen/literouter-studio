@@ -1,8 +1,8 @@
 /**
  * 进程内路由健康状态机（借鉴 octopus 的 RouteState 设计，无外部依赖）：
  * - 冷却：候选连续失败达阈值后，在 cooldown_seconds 内被选路跳过
- * - 单探测：全部候选都在冷却时，仅放行一个请求到最早到期的候选做探测；
- *   其余请求快速失败，避免全部涌向未恢复候选
+ * - 单探测：冷却到期后仅放行一个请求探测该候选；
+ *   其余请求跳过该候选，避免恢复瞬间并发涌入
  * - 亲和：探测/故障切换成功后，affinity_seconds 内后续请求固定使用该候选，
  *   给恢复中的上游一个确认窗口（仅在配置了 affinity_seconds 时生效）
  *
@@ -51,7 +51,7 @@ function failureThreshold(_config: RoutingConfig): number {
 
 /**
  * 从已排序的候选中选出一个可尝试的目标。
- * 返回 null 表示当前没有可用目标（探测位被其他请求占用）。
+ * 返回 null 表示没有可用目标（冷却未到期或探测位被占用）。
  */
 export function pickCandidate<T extends { id: number }>(
   aliasKey: string,
@@ -71,37 +71,19 @@ export function pickCandidate<T extends { id: number }>(
     state.affinity = null
   }
 
-  // 找可用目标（未冷却或冷却已过期）
+  // 冷却到期仍保留标记，只允许一个并发请求探测该目标。
   for (const t of ordered) {
     const until = state.cooldowns.get(t.id)
     if (until === undefined) {
-      // 完全未冷却：正常返回
       return { target: t, isProbe: false }
     }
     if (until <= now) {
-      // 冷却已过期：清除过期条目并正常返回
-      state.cooldowns.delete(t.id)
-      return { target: t, isProbe: false }
+      if (state.probe && state.probe.expiresAt > now) continue
+      state.probe = { targetId: t.id, expiresAt: now + PROBE_TTL_MS }
+      return { target: t, isProbe: true }
     }
   }
-
-  // 全部候选都在冷却中且未到期：找最早到期候选进入探测分支
-  let earliest: { id: number; until: number } | null = null
-  for (const t of ordered) {
-    const until = state.cooldowns.get(t.id)
-    if (until !== undefined && until > now && (earliest === null || until < earliest.until)) {
-      earliest = { id: t.id, until }
-    }
-  }
-  if (!earliest) return null
-
-  // 探测位被占用：拒绝
-  if (state.probe && state.probe.expiresAt > now) return null
-
-  // 探测位空闲：放行探测
-  state.probe = { targetId: earliest.id, expiresAt: now + PROBE_TTL_MS }
-  const target = ordered.find((t) => t.id === earliest.id)
-  return target ? { target, isProbe: true } : null
+  return null
 }
 
 /** 候选请求成功：清失败计数与冷却，释放探测位；armAffinity 为 true 且配置了亲和时长时进入亲和期。 */
@@ -127,6 +109,7 @@ export function reportFailure(
   targetId: number,
   config: RoutingConfig,
   now: number = Date.now(),
+  retryAfterMilliseconds?: number,
 ): void {
   const state = stateFor(aliasKey)
   if (state.probe?.targetId === targetId) state.probe = null
@@ -137,16 +120,27 @@ export function reportFailure(
     return
   }
   state.failures.delete(targetId)
-  const ms = cooldownMs(config)
+  // cooldown_seconds 显式为 0 = 永不冷却，上游 Retry-After 也不得突破该配置
+  const configuredMs = cooldownMs(config)
+  const ms = configuredMs === 0 ? 0 : (retryAfterMilliseconds ?? configuredMs)
   if (ms > 0) state.cooldowns.set(targetId, now + ms)
   if (state.affinity?.targetId === targetId) state.affinity = null
 }
 
-/** 探测请求被客户端取消：不计失败，但必须释放探测位（对齐 octopus 的 releaseRouteProbe）。 */
+/** 探测未证明候选恢复（客户端取消或请求级 4xx）：不计失败，只释放探测位。 */
 export function reportClientCancel(aliasKey: string, targetId: number): void {
   const state = states.get(aliasKey)
   if (!state) return
   if (state.probe?.targetId === targetId) state.probe = null
+}
+
+/** 主动健康检查与代理恢复共用探测位，避免两者同时探测同一候选。 */
+export function reserveCandidateProbe(aliasKey: string, targetId: number, now = Date.now()): boolean {
+  const state = stateFor(aliasKey)
+  if (!state.cooldowns.has(targetId)) return false
+  if (state.probe && state.probe.expiresAt > now) return false
+  state.probe = { targetId, expiresAt: now + PROBE_TTL_MS }
+  return true
 }
 
 export interface HealthSnapshot {

@@ -101,3 +101,14 @@ export function isAbortError(err: unknown): boolean {
   const code = errorCode(err)
   return (err instanceof Error && err.name === 'AbortError') || code === 'UND_ERR_ABORTED'
 }
+
+/** 这些错误发生在连接建立前，可确定请求尚未发给上游。 */
+export function isSafeToRetryTransportError(err: unknown): boolean {
+  const safeCodes = new Set(['UND_ERR_CONNECT_TIMEOUT', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH'])
+  let current: unknown = err
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    if (safeCodes.has(errorCode(current) ?? '')) return true
+    current = current.cause
+  }
+  return false
+}

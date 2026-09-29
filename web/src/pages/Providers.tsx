@@ -185,8 +185,15 @@ export default function Providers() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const auth: Record<string, string | { header_name: string; format: string }> = {}
-      if (form.api_key) auth.api_key = form.api_key
+      const auth: { api_key?: string; api_keys?: Array<{ id: string; name: string; key: string; enabled: boolean }>; key_strategy?: ProviderForm['key_strategy']; access_token?: string; version?: string; custom_auth?: { header_name: string; format: string } } = {}
+      const keyRows = [{ id: form.key_id, name: form.key_name.trim(), key: form.api_key, enabled: form.key_enabled }, ...form.extra_keys.map((item) => ({ ...item, name: item.name.trim() }))]
+      if (form.extra_keys.some((item) => !item.key.trim())) throw new Error('API Key 不能为空')
+      if (keyRows.some((item) => item.key && !item.name)) throw new Error('Key 名称不能为空')
+      if (form.pool_mode || form.extra_keys.length > 0) {
+        if (!form.api_key) throw new Error('第一把 API Key 不能为空')
+        auth.api_keys = keyRows
+        auth.key_strategy = form.key_strategy
+      } else if (form.api_key) auth.api_key = form.api_key
       if (form.access_token.trim()) auth.access_token = form.access_token.trim()
       if (form.protocol === 'anthropic' && form.anthropic_version.trim()) auth.version = form.anthropic_version.trim()
       if (form.custom_auth_header_name.trim() && form.custom_auth_format.trim()) {
@@ -491,7 +498,7 @@ export default function Providers() {
               {rows.map((provider) => (
                 <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
                   {isActive && <TableCell className="pl-4"><Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} /></TableCell>}
-                  <TableCell className="font-medium">{provider.name}</TableCell>
+                  <TableCell className="font-medium"><div>{provider.name}</div>{provider.auth.api_keys && <div className="text-[11px] font-normal text-muted-foreground">{provider.auth.api_keys.filter((key) => key.enabled).length}/{provider.auth.api_keys.length} Keys{provider.key_health?.some((key) => key.cooldown_until) ? ' · 冷却中' : ''}</div>}</TableCell>
                   <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
                   <TableCell className="max-w-[240px]"><a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-xs text-foreground underline-offset-2 hover:underline" title={provider.base_url}><ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{provider.base_url}</span></a></TableCell>
                   <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
@@ -524,6 +531,7 @@ export default function Providers() {
                   <Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} />
                 </div>
               </div>
+              {provider.auth.api_keys && <div className="text-[11px] text-muted-foreground">{provider.auth.api_keys.filter((key) => key.enabled).length}/{provider.auth.api_keys.length} Keys{provider.key_health?.some((key) => key.cooldown_until) ? ' · 冷却中' : ''}</div>}
               <div className="min-w-0">
                 <a href={provider.base_url.startsWith('http://') || provider.base_url.startsWith('https://') ? provider.base_url : `https://${provider.base_url}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline" title={provider.base_url}>
                   <ExternalLink className="h-3 w-3 shrink-0" />
@@ -749,6 +757,7 @@ export default function Providers() {
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}><DialogContent><DialogHeader><DialogTitle>重命名 Provider 分组</DialogTitle></DialogHeader><Input autoFocus value={renaming?.name ?? ''} onChange={(event) => renaming && setRenaming({ ...renaming, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter' && renaming?.name.trim()) renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() }) }} /><DialogFooter><Button variant="outline" onClick={() => setRenaming(null)}>取消</Button><Button disabled={!renaming?.name.trim() || renameGroupMutation.isPending} onClick={() => renaming && renameGroupMutation.mutate({ protocol: renaming.protocol, group_id: renaming.id, name: renaming.name.trim() })}>保存</Button></DialogFooter></DialogContent></Dialog>
 
       <ProviderFormDialog
+        keyHealth={editing?.key_health}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         formMode={formMode}

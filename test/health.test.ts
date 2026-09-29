@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { pickCandidate, reportSuccess, reportFailure, clearHealthState, type HealthPick } from '../src/services/health'
+import { pickCandidate, reportSuccess, reportFailure, reportClientCancel, clearHealthState, reserveCandidateProbe } from '../src/services/health'
 import type { RoutingConfig } from '../src/services/routing'
 
 test('W1: single mode does not enter cooldown after failure', () => {
@@ -24,7 +24,7 @@ test('W1: single mode does not enter cooldown after failure', () => {
   assert.strictEqual(pick2.isProbe, false)
 })
 
-test('W2: expired cooldown returns healthy candidate even when probe slot is occupied', () => {
+test('expired cooldown allows one probe while healthy candidates remain available', () => {
   clearHealthState()
   const aliasKey = 'openai/gpt-4'
   const targets = [{ id: 1 }, { id: 2 }]
@@ -38,20 +38,20 @@ test('W2: expired cooldown returns healthy candidate even when probe slot is occ
   const expiredTime = now + 10000
 
   // 同时有两个请求到来：
-  // 第一个请求获取候选 1（冷却已过期，直接返回，不需要探测）
+  // 第一个请求独占候选 1 的恢复探测
   const pick1 = pickCandidate(aliasKey, [{ id: 1 }, { id: 2 }], config, expiredTime)
   assert.ok(pick1)
   assert.strictEqual(pick1.target.id, 1, 'expired cooldown should return directly')
-  assert.strictEqual(pick1.isProbe, false, 'should not be a probe when cooldown expired')
+  assert.strictEqual(pick1.isProbe, true)
 
   // 第二个请求到来，候选 2 健康，应该返回候选 2
   const pick2 = pickCandidate(aliasKey, targets, config, expiredTime)
   assert.ok(pick2, 'should return healthy candidate')
-  assert.strictEqual(pick2.target.id, 1) // 按优先级返回候选 1（已恢复）
+  assert.strictEqual(pick2.target.id, 2)
   assert.strictEqual(pick2.isProbe, false)
 })
 
-test('W2: cooldown expired candidate returned directly without probe', () => {
+test('cooldown expiry does not release concurrent requests before probe succeeds', () => {
   clearHealthState()
   const aliasKey = 'openai/gpt-4'
   const targets = [{ id: 1 }]
@@ -64,14 +64,17 @@ test('W2: cooldown expired candidate returned directly without probe', () => {
   // 10s 后冷却过期
   const expiredTime = now + 10000
 
-  // 应该直接返回候选 1，不需要探测
+  // 冷却到期后只放行一个探测
   const pick = pickCandidate(aliasKey, targets, config, expiredTime)
   assert.ok(pick)
   assert.strictEqual(pick.target.id, 1)
-  assert.strictEqual(pick.isProbe, false, 'expired cooldown should return directly without probe')
+  assert.strictEqual(pick.isProbe, true)
+  assert.strictEqual(pickCandidate(aliasKey, targets, config, expiredTime + 1), null)
+  reportSuccess(aliasKey, 1, config)
+  assert.strictEqual(pickCandidate(aliasKey, targets, config, expiredTime + 2)?.isProbe, false)
 })
 
-test('pickCandidate returns null only when all candidates are cooling and unexpired', () => {
+test('pickCandidate waits for cooldown and permits a single expired probe', () => {
   clearHealthState()
   const aliasKey = 'openai/gpt-4'
   const targets = [{ id: 1 }, { id: 2 }]
@@ -82,19 +85,19 @@ test('pickCandidate returns null only when all candidates are cooling and unexpi
   reportFailure(aliasKey, 1, config, now)
   reportFailure(aliasKey, 2, config, now)
 
-  // 冷却期内，且探测位空闲：返回最早到期的探测
+  // 冷却未到期不得提前探测
   const pick1 = pickCandidate(aliasKey, targets, config, now + 1000)
-  assert.ok(pick1)
-  assert.strictEqual(pick1.isProbe, true)
+  assert.strictEqual(pick1, null)
 
-  // 探测位被占用：返回 null
+  // 冷却未到期继续拒绝
   const pick2 = pickCandidate(aliasKey, targets, config, now + 2000)
   assert.strictEqual(pick2, null)
 
-  // 冷却过期：直接返回
+  // 冷却到期才允许探测
   const pick3 = pickCandidate(aliasKey, targets, config, now + 60000)
   assert.ok(pick3)
-  assert.strictEqual(pick3.isProbe, false)
+  assert.strictEqual(pick3.isProbe, true)
+  assert.strictEqual(pickCandidate(aliasKey, targets, config, now + 60001), null)
 })
 
 test('affinity locks to specific target during affinity window', () => {
@@ -133,8 +136,7 @@ test('clearHealthState removes all state for given alias', () => {
 
   // 冷却期内无法获取
   const pick1 = pickCandidate(aliasKey, targets, config, now + 1000)
-  assert.ok(pick1)
-  assert.strictEqual(pick1.isProbe, true)
+  assert.strictEqual(pick1, null)
 
   // 清空状态
   clearHealthState(aliasKey)
@@ -143,4 +145,36 @@ test('clearHealthState removes all state for given alias', () => {
   const pick2 = pickCandidate(aliasKey, targets, config, now + 2000)
   assert.ok(pick2)
   assert.strictEqual(pick2.isProbe, false)
+})
+
+test('explicit cooldown_seconds 0 disables cooling even when upstream sends Retry-After', () => {
+  clearHealthState()
+  const aliasKey = 'openai/no-cooldown'
+  const config: RoutingConfig = { mode: 'failover', cooldown_seconds: 0 }
+  reportFailure(aliasKey, 1, config, 1000, 30_000)
+  const pick = pickCandidate(aliasKey, [{ id: 1 }], config, 1001)
+  assert.ok(pick)
+  assert.strictEqual(pick.isProbe, false)
+})
+
+test('active health probe reserves the same recovery slot as proxy traffic', () => {
+  clearHealthState()
+  const aliasKey = 'openai/active-probe'
+  const config: RoutingConfig = { mode: 'failover', cooldown_seconds: 10 }
+  reportFailure(aliasKey, 1, config, 1000)
+  assert.equal(reserveCandidateProbe(aliasKey, 1, 2000), true)
+  assert.equal(reserveCandidateProbe(aliasKey, 1, 2001), false)
+  assert.equal(pickCandidate(aliasKey, [{ id: 1 }], config, 11000), null)
+  reportSuccess(aliasKey, 1, config)
+  assert.equal(pickCandidate(aliasKey, [{ id: 1 }], config, 11001)?.isProbe, false)
+})
+
+test('request-level 4xx releases probe without clearing prior cooldown', () => {
+  clearHealthState()
+  const aliasKey = 'openai/request-error-probe'
+  const config: RoutingConfig = { mode: 'failover', cooldown_seconds: 10 }
+  reportFailure(aliasKey, 1, config, 1000)
+  assert.equal(pickCandidate(aliasKey, [{ id: 1 }], config, 11000)?.isProbe, true)
+  reportClientCancel(aliasKey, 1)
+  assert.equal(pickCandidate(aliasKey, [{ id: 1 }], config, 11001)?.isProbe, true)
 })

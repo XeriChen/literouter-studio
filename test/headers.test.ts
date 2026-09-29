@@ -43,6 +43,18 @@ test('buildUpstreamHeaders protects gateway credentials and SSE compression sema
   assert.equal(headers['x-provider-trace'], 'enabled')
 })
 
+test('keyless provider may carry auth via custom_headers; a configured key still wins', () => {
+  const keyless: ProviderRow = {
+    ...provider,
+    auth_json: '{}',
+    custom_headers_json: JSON.stringify({ authorization: 'Bearer custom-token' }),
+  }
+  assert.equal(buildUpstreamHeaders(keyless, new Headers()).authorization, 'Bearer custom-token')
+
+  const keyed: ProviderRow = { ...keyless, auth_json: JSON.stringify({ api_key: 'real-key' }) }
+  assert.equal(buildUpstreamHeaders(keyed, new Headers()).authorization, 'Bearer real-key')
+})
+
 test('buildUpstreamUrl preserves query strings and removes duplicate base URL slashes', () => {
   assert.equal(
     buildUpstreamUrl('https://upstream.example///', '/v1/chat/completions', '?stream=true'),

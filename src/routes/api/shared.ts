@@ -9,6 +9,7 @@ import {
 } from '../../proxy/body'
 import type { ApiResponse, Env, ProviderRow } from '../../types'
 import { validateThinkingValue } from '../../services/models'
+import { keyPoolStatus } from '../../services/key-pool'
 
 export type ApiContext = Context<Env>
 
@@ -48,13 +49,23 @@ const httpUrl = z.string().trim().refine(
   'must be an HTTP(S) URL',
 )
 
-export const authSchema = z.record(z.string().min(1), z.union([
-  z.string(),
-  z.object({
-    header_name: z.string().min(1),
-    format: z.string().min(1),
-  }),
+const headerValuesSchema = z.record(z.string().min(1), z.union([
+  z.string(), z.object({ header_name: z.string().min(1), format: z.string().min(1) }),
 ]))
+
+export const authSchema = z.looseObject({
+  api_key: z.string().optional(),
+  access_token: z.string().optional(),
+  version: z.string().optional(),
+  custom_auth: z.object({ header_name: z.string().min(1), format: z.string().min(1) }).optional(),
+  key_strategy: z.enum(['polling', 'random', 'priority']).optional(),
+  api_keys: z.array(z.object({
+    id: z.string().min(1),
+    name: z.string().trim().min(1),
+    key: z.string().min(1),
+    enabled: z.boolean(),
+  })).min(1).max(100).refine((keys) => new Set(keys.map((key) => key.id)).size === keys.length).optional(),
+}).refine((auth) => !auth.api_keys || !auth.api_key, 'api_key and api_keys cannot be combined')
 
 const nonNegativeIntegerText = z
   .string()
@@ -75,7 +86,7 @@ export const providerSchema = z.object({
   group_id: nonEmptyText.nullable().optional(),
   base_url: httpUrl,
   auth: authSchema.default({}),
-  custom_headers: authSchema.default({}),
+  custom_headers: headerValuesSchema.default({}),
   proxy_url: httpUrl.nullable().optional(),
   timeout_ms: z.number().int().min(0).nullable().optional(),
   model_filter: z.string().nullable().optional(),
@@ -91,7 +102,7 @@ export const providerPatchSchema = providerSchema
     // 仍会被注入 default({})，导致纯 enabled 切换时把 auth_json 覆盖成 "{}"、清空 key。
     // patch 场景必须显式声明为无 default 的 optional。
     auth: authSchema.optional(),
-    custom_headers: authSchema.optional(),
+    custom_headers: headerValuesSchema.optional(),
     upstream_type: z.enum(['newapi', 'sub2api']).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'provider patch cannot be empty')
@@ -202,6 +213,7 @@ export function providerOut(provider: ProviderRow & { last_called_at?: string | 
     group_id: provider.group_id,
     base_url: provider.base_url,
     auth: parseAuth(provider),
+    key_health: keyPoolStatus(provider),
     custom_headers: parseCustomHeaders(provider),
     proxy_url: provider.proxy_url,
     timeout_ms: provider.timeout_ms,

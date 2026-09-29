@@ -15,7 +15,11 @@ export function readProviderAuthTokens(authJson: string): ProviderAuthTokens {
   } catch {
     throw new UpstreamError('upstream_error', 'provider auth_json is not valid JSON')
   }
-  const apiKey = typeof auth.api_key === 'string' && auth.api_key ? auth.api_key : null
+  const pooled = Array.isArray(auth.api_keys)
+    ? auth.api_keys.find((item): item is { key: string; enabled: boolean } =>
+      item !== null && typeof item === 'object' && (item as { enabled?: unknown }).enabled === true && typeof (item as { key?: unknown }).key === 'string')
+    : undefined
+  const apiKey = typeof auth.api_key === 'string' && auth.api_key ? auth.api_key : pooled?.key || null
   const accessToken = typeof auth.access_token === 'string' && auth.access_token ? auth.access_token : null
   return { apiKey, accessToken }
 }
