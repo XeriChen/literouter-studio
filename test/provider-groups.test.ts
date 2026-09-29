@@ -55,6 +55,10 @@ test('provider groups remain routing-neutral and support atomic group operations
   const primary = createProvider('Primary', 'openai', openaiGroup.id)
   const secondary = createProvider('Secondary', 'openai', openaiGroup.id)
   const fallback = createProvider('Fallback', 'openai', null)
+  db.prepare("INSERT INTO logs (created_at, provider_id, provider_name) VALUES (?, ?, ?)").run('2026-09-01T08:00:00.000Z', primary.id, primary.name)
+  db.prepare("INSERT INTO logs (created_at, provider_id, provider_name) VALUES (?, ?, ?)").run('2026-09-02T08:00:00.000Z', primary.id, primary.name)
+  assert.equal(providers.listProviders().find((provider) => provider.id === primary.id)?.last_called_at, '2026-09-02T08:00:00.000Z')
+  assert.equal(providers.listProviders().find((provider) => provider.id === secondary.id)?.last_called_at, null)
   const now = new Date().toISOString()
   const insertModel = db.prepare(
     `INSERT INTO provider_models

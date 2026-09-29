@@ -194,7 +194,7 @@ export const aliasMergeSchema = z.object({
   delete_sources: z.boolean().optional().default(false),
 })
 
-export function providerOut(provider: ProviderRow) {
+export function providerOut(provider: ProviderRow & { last_called_at?: string | null }) {
   return {
     id: provider.id,
     name: provider.name,
@@ -210,5 +210,6 @@ export function providerOut(provider: ProviderRow) {
     upstream_type: provider.upstream_type,
     created_at: provider.created_at,
     updated_at: provider.updated_at,
+    last_called_at: provider.last_called_at ?? null,
   }
 }

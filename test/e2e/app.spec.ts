@@ -279,8 +279,6 @@ test('import dialog marks imported models and supports cancel and cleanup', asyn
   })
   page.on('pageerror', (error) => browserErrors.push(error.message))
   await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
-  // window.confirm 自动接受
-  page.on('dialog', (dialog) => dialog.accept())
 
   const createdAt = '2026-08-17T00:00:00.000Z'
   const mockRow = (modelId: string, source: 'fetched' | 'manual') => ({
@@ -345,12 +343,14 @@ test('import dialog marks imported models and supports cancel and cleanup', asyn
 
   // 单个取消导入：确认后 DELETE /api/models，并移除该模型的选择
   await dialog.getByRole('button', { name: '取消导入 gpt-4o', exact: true }).click()
+  await page.getByRole('dialog', { name: '取消导入？' }).getByRole('button', { name: '取消导入' }).click()
   await expect.poll(() => deletedModels).toEqual([{ provider_id: 'provider-primary', model_id: 'gpt-4o' }])
   await expect(dialog.getByText('已导入', { exact: true })).toHaveCount(1)
   await expect(dialog.getByRole('button', { name: /一键清理已导入（1）/ })).toBeVisible()
 
   // 一键清理全部导入模型：只删 fetched，manual 保留
   await dialog.getByRole('button', { name: /一键清理已导入/ }).click()
+  await page.getByRole('dialog', { name: '一键清理导入模型？' }).getByRole('button', { name: '清理' }).click()
   await expect.poll(() => cleanupCalls).toBe(1)
   await expect(dialog.getByText('已导入', { exact: true })).toHaveCount(0)
   await expect(dialog.getByText('已添加', { exact: true })).toHaveCount(1)
@@ -363,6 +363,67 @@ test('import dialog marks imported models and supports cancel and cleanup', asyn
   await expect(page.getByRole('dialog')).not.toBeVisible()
   expect(importedBody).toEqual({ model_ids: ['gpt-4o-mini'], create_alias: true })
   expect(browserErrors).toEqual([])
+})
+
+test('filters and sorts Provider groups and cleans imports after upstream fetch fails', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  const createdAt = '2026-08-17T00:00:00.000Z'
+  const provider = (id: string, name: string, groupId: string, lastCalledAt: string | null) => ({
+    id, name, protocol: 'openai', group_id: groupId, base_url: `https://${id}.example.test`, auth: {},
+    custom_headers: {}, proxy_url: null, timeout_ms: null, model_filter: null, enabled: 1,
+    created_at: createdAt, updated_at: createdAt, last_called_at: lastCalledAt,
+  })
+  const groups = [
+    { id: 'older', name: 'Older', protocol: 'openai', created_at: createdAt, updated_at: createdAt, provider_count: 1, enabled_count: 1 },
+    { id: 'recent', name: 'Recent', protocol: 'openai', created_at: '2026-08-18T00:00:00.000Z', updated_at: createdAt, provider_count: 1, enabled_count: 1 },
+  ]
+  let imported = true
+  let cleanupCalls = 0
+  await page.route('**/api/provider-groups', (route) => route.fulfill({ json: { ok: true, data: groups } }))
+  await page.route('**/api/providers', (route) => route.fulfill({ json: { ok: true, data: [
+    provider('alpha', 'Alpha', 'older', '2026-09-10T00:00:00.000Z'),
+    provider('beta', 'Beta', 'recent', '2026-09-20T00:00:00.000Z'),
+  ] } }))
+  await page.route('**/api/models', (route) => route.fulfill({ json: { ok: true, data: imported ? [{
+    provider_id: 'beta', model_id: 'old-model', source: 'fetched', protocol: 'openai', provider_name: 'Beta',
+    enabled: 1, provider_enabled: 1, display_name: null, fetched_at: createdAt, created_at: createdAt, updated_at: createdAt,
+  }] : [] } }))
+  await page.route('**/api/providers/beta/upstream-models', (route) => route.fulfill({ status: 502, json: { ok: false, error: { message: 'upstream unavailable', type: 'upstream_error', code: 'upstream_error' } } }))
+  await page.route('**/api/providers/beta/cleanup-imported-models', (route) => {
+    cleanupCalls++
+    imported = false
+    return route.fulfill({ json: { ok: true, data: { deleted: 1 } } })
+  })
+
+  await page.goto('/providers')
+  await expect(page.getByRole('button', { name: '拉取 Beta 的模型' })).toBeVisible()
+  await page.getByRole('combobox', { name: '分组排序' }).click()
+  await page.getByRole('option', { name: '按最近调用' }).click()
+  const headers = page.locator('section[aria-labelledby="provider-protocol-openai"] button[aria-expanded]')
+  await expect(headers.first()).toContainText('Recent')
+  await page.getByRole('textbox', { name: '搜索 Provider' }).fill('alpha')
+  await expect(page.getByRole('button', { name: '拉取 Beta 的模型' })).toHaveCount(0)
+  await expect(headers).toHaveCount(1)
+  await page.getByRole('textbox', { name: '搜索 Provider' }).fill('')
+  await page.getByRole('combobox', { name: '按分组筛选 Provider' }).click()
+  await page.getByRole('option', { name: 'openai / Recent' }).click()
+  await expect(headers).toHaveCount(1)
+  await expect(headers.first()).toContainText('Recent')
+
+  await page.getByRole('button', { name: '拉取 Beta 的模型' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('alert')).toContainText('upstream unavailable')
+  await expect(dialog.getByRole('button', { name: '重试' })).toBeVisible()
+  await dialog.getByRole('button', { name: /一键清理已导入/ }).click()
+  await page.getByRole('button', { name: '清理', exact: true }).click()
+  await expect.poll(() => cleanupCalls).toBe(1)
+  await expect(dialog.getByRole('heading', { name: '选择要导入的模型' })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /一键清理已导入/ })).toHaveCount(0)
+  await dialog.getByRole('button', { name: '取消' }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('textbox', { name: '搜索 Provider' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: '按分组筛选 Provider' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: '分组排序' })).toBeVisible()
 })
 
 test('aligns models table headers with row content', async ({ page }, testInfo) => {

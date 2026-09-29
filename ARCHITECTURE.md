@@ -107,7 +107,7 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 
 | 端点 | 用途 |
 | :--- | :--- |
-| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改） |
+| `GET/POST /providers`、`GET/PUT/DELETE /providers/:id` | Provider CRUD（支持可空 group_id；PUT 为部分更新，protocol 不可修改）；GET 列表包含每个 Provider 的 `last_called_at`（代理访问日志中的最近请求时间，无记录为 null） |
 | `GET/POST/PATCH/DELETE /provider-groups` | Provider 分组 CRUD；删除组只解除成员归属 |
 | `POST /provider-groups/batch-enable`、`POST /provider-groups/batch-toggle`、`POST /provider-groups/batch-delete` | 原子批量启用/禁用或清空组内 Provider，清空后保留分组 |
 | `POST /providers/:id/test` | 测连通性：401/403 判认证失败，其他 HTTP 响应判网络可达 |
@@ -223,7 +223,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 ## 7. 前端要点
 
 - Token 存 `localStorage['llm_gateway_token']`，`api()` 自动注入 Bearer；401 自动清 Token 回 `/login`。
-- Providers 页按协议和自定义分组折叠展示，支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。`upstream_type` 选为 New API 或 Sub2API 时表单额外出现「Access Token」输入项（可选，仅用于余额查询、不参与代理转发）：newapi 用它查用户总余额 `GET /api/user/self`，sub2api 用它查/回退 `GET /api/v1/auth/me`。拉取导入弹窗按已入库状态标记每行「已导入」（source='fetched'）或「已添加」（手动添加），支持对已导入模型单个「取消导入」（删除该真实模型，同名映射保留），以及一键清理该 Provider 全部拉取导入的模型（手动添加不受影响）。Provider 卡片右上角显示余额查询按钮（仅 `upstream_type` 为 newapi/sub2api 时可见），点击以结果提示展示 newapi 系的用户总余额/令牌额度明细与令牌到期日（sub2api 展示用户余额、无限额/剩余、已用成本与套餐限额）；查询带缓存，避免重复打上游。
+- Providers 页按协议和自定义分组折叠展示；页头可按 Provider 名称或地址即时搜索、按分组筛选，并将分组按创建时间或组内最近一次代理调用时间排序（无调用排后，未分组也参与排序）。筛选只改变展示，分组启停与清空仍作用于完整分组。支持新增 Provider 时就地创建分组、跨分组批量选择启用/禁用/删除/移动，以及用分组滑块统一控制启用状态；批量移动要求所选 Provider 协议一致，目标也只能是同协议分组或未分组；复制 Provider 会预填新增表单但不复制模型或映射，API Key 输入默认隐藏并可临时查看。`upstream_type` 选为 New API 或 Sub2API 时表单额外出现「Access Token」输入项（可选，仅用于余额查询、不参与代理转发）：newapi 用它查用户总余额 `GET /api/user/self`，sub2api 用它查/回退 `GET /api/v1/auth/me`。拉取导入弹窗按已入库状态标记每行「已导入」（source='fetched'）或「已添加」（手动添加），支持对已导入模型单个「取消导入」（删除该真实模型，同名映射保留），以及一键清理该 Provider 全部拉取导入的模型（手动添加不受影响）；上游列表拉取失败时弹窗仍可重试并清理已导入模型，状态查询失败时也可直接调用清理 API。Provider 卡片右上角显示余额查询按钮（仅 `upstream_type` 为 newapi/sub2api 时可见），点击以结果提示展示 newapi 系的用户总余额/令牌额度明细与令牌到期日（sub2api 展示用户余额、无限额/剩余、已用成本与套餐限额）；查询带缓存，避免重复打上游。
 - Provider 新增、编辑与复制共用视口限高弹窗；表单内容独立滚动，标题和底部操作区保持可见，确保移动端可完整填写和提交。
 - Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选；候选面板内可直接编辑路由模式（single/weighted/failover 与尝试数/冷却/亲和参数）和各候选的分配权重；分组支持「导入映射」——在弹窗内模糊搜索映射名后批量移入；新增候选与新建映射的模型选择为可搜索下拉（按模型 ID/显示名/Provider 名模糊匹配，已存在的候选置灰）：新增候选的搜索覆盖同协议全部已启用 Provider 的模型并按 Provider 分组展示，选中后自动回填 Provider 与模型；新建映射在所选 Provider 内搜索，选中模型后可一键把真实模型名填为映射名（映射名为空时自动填入）；页头「清理无效映射」一键删除无任何候选目标（候选指向的真实模型/Provider 已不存在）的映射，确认后按当前协议筛选范围批量删除）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。

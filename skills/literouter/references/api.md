@@ -24,7 +24,7 @@
 | :--- | :--- | :--- |
 | 验证 Token | `GET /api/me` | 响应含 `{token}`；检查状态和 `ok` 后仅输出认证结果，不回显 Token |
 | 换取会话 | `POST /api/login` | body `{token}`；agent 一般不需要，直接用 Bearer |
-| Provider 列表 | `GET /api/providers` | `auth` 字段回显明文 Key，输出前脱敏 |
+| Provider 列表 | `GET /api/providers` | `auth` 字段回显明文 Key，输出前脱敏；每项含 `last_called_at`（最近代理请求时间，无记录为 null） |
 | Provider 详情 | `GET /api/providers/:id` | 同上 |
 | Provider 分组列表 | `GET /api/provider-groups` | |
 | 真实模型列表 | `GET /api/models` | 含 enabled/source/display_name |
@@ -34,7 +34,7 @@
 | 代理访问日志 | `GET /api/logs?page=&page_size=&protocol=&provider_id=&model=&status=` | model=映射名；provider_name/resolved_model=实际路由 |
 | 配置操作日志 | `GET /api/audit-logs?page=&page_size=&resource=` | resource 可选 provider/model/alias/… |
 
-Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_url, auth(键值对), custom_headers(键值对), proxy_url, timeout_ms, model_filter, enabled(0|1)`。
+Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_url, auth(键值对), custom_headers(键值对), proxy_url, timeout_ms, model_filter, enabled(0|1)`；列表项另有 `last_called_at`。
 
 - `timeout_ms`：`null` = 用全局 `global_timeout_ms`；`0` = 永不超时（连接/响应头仍受管理操作 30s 兜底）；正整数 = 毫秒。
 - **Provider 名称不强制唯一**：重名创建会生成同名新实例，不会报错。结合名称、协议、地址与用户目标识别对象，靠 `id` 区分实例；已有足够且有效的查询结果可复用。

@@ -16,6 +16,7 @@ import {
   Plus,
   Power,
   RefreshCw,
+  Search,
   ServerOff,
   Trash2,
   Wifi,
@@ -74,6 +75,9 @@ export default function Providers() {
     () => setResultState(null),
   )
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [providerSearch, setProviderSearch] = useState('')
+  const [groupFilter, setGroupFilter] = useState('all')
+  const [groupSort, setGroupSort] = useState<'created' | 'recent'>('created')
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupForm, setGroupForm] = useState<{ protocol: Protocol; name: string }>({ protocol: 'openai', name: '' })
   const [groupDialogSource, setGroupDialogSource] = useState<'page' | 'provider'>('page')
@@ -83,6 +87,7 @@ export default function Providers() {
   const [fetchDialog, setFetchDialog] = useState<{ providerId: string; providerName: string } | null>(null)
   const [upstreamModels, setUpstreamModels] = useState<string[]>([])
   const [upstreamLoading, setUpstreamLoading] = useState(false)
+  const [upstreamError, setUpstreamError] = useState<string | null>(null)
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [modelSearch, setModelSearch] = useState('')
   const [createAlias, setCreateAlias] = useState(true)
@@ -98,6 +103,16 @@ export default function Providers() {
   const selectedProtocol = selectedProviders.length > 0 && new Set(selectedProviders.map((provider) => provider.protocol)).size === 1
     ? selectedProviders[0]?.protocol ?? null
     : null
+  const searchQuery = providerSearch.trim().toLocaleLowerCase()
+  const visibleProviders = useMemo(() => (providers.data ?? []).filter((provider) =>
+    (!searchQuery || provider.name.toLocaleLowerCase().includes(searchQuery) || provider.base_url.toLocaleLowerCase().includes(searchQuery)) &&
+    (groupFilter === 'all' || (groupFilter === 'ungrouped' ? provider.group_id === null : `${provider.protocol}/${provider.group_id}` === groupFilter)),
+  ), [providers.data, searchQuery, groupFilter])
+
+  function lastCallFor(protocol: Protocol, groupId: string | null): string {
+    return (providers.data ?? []).filter((provider) => provider.protocol === protocol && provider.group_id === groupId)
+      .reduce((latest, provider) => provider.last_called_at && provider.last_called_at > latest ? provider.last_called_at : latest, '')
+  }
 
   useEffect(() => {
     if (!providers.data) return
@@ -341,22 +356,26 @@ export default function Providers() {
     onError: (error) => setResult({ message: error instanceof Error ? error.message : '余额查询失败', ok: false }),
   })
 
-  async function openFetchDialog(id: string, name: string) {
-    setFetchDialog({ providerId: id, providerName: name })
+  async function fetchUpstreamModels(id: string) {
     setUpstreamModels([])
     setSelectedModels(new Set())
-    setModelSearch('')
-    setCreateAlias(true)
+    setUpstreamError(null)
     setUpstreamLoading(true)
     try {
       const data = await api<{ model_ids: string[] }>(`/api/providers/${id}/upstream-models`, { method: 'POST' })
       setUpstreamModels(data.model_ids)
     } catch (error) {
-      setResult({ message: `拉取失败：${error instanceof Error ? error.message : 'unknown'}`, ok: false })
-      setFetchDialog(null)
+      setUpstreamError(error instanceof Error ? error.message : 'unknown')
     } finally {
       setUpstreamLoading(false)
     }
+  }
+
+  function openFetchDialog(id: string, name: string) {
+    setFetchDialog({ providerId: id, providerName: name })
+    setModelSearch('')
+    setCreateAlias(true)
+    void fetchUpstreamModels(id)
   }
 
   const importModelsMutation = useMutation({
@@ -424,7 +443,7 @@ export default function Providers() {
   }
 
   function rowsFor(protocol: Protocol, groupId: string | null) {
-    return (providers.data ?? []).filter((provider) => provider.protocol === protocol && provider.group_id === groupId)
+    return visibleProviders.filter((provider) => provider.protocol === protocol && provider.group_id === groupId)
   }
 
   function toggleGroup(key: string) {
@@ -529,10 +548,11 @@ export default function Providers() {
 
   function renderGroup(protocol: Protocol, group: ProviderGroup | null) {
     const rows = rowsFor(protocol, group?.id ?? null)
+    const allRows = (providers.data ?? []).filter((provider) => provider.protocol === protocol && provider.group_id === (group?.id ?? null))
     const key = `${protocol}/${group?.id ?? 'ungrouped'}`
-    const isOpen = !collapsed.has(key)
-    const enabledCount = rows.filter((provider) => provider.enabled).length
-    const groupSwitchChecked = rows.length > 0 && enabledCount === rows.length
+    const isOpen = !!searchQuery || groupFilter !== 'all' || !collapsed.has(key)
+    const enabledCount = allRows.filter((provider) => provider.enabled).length
+    const groupSwitchChecked = allRows.length > 0 && enabledCount === allRows.length
     const isActive = selectionMode.has(key)
     return (
       <Card key={key} className="console-surface shadow-none">
@@ -544,9 +564,9 @@ export default function Providers() {
             <Badge
               variant="secondary"
               className="shrink-0 font-mono whitespace-nowrap"
-              title={group ? `已启用 ${enabledCount} / 共 ${rows.length}` : `共 ${rows.length} 个 Provider`}
+              title={group ? `已启用 ${enabledCount} / 共 ${allRows.length}` : `共 ${allRows.length} 个 Provider`}
             >
-              {group ? `${enabledCount}/${rows.length}` : rows.length}
+              {group ? `${enabledCount}/${allRows.length}` : allRows.length}
             </Badge>
           </button>
           <div className="flex flex-wrap items-center justify-end gap-1">
@@ -574,9 +594,9 @@ export default function Providers() {
               >
                 <Switch
                   checked={groupSwitchChecked}
-                  disabled={!rows.length || groupActionMutation.isPending}
+                  disabled={!allRows.length || groupActionMutation.isPending}
                   onCheckedChange={(enabled) => groupActionMutation.mutate({ action: 'toggle-enabled', group, enabled: enabled ? 1 : 0 })}
-                  aria-label={`切换 ${group.name} 内全部 Provider 启用状态（当前 ${enabledCount}/${rows.length}）`}
+                  aria-label={`切换 ${group.name} 内全部 Provider 启用状态（当前 ${enabledCount}/${allRows.length}）`}
                   title={groupSwitchChecked ? '禁用组内全部 Provider' : '启用组内全部 Provider'}
                 />
               </div>
@@ -584,11 +604,11 @@ export default function Providers() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                disabled={!rows.length || groupActionMutation.isPending}
+                disabled={!allRows.length || groupActionMutation.isPending}
                 aria-label={`清空分组 ${group.name} 内的 Provider`}
                 title="清空 Provider（不删分组）"
                 onClick={async () => {
-                  if (await confirm({ title: '清空分组？', description: `确定删除分组「${group.name}」内的 ${rows.length} 个 Provider？关联的模型和映射候选也会一并删除。`, confirmLabel: '清空', destructive: true })) {
+                  if (await confirm({ title: '清空分组？', description: `确定删除分组「${group.name}」内的 ${allRows.length} 个 Provider？关联的模型和映射候选也会一并删除。`, confirmLabel: '清空', destructive: true })) {
                     groupActionMutation.mutate({ action: 'clear', group })
                   }
                 }}
@@ -674,6 +694,27 @@ export default function Providers() {
         <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={() => openGroupDialog()} size="sm"><FolderPlus className="h-4 w-4" /> 新建分组</Button><Button onClick={openCreate} size="sm"><Plus className="h-4 w-4" /> 新增 Provider</Button></div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[190px] flex-1 sm:max-w-sm">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input aria-label="搜索 Provider" placeholder="搜索 Provider 名称或地址" className="pl-9" value={providerSearch} onChange={(event) => setProviderSearch(event.target.value)} />
+        </div>
+        <Select value={groupFilter} onValueChange={setGroupFilter}>
+          <SelectTrigger className="w-[170px] max-w-full" aria-label="按分组筛选 Provider"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部分组</SelectItem>
+            <SelectItem value="ungrouped">未分组</SelectItem>
+            {PROTOCOLS.map((protocol) => (providerGroups.data ?? []).filter((group) => group.protocol === protocol).map((group) =>
+              <SelectItem key={group.id} value={`${protocol}/${group.id}`}>{protocol} / {group.name}</SelectItem>,
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={groupSort} onValueChange={(value) => setGroupSort(value as 'created' | 'recent')}>
+          <SelectTrigger className="w-[170px] max-w-full" aria-label="分组排序"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="created">按创建时间</SelectItem><SelectItem value="recent">按最近调用</SelectItem></SelectContent>
+        </Select>
+      </div>
+
       <div className="space-y-4">
         {providers.isError && (
           <div className="notice notice-error border border-white/[0.14] px-3.5 py-2.5">
@@ -683,12 +724,23 @@ export default function Providers() {
           </div>
         )}
         {PROTOCOLS.map((protocol) => {
-          const protocolGroups = (providerGroups.data ?? []).filter((group) => group.protocol === protocol)
-          const protocolRows = (providers.data ?? []).filter((provider) => provider.protocol === protocol)
-          if (!protocolGroups.length && !protocolRows.length) return null
-          return <section key={protocol} className="space-y-3" aria-labelledby={`provider-protocol-${protocol}`}><div className="flex items-center gap-2 px-1"><h2 id={`provider-protocol-${protocol}`} className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{protocol}</h2><span className="font-mono text-[10px] text-muted-foreground">{protocolRows.length} NODES</span></div>{protocolGroups.map((group) => renderGroup(protocol, group))}{protocolRows.some((provider) => provider.group_id === null) && renderGroup(protocol, null)}</section>
+          const protocolRows = visibleProviders.filter((provider) => provider.protocol === protocol)
+          const protocolGroups = (providerGroups.data ?? []).filter((group) =>
+            group.protocol === protocol &&
+            (groupFilter === 'all' || groupFilter === `${protocol}/${group.id}`) &&
+            (!searchQuery || protocolRows.some((provider) => provider.group_id === group.id)),
+          )
+          const displayGroups: Array<ProviderGroup | null> = [...protocolGroups]
+          if ((groupFilter === 'all' || groupFilter === 'ungrouped') && protocolRows.some((provider) => provider.group_id === null)) displayGroups.push(null)
+          if (groupSort === 'recent') displayGroups.sort((a, b) =>
+            lastCallFor(protocol, b?.id ?? null).localeCompare(lastCallFor(protocol, a?.id ?? null)) ||
+            (a?.created_at ?? '').localeCompare(b?.created_at ?? ''),
+          )
+          if (!displayGroups.length) return null
+          return <section key={protocol} className="space-y-3" aria-labelledby={`provider-protocol-${protocol}`}><div className="flex items-center gap-2 px-1"><h2 id={`provider-protocol-${protocol}`} className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{protocol}</h2><span className="font-mono text-[10px] text-muted-foreground">{protocolRows.length} NODES</span></div>{displayGroups.map((group) => renderGroup(protocol, group))}</section>
         })}
-        {!hasAnyProvider && !providers.isLoading && !(providerGroups.data ?? []).length && <Card className="console-surface shadow-none"><CardContent className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground"><ServerOff className="h-8 w-8" /><p className="text-sm">还没有 Provider</p><Button variant="outline" size="sm" onClick={openCreate}><Plus className="h-4 w-4" /> 新增 Provider</Button></CardContent></Card>}
+        {(searchQuery || groupFilter !== 'all') && !providers.isLoading && visibleProviders.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">没有匹配的 Provider</p>}
+        {!searchQuery && groupFilter === 'all' && !hasAnyProvider && !providers.isLoading && !(providerGroups.data ?? []).length && <Card className="console-surface shadow-none"><CardContent className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground"><ServerOff className="h-8 w-8" /><p className="text-sm">还没有 Provider</p><Button variant="outline" size="sm" onClick={openCreate}><Plus className="h-4 w-4" /> 新增 Provider</Button></CardContent></Card>}
         {providers.isLoading && <Card className="console-surface shadow-none"><CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">加载中...</CardContent></Card>}
       </div>
 
@@ -717,6 +769,8 @@ export default function Providers() {
         onFetchDialogChange={setFetchDialog}
         upstreamModels={upstreamModels}
         upstreamLoading={upstreamLoading}
+        upstreamError={upstreamError}
+        onRetryFetch={() => fetchDialog && void fetchUpstreamModels(fetchDialog.providerId)}
         selectedModels={selectedModels}
         onSelectedModelsChange={setSelectedModels}
         modelSearch={modelSearch}
@@ -726,6 +780,7 @@ export default function Providers() {
         filteredUpstream={filteredUpstream}
         importedById={importedById}
         importedFetchedIds={importedFetchedIds}
+        importedModelsError={importedModels.isError}
         toggleUpstreamModel={toggleUpstreamModel}
         confirm={confirm}
         cleanupPending={cleanupImportedMutation.isPending}

@@ -1,4 +1,4 @@
-import { Eraser, Loader2, Search, Undo2 } from 'lucide-react'
+import { Eraser, Loader2, RefreshCw, Search, Undo2 } from 'lucide-react'
 import type { ProviderModel } from '@/api/types'
 import type { ConfirmOptions } from '@/components/ConfirmDialog'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,8 @@ export function ImportModelsDialog({
   onFetchDialogChange,
   upstreamModels,
   upstreamLoading,
+  upstreamError,
+  onRetryFetch,
   selectedModels,
   onSelectedModelsChange,
   modelSearch,
@@ -21,6 +23,7 @@ export function ImportModelsDialog({
   filteredUpstream,
   importedById,
   importedFetchedIds,
+  importedModelsError,
   toggleUpstreamModel,
   confirm,
   cleanupPending,
@@ -34,6 +37,8 @@ export function ImportModelsDialog({
   onFetchDialogChange: (value: { providerId: string; providerName: string } | null) => void
   upstreamModels: string[]
   upstreamLoading: boolean
+  upstreamError: string | null
+  onRetryFetch: () => void
   selectedModels: Set<string>
   onSelectedModelsChange: (value: Set<string>) => void
   modelSearch: string
@@ -43,6 +48,7 @@ export function ImportModelsDialog({
   filteredUpstream: string[]
   importedById: Map<string, ProviderModel>
   importedFetchedIds: string[]
+  importedModelsError: boolean
   toggleUpstreamModel: (id: string) => void
   confirm: (options: ConfirmOptions) => Promise<boolean>
   cleanupPending: boolean
@@ -57,7 +63,7 @@ export function ImportModelsDialog({
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle>选择要导入的模型</DialogTitle>
-          <DialogDescription>{fetchDialog ? `从「${fetchDialog.providerName}」拉取到 ${upstreamModels.length} 个模型` : ''}</DialogDescription>
+          <DialogDescription>{fetchDialog ? `「${fetchDialog.providerName}」${upstreamError ? '模型列表拉取失败' : `拉取到 ${upstreamModels.length} 个模型`}` : ''}</DialogDescription>
         </DialogHeader>
         {upstreamLoading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
@@ -65,10 +71,12 @@ export function ImportModelsDialog({
           </div>
         ) : (
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain py-1 pr-1">
-            <div className="relative">
+            {upstreamError && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"><span className="min-w-0 break-words">拉取失败：{upstreamError}</span><Button size="sm" variant="outline" onClick={onRetryFetch}><RefreshCw className="h-3.5 w-3.5" /> 重试</Button></div>}
+            {importedModelsError && <p role="alert" className="text-xs text-destructive">已导入模型状态加载失败，仍可清理该 Provider 的导入模型。</p>}
+            {!upstreamError && <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input className="pl-8 text-sm" placeholder="模型名" value={modelSearch} onChange={(event) => onModelSearchChange(event.target.value)} />
-            </div>
+            </div>}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
                 已选 {selectedModels.size} / {upstreamModels.length}
@@ -76,7 +84,7 @@ export function ImportModelsDialog({
                 {importedFetchedIds.length > 0 && <>，已导入 {importedFetchedIds.length} 个</>}
               </span>
               <div className="flex flex-wrap items-center gap-2">
-                {importedFetchedIds.length > 0 && (
+                {(importedFetchedIds.length > 0 || importedModelsError) && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -84,22 +92,22 @@ export function ImportModelsDialog({
                     disabled={cleanupPending}
                     title="删除该 Provider 全部拉取导入的模型（手动添加的模型不受影响）"
                     onClick={async () => {
-                      if (await confirm({ title: '一键清理导入模型？', description: `确定清理「${fetchDialog?.providerName ?? ''}」已导入的 ${importedFetchedIds.length} 个模型？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`, confirmLabel: '清理', destructive: true })) {
+                      if (await confirm({ title: '一键清理导入模型？', description: `确定清理「${fetchDialog?.providerName ?? ''}」${importedModelsError ? '全部已导入模型' : `已导入的 ${importedFetchedIds.length} 个模型`}？手动添加的模型不受影响；同名映射保留，可在模型映射页清理无候选的无效映射。`, confirmLabel: '清理', destructive: true })) {
                         onCleanup(fetchDialog!.providerId)
                       }
                     }}
                   >
                     <Eraser className="h-3.5 w-3.5" />
-                    {cleanupPending ? '清理中...' : `一键清理已导入（${importedFetchedIds.length}）`}
+                    {cleanupPending ? '清理中...' : importedModelsError ? '一键清理已导入' : `一键清理已导入（${importedFetchedIds.length}）`}
                   </Button>
                 )}
-                <div className="flex items-center gap-2">
+                {!upstreamError && <div className="flex items-center gap-2">
                   <button className="hover:underline" onClick={() => onSelectedModelsChange(new Set([...selectedModels, ...filteredUpstream]))}>全选</button>
                   <button className="hover:underline" onClick={() => { const filtered = new Set(filteredUpstream); onSelectedModelsChange(new Set([...selectedModels].filter((id) => !filtered.has(id)))) }}>全不选</button>
-                </div>
+                </div>}
               </div>
             </div>
-            <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">
+            {!upstreamError && <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-2">
               {filteredUpstream.map((id) => {
                 const imported = importedById.get(id)
                 const isFetched = imported?.source === 'fetched'
@@ -129,19 +137,19 @@ export function ImportModelsDialog({
                 )
               })}
               {!filteredUpstream.length && <p className="py-4 text-center text-sm text-muted-foreground">{upstreamModels.length === 0 ? '未获取到模型' : '无匹配模型'}</p>}
-            </div>
-            <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs">
+            </div>}
+            {!upstreamError && <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs">
               <Checkbox checked={createAlias} onCheckedChange={(checked) => onCreateAliasChange(checked === true)} className="mt-0.5" />
               <span>
                 <span className="font-medium">同时创建同名映射</span>
                 <span className="block text-muted-foreground">取消勾选只登记模型，不创建同名映射；未建映射的模型无法被代理请求。</span>
               </span>
-            </label>
+            </label>}
           </div>
         )}
         <DialogFooter className="shrink-0 border-t pt-2 sm:border-t-0">
           <Button variant="outline" onClick={() => onFetchDialogChange(null)}>取消</Button>
-          <Button disabled={selectedModels.size === 0 || importPending} onClick={() => fetchDialog && onImport({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>
+          <Button disabled={!!upstreamError || upstreamLoading || selectedModels.size === 0 || importPending} onClick={() => fetchDialog && onImport({ providerId: fetchDialog.providerId, modelIds: [...selectedModels], createAlias })}>
             {importPending && <Loader2 className="h-4 w-4 animate-spin" />} 导入 {selectedModels.size} 个模型
           </Button>
         </DialogFooter>

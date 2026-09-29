@@ -81,8 +81,13 @@ export function deleteGroupProviders(input: { protocol: ProviderProtocol; group_
   return deleted
 }
 
-export function listProviders(): ProviderRow[] {
-  const rows = db.prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as Array<ProviderRow & { auth_json_encrypted: string | null }>
+export function listProviders(): Array<ProviderRow & { last_called_at: string | null }> {
+  const rows = db.prepare(`
+    SELECT p.*, (
+      SELECT MAX(l.created_at) FROM logs l WHERE l.provider_id = p.id
+    ) AS last_called_at
+    FROM providers p ORDER BY p.created_at ASC
+  `).all() as Array<ProviderRow & { auth_json_encrypted: string | null; last_called_at: string | null }>
   return rows.map((row) => ({
     ...row,
     auth_json: decryptAuthJson(row),

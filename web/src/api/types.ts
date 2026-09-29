@@ -31,6 +31,7 @@ export interface Provider {
   upstream_type: 'newapi' | 'sub2api' | null
   created_at: string
   updated_at: string
+  last_called_at: string | null
 }
 
 export interface BalanceResult {

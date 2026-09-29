@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS model_alias_targets (
 CREATE INDEX IF NOT EXISTS idx_models_model_id_protocol ON provider_models(model_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_providers_group ON providers(protocol, group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_provider_created ON logs(provider_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alias_targets_priority ON model_alias_targets(protocol, alias_name, priority, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_active_target ON model_alias_targets(protocol, alias_name) WHERE active = 1;
