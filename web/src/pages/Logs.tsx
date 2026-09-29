@@ -36,6 +36,7 @@ const ACTION_LABELS: Record<string, string> = {
   delete: '删除',
   test: '测活',
   fetch: '拉取模型',
+  reveal: '查看明文',
   import: '导入',
   export: '导出',
   reset: '重置',

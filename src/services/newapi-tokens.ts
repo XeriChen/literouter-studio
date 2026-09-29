@@ -18,7 +18,11 @@ const NEWAPI_QUOTA_PER_USD = 500_000
 export const NEWAPI_TOKEN_STATUS_ENABLED = 1
 export const NEWAPI_TOKEN_STATUS_DISABLED = 2
 
-/** 归一化后的令牌视图（额度已折算美元；列表接口返回的 key 为掩码） */
+/**
+ * 归一化后的令牌视图（额度已折算美元；列表接口返回的 key 为掩码）。
+ * group / model_limits* / allow_ips / cross_group_retry 为「本网关不编辑、仅透传保留」的字段：
+ * new-api 的 UpdateToken 非 status_only 分支会整对象覆盖，编辑时必须回填以免清空/重置。
+ */
 export interface NewApiToken {
   id: number
   name: string
@@ -29,6 +33,10 @@ export interface NewApiToken {
   used_usd: number
   expired_time: number
   group: string
+  model_limits_enabled: boolean
+  model_limits: string
+  allow_ips: string
+  cross_group_retry: boolean
 }
 
 export interface NewApiTokenPage {
@@ -53,6 +61,11 @@ export interface UpdateTokenInput {
   unlimited?: boolean
   quota_usd?: number
   expired_time?: number
+  group?: string
+  model_limits_enabled?: boolean
+  model_limits?: string
+  allow_ips?: string
+  cross_group_retry?: boolean
 }
 
 export interface ImportTokenRef {
@@ -138,6 +151,10 @@ function mapToken(raw: unknown): NewApiToken {
     used_usd: roundMoney(usedRaw / NEWAPI_QUOTA_PER_USD),
     expired_time: toFiniteNumber(t.expired_time) ?? -1,
     group: typeof t.group === 'string' ? t.group : '',
+    model_limits_enabled: t.model_limits_enabled === true,
+    model_limits: typeof t.model_limits === 'string' ? t.model_limits : '',
+    allow_ips: typeof t.allow_ips === 'string' ? t.allow_ips : '',
+    cross_group_retry: t.cross_group_retry === true,
   }
 }
 
@@ -203,12 +220,20 @@ export async function createNewApiToken(provider: ProviderRow, accessToken: stri
 
 /**
  * 更新令牌。仅传 status（不含其它字段）时走 `?status_only=1` 只改启停，
- * 避免误清名称/额度/到期；否则整对象覆盖（new-api UpdateToken 语义）。
+ * 避免误清名称/额度/到期/分组/白名单；否则整对象覆盖（new-api UpdateToken 语义）。
+ * 返回是否走了 status_only 分支，供路由据实写审计文案（单一事实来源）。
  */
-export async function updateNewApiToken(provider: ProviderRow, accessToken: string, input: UpdateTokenInput): Promise<void> {
+export async function updateNewApiToken(
+  provider: ProviderRow,
+  accessToken: string,
+  input: UpdateTokenInput,
+): Promise<{ statusOnly: boolean }> {
   const statusOnly = input.status !== undefined
     && input.name === undefined && input.quota_usd === undefined
     && input.unlimited === undefined && input.expired_time === undefined
+    && input.group === undefined && input.model_limits_enabled === undefined
+    && input.model_limits === undefined && input.allow_ips === undefined
+    && input.cross_group_retry === undefined
   const ctx = providerContext(provider)
   try {
     if (statusOnly) {
@@ -216,7 +241,7 @@ export async function updateNewApiToken(provider: ProviderRow, accessToken: stri
         id: input.id,
         status: input.status,
       })
-      return
+      return { statusOnly: true }
     }
     const unlimited = input.unlimited ?? false
     const body: Record<string, unknown> = {
@@ -225,9 +250,15 @@ export async function updateNewApiToken(provider: ProviderRow, accessToken: stri
       unlimited_quota: unlimited,
       remain_quota: unlimited ? 0 : quotaFromUsd(input.quota_usd),
       expired_time: input.expired_time ?? -1,
+      group: input.group ?? '',
+      model_limits_enabled: input.model_limits_enabled ?? false,
+      model_limits: input.model_limits ?? '',
+      allow_ips: input.allow_ips ?? '',
+      cross_group_retry: input.cross_group_retry ?? false,
     }
     if (input.status !== undefined) body.status = input.status
     await consoleRequest(provider, accessToken, 'PUT', '/api/token/', ctx.dispatcher, ctx.signal, body)
+    return { statusOnly: false }
   } finally {
     ctx.done()
   }
@@ -243,16 +274,20 @@ export async function deleteNewApiToken(provider: ProviderRow, accessToken: stri
   }
 }
 
+/** 本地 Key 池上限，与 authSchema `api_keys.max(100)` 对齐；超限则该 Provider 无法再从 UI 保存。 */
+const MAX_KEY_POOL = 100
+
 /**
  * 把选中的上游令牌导入 Provider 本地 Key 池（逐 Key 故障转移）：
  * 逐个取全量 key（尊重 /key 的限流），按 key 值去重后追加为启用条目；
- * 原有单 api_key 迁移为池内 Default 条目。有新增才落库。
+ * 原有单 api_key 迁移为池内 Default 条目。池达 100 上限即停止导入，
+ * 剩余记入 capped（避免写出超限、导致 Provider 在 UI 里保存失败）。有新增才落库。
  */
 export async function importNewApiTokensToPool(
   provider: ProviderRow,
   accessToken: string,
   tokens: ImportTokenRef[],
-): Promise<{ added: number; skipped: number; pool_size: number }> {
+): Promise<{ added: number; skipped: number; capped: number; pool_size: number }> {
   const auth = parseAuth(provider)
   const pool = auth.api_keys
     ? [...auth.api_keys]
@@ -263,7 +298,12 @@ export async function importNewApiTokensToPool(
 
   let added = 0
   let skipped = 0
+  let capped = 0
   for (const token of tokens) {
+    if (pool.length >= MAX_KEY_POOL) {
+      capped++
+      continue
+    }
     const key = await revealNewApiTokenKey(provider, accessToken, token.id)
     if (seen.has(key)) {
       skipped++
@@ -282,5 +322,5 @@ export async function importNewApiTokensToPool(
     updateProvider(provider.id, { auth_json: JSON.stringify(nextAuth) })
   }
 
-  return { added, skipped, pool_size: pool.length }
+  return { added, skipped, capped, pool_size: pool.length }
 }

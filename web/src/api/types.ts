@@ -67,6 +67,10 @@ export interface NewApiToken {
   used_usd: number
   expired_time: number
   group: string
+  model_limits_enabled: boolean
+  model_limits: string
+  allow_ips: string
+  cross_group_retry: boolean
 }
 
 export interface NewApiTokenPage {

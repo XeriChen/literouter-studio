@@ -42,6 +42,7 @@ after(async () => {
 interface Capture {
   method: string
   path: string
+  url: string
   auth: string | undefined
   body: unknown
 }
@@ -65,6 +66,7 @@ function startMockUpstream(
         captures.push({
           method: req.method ?? '',
           path: (req.url ?? '').split('?')[0],
+          url: req.url ?? '',
           auth: req.headers.authorization,
           body,
         })
@@ -118,7 +120,7 @@ describe('newapi token management', () => {
           page_size: 20,
           total: 2,
           items: [
-            { id: 1, name: 'main', key: 'sk-****abcd', status: 1, unlimited_quota: false, remain_quota: 2_500_000, used_quota: 500_000, expired_time: -1, group: 'default' },
+            { id: 1, name: 'main', key: 'sk-****abcd', status: 1, unlimited_quota: false, remain_quota: 2_500_000, used_quota: 500_000, expired_time: -1, group: 'default', model_limits_enabled: true, model_limits: 'gpt-4,claude-3', allow_ips: '1.2.3.4', cross_group_retry: true },
             { id: 2, name: 'infinite', key: 'sk-****ef01', status: 2, unlimited_quota: true, remain_quota: 0, used_quota: 1_000_000, expired_time: 1_893_456_000, group: '' },
           ],
         },
@@ -128,14 +130,21 @@ describe('newapi token management', () => {
 
     const page = await listNewApiTokens(provider, 'pat-token', { page: 1, size: 20 })
     assert.equal(upstream.captures[0].path, '/api/token/')
+    assert.equal(upstream.captures[0].url, '/api/token/?p=1&page_size=20', 'passes p and page_size query params')
     assert.equal(page.total, 2)
     assert.deepEqual(page.items[0], {
       id: 1, name: 'main', key: 'sk-****abcd', status: 1, unlimited: false,
       remain_usd: 5, used_usd: 1, expired_time: -1, group: 'default',
+      model_limits_enabled: true, model_limits: 'gpt-4,claude-3', allow_ips: '1.2.3.4', cross_group_retry: true,
     })
     assert.equal(page.items[1].unlimited, true)
     assert.equal(page.items[1].remain_usd, null, 'unlimited token has no finite remaining')
     assert.equal(page.items[1].used_usd, 2)
+    assert.deepEqual(
+      { model_limits_enabled: page.items[1].model_limits_enabled, model_limits: page.items[1].model_limits, allow_ips: page.items[1].allow_ips, cross_group_retry: page.items[1].cross_group_retry },
+      { model_limits_enabled: false, model_limits: '', allow_ips: '', cross_group_retry: false },
+      'missing passthrough fields default to empty',
+    )
     upstream.server.close()
   })
 
@@ -169,21 +178,42 @@ describe('newapi token management', () => {
     const upstream = await startMockUpstream((req, res) => jsonRes(res, { success: true, data: null }))
     const provider = makeProvider(upstream.baseUrl)
 
-    await updateNewApiToken(provider, 'pat-token', { id: 4, status: 2 })
+    const result = await updateNewApiToken(provider, 'pat-token', { id: 4, status: 2 })
+    assert.deepEqual(result, { statusOnly: true })
     assert.equal(upstream.captures[0].method, 'PUT')
-    assert.equal((upstream.captures[0] as { path: string }).path, '/api/token/')
+    assert.equal(upstream.captures[0].path, '/api/token/')
+    assert.equal(upstream.captures[0].url, '/api/token/?status_only=1')
     assert.deepEqual(upstream.captures[0].body, { id: 4, status: 2 })
     upstream.server.close()
   })
 
-  it('updates full fields when name/quota/expiry are provided', async () => {
+  it('updates full fields when name/quota/expiry are provided, preserving passthrough fields', async () => {
     const upstream = await startMockUpstream((req, res) => jsonRes(res, { success: true, data: null }))
     const provider = makeProvider(upstream.baseUrl)
 
-    await updateNewApiToken(provider, 'pat-token', { id: 5, name: 'renamed', unlimited: false, quota_usd: 2, expired_time: -1 })
+    const result = await updateNewApiToken(provider, 'pat-token', { id: 5, name: 'renamed', unlimited: false, quota_usd: 2, expired_time: -1 })
+    assert.deepEqual(result, { statusOnly: false })
     assert.equal(upstream.captures[0].method, 'PUT')
     assert.deepEqual(upstream.captures[0].body, {
       id: 5, name: 'renamed', unlimited_quota: false, remain_quota: 1_000_000, expired_time: -1,
+      group: '', model_limits_enabled: false, model_limits: '', allow_ips: '', cross_group_retry: false,
+    })
+    upstream.server.close()
+  })
+
+  it('round-trips group / model limits / allow_ips / cross_group_retry on full update so they are not wiped', async () => {
+    const upstream = await startMockUpstream((req, res) => jsonRes(res, { success: true, data: null }))
+    const provider = makeProvider(upstream.baseUrl)
+
+    const result = await updateNewApiToken(provider, 'pat-token', {
+      id: 6, name: 'vip', unlimited: false, quota_usd: 1, expired_time: -1, status: 1,
+      group: 'premium', model_limits_enabled: true, model_limits: 'gpt-4,claude-3', allow_ips: '1.2.3.4', cross_group_retry: true,
+    })
+    assert.deepEqual(result, { statusOnly: false })
+    assert.equal((upstream.captures[0].url ?? '').includes('status_only'), false, 'a full update must not use status_only')
+    assert.deepEqual(upstream.captures[0].body, {
+      id: 6, name: 'vip', unlimited_quota: false, remain_quota: 500_000, expired_time: -1, status: 1,
+      group: 'premium', model_limits_enabled: true, model_limits: 'gpt-4,claude-3', allow_ips: '1.2.3.4', cross_group_retry: true,
     })
     upstream.server.close()
   })
@@ -210,7 +240,7 @@ describe('newapi token management', () => {
       { id: 1, name: 'first' },
       { id: 2, name: 'second' },
     ])
-    assert.deepEqual(result, { added: 2, skipped: 0, pool_size: 3 })
+    assert.deepEqual(result, { added: 2, skipped: 0, capped: 0, pool_size: 3 })
 
     const auth = parseAuth(getProvider(provider.id)!)
     assert.equal(auth.api_key, undefined, 'legacy single key is folded into the pool')
@@ -238,10 +268,31 @@ describe('newapi token management', () => {
       { id: 1, name: 'dup' },
       { id: 2, name: 'fresh' },
     ])
-    assert.deepEqual(result, { added: 1, skipped: 1, pool_size: 2 })
+    assert.deepEqual(result, { added: 1, skipped: 1, capped: 0, pool_size: 2 })
     const auth = parseAuth(getProvider(provider.id)!)
     assert.equal(auth.key_strategy, 'random', 'existing strategy is preserved')
     assert.deepEqual(auth.api_keys?.map((k) => k.key), ['sk-dup', 'sk-new'])
+    upstream.server.close()
+  })
+
+  it('caps the pool at 100 keys, counting the overflow as capped without persisting over-limit', async () => {
+    let revealCount = 0
+    const upstream = await startMockUpstream((req, res, _body, captures) => {
+      revealCount++
+      const id = Number(captures[captures.length - 1].path.split('/')[3])
+      jsonRes(res, { success: true, data: { key: `sk-import-${id}` } })
+    })
+    // 现有池已 98 个，导入 5 个：只能加 2 个到上限，其余 3 个记 capped 且不再 reveal
+    const existing = Array.from({ length: 98 }, (_, i) => ({ id: `e${i}`, name: `E${i}`, key: `sk-existing-${i}`, enabled: true }))
+    const provider = makeProvider(upstream.baseUrl, { access_token: 'pat-token', api_keys: existing, key_strategy: 'polling' })
+
+    const result = await importNewApiTokensToPool(provider, 'pat-token', [
+      { id: 1, name: 'a' }, { id: 2, name: 'b' }, { id: 3, name: 'c' }, { id: 4, name: 'd' }, { id: 5, name: 'e' },
+    ])
+    assert.deepEqual(result, { added: 2, skipped: 0, capped: 3, pool_size: 100 })
+    assert.equal(revealCount, 2, 'stops revealing once the pool is full')
+    const auth = parseAuth(getProvider(provider.id)!)
+    assert.equal(auth.api_keys?.length, 100, 'persisted pool never exceeds the 100-key limit')
     upstream.server.close()
   })
 

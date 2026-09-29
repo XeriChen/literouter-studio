@@ -74,11 +74,13 @@ export function TokenManagementDialog({
   const [formOpen, setFormOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingStatus, setEditingStatus] = useState<1 | 2>(1)
+  // 编辑时透传保留 new-api 侧本网关不编辑的字段，避免整对象覆盖清空
+  const [editingPreserved, setEditingPreserved] = useState<Pick<NewApiToken, 'model_limits_enabled' | 'model_limits' | 'allow_ips' | 'cross_group_retry'> | null>(null)
   const [form, setForm] = useState<TokenForm>({ ...EMPTY_TOKEN_FORM })
 
   useEffect(() => {
     setPage(1); setSelected(new Set()); setRevealed({})
-    setFormOpen(false); setEditingId(null); setForm({ ...EMPTY_TOKEN_FORM })
+    setFormOpen(false); setEditingId(null); setEditingPreserved(null); setForm({ ...EMPTY_TOKEN_FORM })
   }, [providerId])
   useEffect(() => { setSelected(new Set()) }, [page])
 
@@ -127,16 +129,22 @@ export function TokenManagementDialog({
         if (!Number.isFinite(quota) || quota < 0) throw new Error('额度必须是非负数字')
         body.quota_usd = quota
       }
+      body.group = form.group.trim()
       if (editingId !== null) {
         body.status = editingStatus
+        if (editingPreserved) {
+          body.model_limits_enabled = editingPreserved.model_limits_enabled
+          body.model_limits = editingPreserved.model_limits
+          body.allow_ips = editingPreserved.allow_ips
+          body.cross_group_retry = editingPreserved.cross_group_retry
+        }
         return api(`/api/providers/${providerId}/newapi/tokens/${editingId}`, { method: 'PUT', body: JSON.stringify(body) })
       }
-      body.group = form.group.trim()
       return api(`/api/providers/${providerId}/newapi/tokens`, { method: 'POST', body: JSON.stringify(body) })
     },
     onSuccess: () => {
       onResult({ message: editingId !== null ? '令牌已更新' : '令牌已创建', ok: true })
-      setFormOpen(false); setEditingId(null); setForm({ ...EMPTY_TOKEN_FORM })
+      setFormOpen(false); setEditingId(null); setEditingPreserved(null); setForm({ ...EMPTY_TOKEN_FORM })
       invalidateTokens()
     },
     onError: (error) => onResult({ message: `保存失败：${error instanceof Error ? error.message : 'unknown'}`, ok: false }),
@@ -157,22 +165,24 @@ export function TokenManagementDialog({
 
   const importMutation = useMutation({
     mutationFn: (tokens: Array<{ id: number; name: string }>) =>
-      api<{ added: number; skipped: number; pool_size: number }>(`/api/providers/${providerId}/newapi/tokens/import`, { method: 'POST', body: JSON.stringify({ tokens }) }),
+      api<{ added: number; skipped: number; capped: number; pool_size: number }>(`/api/providers/${providerId}/newapi/tokens/import`, { method: 'POST', body: JSON.stringify({ tokens }) }),
     onSuccess: (data) => {
       setSelected(new Set())
-      onResult({ message: `导入完成：新增 ${data.added}，跳过 ${data.skipped}，本地 Key 池共 ${data.pool_size} 个`, ok: true })
+      const cappedNote = data.capped > 0 ? `，超 100 上限跳过 ${data.capped}` : ''
+      onResult({ message: `导入完成：新增 ${data.added}，跳过 ${data.skipped}${cappedNote}，本地 Key 池共 ${data.pool_size} 个`, ok: true })
       onPoolChanged()
     },
     onError: (error) => onResult({ message: `导入失败：${error instanceof Error ? error.message : 'unknown'}`, ok: false }),
   })
 
   function openCreate() {
-    setEditingId(null); setForm({ ...EMPTY_TOKEN_FORM }); setFormOpen(true)
+    setEditingId(null); setEditingPreserved(null); setForm({ ...EMPTY_TOKEN_FORM }); setFormOpen(true)
   }
 
   function openEdit(token: NewApiToken) {
     setEditingId(token.id)
     setEditingStatus(token.status === 1 ? 1 : 2)
+    setEditingPreserved({ model_limits_enabled: token.model_limits_enabled, model_limits: token.model_limits, allow_ips: token.allow_ips, cross_group_retry: token.cross_group_retry })
     setForm({
       name: token.name,
       unlimited: token.unlimited,
@@ -227,12 +237,10 @@ export function TokenManagementDialog({
                 <Label>名称</Label>
                 <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="令牌名称" />
               </div>
-              {editingId === null && (
-                <div className="space-y-1.5">
-                  <Label>分组（可选）</Label>
-                  <Input value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })} placeholder="留空为默认分组" />
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <Label>分组（可选）</Label>
+                <Input value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })} placeholder="留空为默认分组" />
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-2 text-sm">
@@ -254,7 +262,7 @@ export function TokenManagementDialog({
               )}
             </div>
             <div className="flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => { setFormOpen(false); setEditingId(null) }}>取消</Button>
+              <Button size="sm" variant="outline" onClick={() => { setFormOpen(false); setEditingId(null); setEditingPreserved(null) }}>取消</Button>
               <Button size="sm" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
                 {saveMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {editingId !== null ? '保存修改' : '创建'}
               </Button>

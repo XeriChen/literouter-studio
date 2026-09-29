@@ -34,6 +34,12 @@ const updateSchema = z.object({
   unlimited: z.boolean().optional(),
   quota_usd: z.number().min(0).optional(),
   expired_time: z.number().int().optional(),
+  // 本网关不编辑、仅透传保留：new-api 整对象覆盖会清空缺省字段，编辑时需回填
+  group: z.string().optional(),
+  model_limits_enabled: z.boolean().optional(),
+  model_limits: z.string().optional(),
+  allow_ips: z.string().optional(),
+  cross_group_retry: z.boolean().optional(),
 }).refine((value) => Object.values(value).some((entry) => entry !== undefined), 'token patch cannot be empty')
 
 const importSchema = z.object({
@@ -115,10 +121,8 @@ app.put('/:id/newapi/tokens/:tokenId', async (c) => {
   if (!Number.isInteger(tokenId)) return fail(c, 400, 'invalid token id', 'invalid_request_body')
   const parsed = updateSchema.safeParse(await readJson(c))
   if (!parsed.success) return fail(c, 400, 'invalid token config', 'invalid_request_body')
-  const statusOnly = parsed.data.status !== undefined && parsed.data.name === undefined
-    && parsed.data.quota_usd === undefined && parsed.data.unlimited === undefined && parsed.data.expired_time === undefined
   try {
-    await updateNewApiToken(resolved.provider, resolved.accessToken, { id: tokenId, ...parsed.data })
+    const { statusOnly } = await updateNewApiToken(resolved.provider, resolved.accessToken, { id: tokenId, ...parsed.data })
     const detail = statusOnly
       ? `${parsed.data.status === 1 ? '启用' : '禁用'}上游令牌 #${tokenId}`
       : `更新上游令牌 #${tokenId}`
@@ -150,7 +154,8 @@ app.post('/:id/newapi/tokens/import', async (c) => {
   if (!parsed.success) return fail(c, 400, 'tokens must be a non-empty array', 'invalid_request_body')
   try {
     const result = await importNewApiTokensToPool(resolved.provider, resolved.accessToken, parsed.data.tokens)
-    writeAuditLog({ resource: 'token', target: resolved.provider.name, action: 'import', detail: `导入上游令牌到本地 Key 池: 新增 ${result.added}, 跳过 ${result.skipped}`, status: 200 })
+    const cappedNote = result.capped > 0 ? `, 超上限跳过 ${result.capped}` : ''
+    writeAuditLog({ resource: 'token', target: resolved.provider.name, action: 'import', detail: `导入上游令牌到本地 Key 池: 新增 ${result.added}, 跳过 ${result.skipped}${cappedNote}`, status: 200 })
     return ok(c, result)
   } catch (err) {
     return respondError(c, err, resolved.provider, 'import')
