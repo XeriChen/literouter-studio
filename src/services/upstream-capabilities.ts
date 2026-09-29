@@ -15,19 +15,38 @@ export interface BalanceCapability {
   reason: 'upstream-type-missing' | 'upstream-type-unsupported' | null
 }
 
+/** 令牌（Key）管理能力：目前仅 new-api 系控制台 `/api/token` 提供 */
+export interface TokenManagementCapability {
+  supported: boolean
+  reason: 'upstream-type-missing' | 'upstream-type-unsupported' | null
+}
+
 export interface UpstreamCapabilities {
   balance: BalanceCapability
+  tokenManagement: TokenManagementCapability
 }
 
 export function getUpstreamCapabilities(upstreamType: ProviderRow['upstream_type']): UpstreamCapabilities {
   switch (upstreamType) {
     case 'newapi':
-      return { balance: { supported: true, method: 'newapi_billing', reason: null } }
+      return {
+        balance: { supported: true, method: 'newapi_billing', reason: null },
+        tokenManagement: { supported: true, reason: null },
+      }
     case 'sub2api':
-      return { balance: { supported: true, method: 'sub2api', reason: null } }
+      return {
+        balance: { supported: true, method: 'sub2api', reason: null },
+        tokenManagement: { supported: false, reason: 'upstream-type-unsupported' },
+      }
     case null:
-      return { balance: { supported: false, method: null, reason: 'upstream-type-missing' } }
+      return {
+        balance: { supported: false, method: null, reason: 'upstream-type-missing' },
+        tokenManagement: { supported: false, reason: 'upstream-type-missing' },
+      }
     default:
-      return { balance: { supported: false, method: null, reason: 'upstream-type-unsupported' } }
+      return {
+        balance: { supported: false, method: null, reason: 'upstream-type-unsupported' },
+        tokenManagement: { supported: false, reason: 'upstream-type-unsupported' },
+      }
   }
 }

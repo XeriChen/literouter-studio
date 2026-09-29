@@ -854,3 +854,51 @@ test('adds a candidate target by searching models across providers', async ({ pa
   await page.getByRole('button', { name: '添加' }).click()
   await expect.poll(() => addTargetBody).toMatchObject({ protocol: 'openai', alias_name: 'alias-a', provider_id: 'p2', model_id: 'canary-model' })
 })
+
+test('manages new-api upstream tokens and imports them into the key pool', async ({ page }) => {
+  const browserErrors: string[] = []
+  page.on('console', (message) => { if (message.type() === 'error') browserErrors.push(message.text()) })
+  page.on('pageerror', (error) => browserErrors.push(error.message))
+  await page.addInitScript(() => localStorage.setItem('llm_gateway_token', 'mock-token'))
+  const createdAt = '2026-08-17T00:00:00.000Z'
+  const tokens = [
+    { id: 1, name: 'main', key: 'sk-****abcd', status: 1, unlimited: false, remain_usd: 5, used_usd: 1, expired_time: -1, group: 'default' },
+    { id: 2, name: 'infinite', key: 'sk-****ef01', status: 2, unlimited: true, remain_usd: null, used_usd: 2, expired_time: -1, group: '' },
+  ]
+  let createBody: unknown = null
+  let importBody: unknown = null
+  await page.route('**/api/provider-groups', (route) => route.fulfill({ json: { ok: true, data: [] } }))
+  await page.route('**/api/providers', (route) => route.fulfill({ json: { ok: true, data: [
+    { id: 'np1', name: 'NewAPI', protocol: 'openai', group_id: null, base_url: 'https://np.example.test', auth: { access_token: 'pat' }, custom_headers: {}, proxy_url: null, timeout_ms: null, model_filter: null, enabled: 1, upstream_type: 'newapi', created_at: createdAt, updated_at: createdAt, last_called_at: null },
+  ] } }))
+  await page.route((url) => url.pathname.includes('/newapi/tokens'), async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/reveal')) return route.fulfill({ json: { ok: true, data: { key: 'sk-full-secret-1' } } })
+    if (path.endsWith('/import')) { importBody = JSON.parse(route.request().postData() ?? '{}'); return route.fulfill({ json: { ok: true, data: { added: 1, skipped: 0, pool_size: 2 } } }) }
+    if (route.request().method() === 'GET') return route.fulfill({ json: { ok: true, data: { items: tokens, total: tokens.length, page: 1, page_size: 20 } } })
+    if (route.request().method() === 'POST') { createBody = JSON.parse(route.request().postData() ?? '{}'); return route.fulfill({ json: { ok: true, data: {} } }) }
+    return route.fulfill({ json: { ok: true, data: {} } })
+  })
+
+  await page.goto('/providers')
+  await page.getByRole('button', { name: '管理 NewAPI 的上游令牌' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'Token 管理' })).toBeVisible()
+  await expect(dialog.getByText('main', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('infinite', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('button', { name: '显示或隐藏 main 的明文 Key' }).click()
+  await expect(dialog.getByText('sk-full-secret-1')).toBeVisible()
+
+  await dialog.getByRole('button', { name: '新建令牌' }).click()
+  await dialog.getByPlaceholder('令牌名称').fill('ci')
+  await dialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(page.getByText('令牌已创建')).toBeVisible()
+  expect(createBody).toMatchObject({ name: 'ci', unlimited: false, expired_time: -1 })
+
+  await dialog.getByRole('checkbox', { name: '选择 main' }).check()
+  await dialog.getByRole('button', { name: /导入 1 个到 Key 池/ }).click()
+  await expect(page.getByText(/导入完成：新增 1/)).toBeVisible()
+  expect(importBody).toMatchObject({ tokens: [{ id: 1, name: 'main' }] })
+  expect(browserErrors).toEqual([])
+})

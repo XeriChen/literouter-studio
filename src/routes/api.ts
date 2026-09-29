@@ -8,6 +8,7 @@ import { registerModelRoutes } from './api/models'
 import { registerProviderRoutes } from './api/providers'
 import { registerSettingsRoutes } from './api/settings'
 import balanceRoutes from './api/balance'
+import newapiTokenRoutes from './api/newapi-tokens'
 
 export const api = new Hono<Env>()
 
@@ -20,3 +21,4 @@ registerModelRoutes(api)
 registerLogRoutes(api)
 registerBackupRoutes(api)
 api.route('/providers', balanceRoutes)
+api.route('/providers', newapiTokenRoutes)

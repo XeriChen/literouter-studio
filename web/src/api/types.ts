@@ -56,6 +56,26 @@ export interface BalanceResult {
   expires_at: string | null
 }
 
+/** new-api 归一化令牌视图（额度已折算美元；列表 key 为掩码，明文需单独 reveal） */
+export interface NewApiToken {
+  id: number
+  name: string
+  key: string
+  status: number
+  unlimited: boolean
+  remain_usd: number | null
+  used_usd: number
+  expired_time: number
+  group: string
+}
+
+export interface NewApiTokenPage {
+  items: NewApiToken[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface ProviderGroup {
   protocol: 'openai' | 'anthropic'
   id: string

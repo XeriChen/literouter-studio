@@ -34,6 +34,7 @@ export type AuditAction =
   | 'reorder'
   | 'merge'
   | 'weight'
+  | 'reveal'
 
 export interface AuditInput {
   resource: AuditResource

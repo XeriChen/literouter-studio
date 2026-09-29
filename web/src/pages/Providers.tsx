@@ -10,6 +10,7 @@ import {
   Copy,
   ExternalLink,
   FolderPlus,
+  KeyRound,
   ListChecks,
   Loader2,
   Pencil,
@@ -36,6 +37,7 @@ import {
   type Protocol,
 } from '@/components/providers/ProviderFormDialog'
 import { ImportModelsDialog } from '@/components/providers/ImportModelsDialog'
+import { TokenManagementDialog } from '@/components/providers/TokenManagementDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -91,6 +93,7 @@ export default function Providers() {
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [modelSearch, setModelSearch] = useState('')
   const [createAlias, setCreateAlias] = useState(true)
+  const [tokenDialogProvider, setTokenDialogProvider] = useState<Provider | null>(null)
 
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Provider[]>('/api/providers') })
   const providerGroups = useQuery({ queryKey: ['provider-groups'], queryFn: () => api<ProviderGroup[]>('/api/provider-groups') })
@@ -504,6 +507,7 @@ export default function Providers() {
                   <TableCell><Switch checked={!!provider.enabled} disabled={toggleMutation.isPending && toggleMutation.variables?.id === provider.id} onCheckedChange={() => toggleMutation.mutate(provider)} aria-label={`切换 ${provider.name} 启用状态`} /></TableCell>
                   <TableCell className="pr-6"><div className="flex items-center justify-end gap-1">
                     {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="icon-button" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
+                    {provider.upstream_type === 'newapi' && <Button variant="ghost" size="icon" className="icon-button" aria-label={`管理 ${provider.name} 的上游令牌`} title="Token 管理" onClick={() => setTokenDialogProvider(provider)}><KeyRound className="h-3.5 w-3.5" /></Button>}
                     <Button variant="ghost" size="icon" className="icon-button" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
                     <Button variant="ghost" size="icon" className="icon-button" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
                     <Button variant="ghost" size="icon" className="icon-button" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
@@ -540,6 +544,7 @@ export default function Providers() {
               </div>
               <div className="flex items-center justify-end gap-1 pt-1 border-t border-foreground/5">
                 {(provider.upstream_type === 'newapi' || provider.upstream_type === 'sub2api') && <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`查询 ${provider.name} 余额`} title="查询余额" onClick={() => balanceMutation.mutate(provider.id)} disabled={balanceMutation.isPending}><CircleDollarSign className="h-3.5 w-3.5" /></Button>}
+                {provider.upstream_type === 'newapi' && <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`管理 ${provider.name} 的上游令牌`} title="Token 管理" onClick={() => setTokenDialogProvider(provider)}><KeyRound className="h-3.5 w-3.5" /></Button>}
                 <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`测试 ${provider.name}`} title="测试连通性" onClick={() => testMutation.mutate(provider.id)} disabled={testMutation.isPending}><Wifi className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`拉取 ${provider.name} 的模型`} title="拉取模型" onClick={() => openFetchDialog(provider.id, provider.name)}><RefreshCw className="h-3.5 w-3.5" /></Button>
                 <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`复制 ${provider.name}`} title="复制 Provider" onClick={() => openCopy(provider)}><Copy className="h-3.5 w-3.5" /></Button>
@@ -798,6 +803,14 @@ export default function Providers() {
         onCancelImport={(input) => cancelImportMutation.mutate(input)}
         importPending={importModelsMutation.isPending}
         onImport={(input) => importModelsMutation.mutate(input)}
+      />
+
+      <TokenManagementDialog
+        provider={tokenDialogProvider}
+        onOpenChange={(open) => { if (!open) setTokenDialogProvider(null) }}
+        onResult={setResult}
+        confirm={confirm}
+        onPoolChanged={invalidateProviderData}
       />
     </div>
     </>
