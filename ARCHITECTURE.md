@@ -215,7 +215,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 ### 测活（liveness）
 
-模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」；30s 硬超时。管理路由会校验真实模型存在且 Provider 启用；真实模型未启用仍允许测活。测活按真实 `provider_id + model_id` 调用，不经过映射层；请求体可显式携带 `thinking` 配置，value 校验后按协议注入测活请求体（Anthropic `thinking` / OpenAI `reasoning_effort`），映射页的快速测活会自动带上该映射的思考等级。
+模型测活提示词黑名单（hi/hello/你好/测试/test/1），trim 后 ≥4 字符；默认「现在的美国总统是谁」（后端 `DEFAULT_TEST_PROMPT`，前端同一句常量在 `web/src/lib/prompts.ts`，测活弹窗留空、真实模型行内快速测活、映射快速测活与 Playground 一键问话全局统一，改动时需同步两边）；30s 硬超时。管理路由会校验真实模型存在且 Provider 启用；真实模型未启用仍允许测活。测活按真实 `provider_id + model_id` 调用，不经过映射层；请求体可显式携带 `thinking` 配置，value 校验后按协议注入测活请求体（Anthropic `thinking` / OpenAI `reasoning_effort`），映射页的快速测活会自动带上该映射的思考等级。
 
 测活按 Provider 协议构造非流式 Chat/Messages 请求并解析回复。Provider 模型列表拉取和连通性测试复用认证头与 `(proxy_url, timeout)` dispatcher；Provider/全局超时为 0 时，代理请求不设连接/响应头超时，但这两类管理操作仍以 30s `AbortSignal` 兜底。
 
@@ -231,7 +231,7 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 - Provider 表单可管理同渠道多把 Key：逐把命名、启停、删除和重排，选择轮询/随机/顺序优先策略；列表展示已启用数量及进程内冷却摘要。复制 Provider 会复制当前 Key 池配置，不复制运行时冷却状态。
 - Models 页两个 tab：**模型映射**（按协议分组展示、分组与候选面板默认折叠，搜索时强制展开分组；映射编辑弹窗改映射名+移动分组、启用开关、候选展开管理/拖拽优先级、当前目标切换、快速测活、批量选择支持移动分组/启停/删除与合并多个映射的候选；候选面板内可直接编辑路由模式（single/weighted/failover 与尝试数/冷却/亲和参数）和各候选的分配权重；分组支持「导入映射」——在弹窗内模糊搜索映射名后批量移入；新增候选与新建映射的模型选择为可搜索下拉（按模型 ID/显示名/Provider 名模糊匹配，已存在的候选置灰）：新增候选的搜索覆盖同协议全部已启用 Provider 的模型并按 Provider 分组展示，选中后自动回填 Provider 与模型；新建映射在所选 Provider 内搜索，选中模型后可一键把真实模型名填为映射名（映射名为空时自动填入）；页头「清理无效映射」一键删除无任何候选目标（候选指向的真实模型/Provider 已不存在）的映射，确认后按当前协议筛选范围批量删除）与**真实模型**（按 Provider 分组、默认折叠，搜索或筛选到具体 Provider 时自动展开；搜索/筛选、手动添加、启用/禁用、测活、批量操作）；新增候选时 Provider 与目标模型必须启用且协议一致。
 - Logs 页两个 tab：**代理访问**（协议/Provider/模型/状态筛选、手动刷新、清空）与**配置操作**（按资源类型筛选、手动刷新、独立清空）。
-- Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。
+- Playground：只展示映射、active 目标、Provider 与真实模型均启用的项目；ChatUI 发送时 `model` 字段仍为映射名。空对话时 ChatUI 在已选映射的情况下展示默认提示词的一键提问按钮（与测活默认提示词同源），点击直接以该文案发起流式请求；未选映射时只显示「选择模型映射后开始对话」。
 - `ChatUI` 使用 `SseDeltaParser` 处理任意网络 chunk 边界、CRLF、多个 `data:` 行和没有尾部分隔符的最终事件；按 `protocol + alias` 将对话持久化到 `localStorage`。
 - Settings 页可查看/复制/重置 Token、配置 host/port/全局超时/日志保留天数/健康探针间隔（`health_check_interval_seconds`，0=关闭，5-86400 秒，即时生效）；重置后当前前端会用新 Token 续期，备份导入则清除本地 Token 并强制回登录页。
 - shadcn 组件新增用 `pnpm dlx shadcn@latest add ...`；`@/*` 别名指向 `web/src/*`。

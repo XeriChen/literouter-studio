@@ -28,6 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { DEFAULT_PROMPT } from '@/lib/prompts'
 import ModelAliases from './ModelAliases'
 
 export default function Models() {
@@ -281,7 +282,7 @@ function RealModelsList() {
                       onClick={() => {
                         setQuickTestId(rowKey)
                         runTest.mutate(
-                          { model: m, prompt: '请用一句话介绍你自己' },
+                          { model: m, prompt: DEFAULT_PROMPT },
                           {
                             onSuccess: (data) => addToast(true, `${m.model_id}: ${data.reply}`, data.latency_ms),
                             onError: (err) => addToast(false, `${m.model_id}: ${err instanceof Error ? err.message : '测试失败'}`, 0),

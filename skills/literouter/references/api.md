@@ -75,7 +75,7 @@ Provider 对象字段：`id, name, protocol(openai|anthropic), group_id, base_ur
 | 手动加模型 | `POST /api/models` | `{provider_id, model_id, display_name?}`；默认 enabled=1 |
 | 启用/禁用模型 | `PATCH /api/models` | `{provider_id, model_id, enabled:0\|1}` |
 | 删除模型 | `DELETE /api/models` | `{provider_id, model_id}` |
-| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时。产生真实推理消耗，按 Skill 中的推理授权与 thinking 规则执行；不经过映射层 |
+| 测活 | `POST /api/models/test` | `{provider_id, model_id, prompt?, thinking?}`；默认提示词「现在的美国总统是谁」（前端测活弹窗、真实模型行内快速测活与 Playground 一键问话用同一句，prompt 省略即取该默认值）；黑名单 hi/hello/你好/测试/test/1 且 trim 后 ≥4 字符；30s 硬超时。产生真实推理消耗，按 Skill 中的推理授权与 thinking 规则执行；不经过映射层 |
 
 ## 4. 模型映射与候选（路由核心）
 

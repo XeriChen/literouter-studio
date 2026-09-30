@@ -8,6 +8,7 @@ import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { Textarea } from '@/components/ui/textarea'
 import { SseDeltaParser } from '@/lib/sse'
 import { copyText } from '@/lib/clipboard'
+import { DEFAULT_PROMPT } from '@/lib/prompts'
 
 export interface ChatMessage {
   id: string
@@ -112,14 +113,22 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     if (persistKey) localStorage.removeItem(persistKey)
   }, [persistKey])
 
-  const send = useCallback(async () => {
-    if (!input.trim() || !alias || streaming) return
+  /**
+   * text 为字符串时直接以该文案发起（Playground 一键问话，含 DEFAULT_PROMPT）；
+   * 其余情况取输入框内容。用 typeof 判断而不是 truthy，避免 onClick={send}
+   * 这类写法把事件对象传进来时静默走错分支。
+   */
+  const send = useCallback(async (text?: string) => {
+    const explicit = typeof text === 'string'
+    const content = (explicit ? text : input).trim()
+    if (!content || !alias || streaming) return
 
-    const userMsg: ChatMessage = { id: newMessageId(), role: 'user', content: input.trim() }
+    const userMsg: ChatMessage = { id: newMessageId(), role: 'user', content }
     const history = [...messages, userMsg]
     setMessages(history)
     persist(history)
-    setInput('')
+    // 一键问话不动用户输入框里的草稿；输入框发送时才清空
+    if (!explicit) setInput('')
     setStreaming(true)
 
     const ac = new AbortController()
@@ -230,8 +239,23 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
         {!hasMessages && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            选择模型映射后开始对话
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+            <p className="text-sm text-muted-foreground">
+              {alias ? '一键提问，或在下方输入自定义消息' : '选择模型映射后开始对话'}
+            </p>
+            {alias && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={streaming}
+                onClick={() => void send(DEFAULT_PROMPT)}
+                title={`一键提问：${DEFAULT_PROMPT}`}
+                aria-label={`一键提问：${DEFAULT_PROMPT}`}
+              >
+                <SendHorizontal className="h-3.5 w-3.5" />
+                {DEFAULT_PROMPT}
+              </Button>
+            )}
           </div>
         )}
         {messages.map((m) => (
@@ -309,7 +333,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
               <Square className="h-4 w-4" />
             </Button>
           ) : (
-            <Button size="icon" aria-label="发送消息" title="发送消息" onClick={send} disabled={!input.trim() || !alias}>
+            <Button size="icon" aria-label="发送消息" title="发送消息" onClick={() => void send()} disabled={!input.trim() || !alias}>
               <SendHorizontal className="h-4 w-4" />
             </Button>
           )}
