@@ -64,7 +64,7 @@
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选；默认 **single** 模式只路由到唯一 `active` 目标；**weighted / failover** 按映射 `routing_config` 消费候选（加权随机 / 优先级故障转移，含冷却、单探测与亲和），禁止在请求期发明配置之外的第四种策略；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - 两协议代理入口分别挂 `/openai`、`/anthropic`；端点的版本段自动归一化（缺 `/v1` 自动补齐、多重 `/v1` 自动去重，见 `src/proxy/path.ts`）。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
-- **双分支模型与 CD 逻辑**：`main` 只作为生产镜像——生产机仅通过 `scripts/deploy.sh` 快进拉取，禁止在主仓库提交或保留未推送提交；`dev` 是开发线，在 worktree 中编码、提交并推送到 `origin/dev`。发布 = dev 快进合入 main（`git push origin dev:main` 或 GitHub PR）后在生产仓库跑 `scripts/deploy.sh`；推送 ≠ 部署，部署是显式动作。生产机上不要跑 `git reset --hard` / `git checkout --`，会静默丢掉未提交改动。
+- **双分支模型与 CD 逻辑**：`main` 只作为生产镜像——生产机仅通过 `scripts/deploy.sh` 快进拉取，禁止在主仓库提交或保留未推送提交；`dev` 是开发线，在 worktree 中编码、提交并推送到 `origin/dev`。发布 = dev 快进合入 main（`git push origin dev:main` 或 GitHub PR）后在生产仓库跑 `scripts/deploy.sh`；推送 ≠ 部署，部署是显式动作。**推送远端 main 后不要在生产仓库本地提前快进（`git merge`/`git pull`）**，一律交给 `scripts/deploy.sh` 执行——脚本靠本地 HEAD 落后于远端来判断有变更，本地提前快进会被判为"已是最新"而跳过备份、质量门禁与重启。生产机上不要跑 `git reset --hard` / `git checkout --`，会静默丢掉未提交改动。
 - **本机 3000 端口是生产网关（systemd `literouter.service`）**：功能开发一律用 `scripts/dev-worktree.sh`（默认 `dev` 分支）在 worktree 里进行，开发实例默认 3001/5174（`HOST=127.0.0.1`，数据与 `.env` 独立），严禁在生产仓库或 3000 端口跑开发服务；vite 代理目标跟随 `PORT`，不会误连生产。
 - 测试若直接或间接 import `src/db`，必须在 import 之前切到临时目录（`process.chdir(mkdtempSync(join(tmpdir(), ...)))`）或设置 `GATEWAY_DATA_DIR`，因为库路径按进程当前目录解析。`NODE_TEST_CONTEXT` 进程打开非临时目录的库会直接抛错（曾发生测试 DELETE 掉真实 Provider 配置的事故）。
 - 新增 shadcn/ui 组件时用 `pnpm dlx shadcn@latest add ...`，配置见 `components.json`。
