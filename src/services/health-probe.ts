@@ -102,9 +102,10 @@ export async function probeCoolingTargetsOnce(): Promise<number> {
       })
       const okStatus = res.status >= 200 && res.status < 300
       await drainBody(res.body)
-      // 只计 5xx/401/402/403/408/429 或网络错误为失败；普通 4xx（如拒绝 max_tokens:1）不计失败
+      // 探针本身使用最小请求体；仅把可归因于 Provider/模型可用性的状态
+      // 计入冷却，避免上游因不支持 max_tokens 等探针参数返回普通 4xx 时误伤候选。
       if (okStatus) reportSuccess(candidate.aliasKey, candidate.targetId, config, { armAffinity: false })
-      else if (res.status >= 500 || res.status === 401 || res.status === 402 || res.status === 403 || res.status === 408 || res.status === 429) {
+      else if (res.status >= 500 || res.status === 401 || res.status === 402 || res.status === 403 || res.status === 404 || res.status === 408 || res.status === 429) {
         reportFailure(candidate.aliasKey, candidate.targetId, config)
       } else {
         reportClientCancel(candidate.aliasKey, candidate.targetId)

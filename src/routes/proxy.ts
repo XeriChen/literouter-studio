@@ -37,14 +37,33 @@ function clientIp(c: Context): string | null {
   return env?.incoming?.socket?.remoteAddress ?? null
 }
 
-/** 这些上游状态视为「该候选的故障」，可在首字节写出前换下一候选重试；其余 4xx 属客户端问题，原样透传 */
-const RETRYABLE_STATUS = new Set([401, 402, 403, 408, 429])
+/**
+ * 上游状态码分类（收到响应头后）：
+ * - Provider 故障（凭据/权限 401-403、模型或端点缺失 404、超时 408、限流 429、服务端 5xx）
+ *   → 拦截错误体，换 Key/候选重试并按规冷却；
+ * - 其余 4xx（400/413/422 等）视为客户端请求错误 → 同样拦截错误体，但按原始状态码返回客户端，
+ *   不切 Key/候选、不冷却，避免一次畸形请求毒化整池 Key 或整条候选链。
+ * 拦截（不透传上游错误体）对所有 4xx/5xx 生效；成功响应（<400）照常透传。
+ */
+function isProviderFaultStatus(status: number): boolean {
+  if (status === 401 || status === 402 || status === 403) return true
+  if (status === 404) return true
+  if (status === 408 || status === 429) return true
+  return status >= 500
+}
 
+/** Provider 故障状态码 → 候选耗尽后对客户端包装的状态码与错误码。 */
 function retryableStatusError(status: number): { code: string; clientStatus: number } {
   if (status === 429) return { code: 'upstream_rate_limited', clientStatus: 502 }
   if (status === 401 || status === 402 || status === 403) return { code: 'upstream_auth_error', clientStatus: 502 }
+  if (status === 404) return { code: 'upstream_not_found', clientStatus: 502 }
   if (status === 408) return { code: 'upstream_timeout', clientStatus: 504 }
   return { code: 'upstream_error', clientStatus: 502 }
+}
+
+/** 上游错误的日志 error_code：Provider 故障归入对应 upstream_* 码，客户端请求错误归为 upstream_request_error。 */
+function upstreamErrorCode(status: number): string {
+  return isProviderFaultStatus(status) ? retryableStatusError(status).code : 'upstream_request_error'
 }
 
 /**
@@ -77,6 +96,8 @@ interface AttemptOutcome {
   message?: string
   upstreamStatus?: number | null
   retryHeaders?: Record<string, string>
+  /** 结果可能已发送到当前 Provider；跳过该 Provider 的其他 Key，直接换候选。 */
+  candidateOnly?: boolean
 }
 
 /** 把上游响应原样转给客户端（过滤逐跳头），并挂字节统计/usage 解析；保留 Retry-After 等头 */
@@ -92,9 +113,10 @@ function buildPassthroughResponse(res: UpstreamResponse, logId: number): Respons
 }
 
 /**
- * 单次候选尝试：发请求、写该次 attempt 的日志行，返回透传响应或「可重试失败」标记。
- * 仅明确收到可重试状态或确认请求未发送的连接错误允许重试；响应头前的其他
- * 传输错误结果不明，不得重放。一旦 done 的 Response 开始流动也不得切换。
+ * 单次候选尝试：发请求、写该次 attempt 的日志行，返回成功透传响应、「可重试失败」或「客户端错误」标记。
+ * Provider 故障的 HTTP 错误允许换 Key/候选重试并按规冷却；客户端请求错误（其余 4xx）按原始状态码返回客户端，
+ * 不重试、不冷却；响应头阶段结果不明的传输错误只允许切换真实模型 Provider，不在当前 Provider 内重放其他 Key。
+ * 一旦 done 的 Response 开始流动也不得切换。
  */
 async function forwardAttempt(params: {
   c: Context
@@ -108,10 +130,8 @@ async function forwardAttempt(params: {
   requestBytes: number
   attempt: number
   apiKey?: string
-  /** 旧单 Key 的 single 模式：4xx 可重试状态直接透传原始响应 */
-  passthroughRetryable4xx?: boolean
 }): Promise<AttemptOutcome> {
-  const { c, provider, upstreamPath, method, outBody, protocol, requestedModel, resolvedModel, requestBytes, attempt, passthroughRetryable4xx, apiKey } = params
+  const { c, provider, upstreamPath, method, outBody, protocol, requestedModel, resolvedModel, requestBytes, attempt, apiKey } = params
   const attemptStartedAt = Date.now()
   const queryString = c.req.url.includes('?') ? c.req.url.slice(c.req.url.indexOf('?')) : ''
   const url = buildUpstreamUrl(provider.base_url, upstreamPath, queryString)
@@ -151,7 +171,14 @@ async function forwardAttempt(params: {
       request_bytes: requestBytes,
       attempt,
     })
-    return { kind: isSafeToRetryTransportError(err) ? 'retryable' : 'terminal', clientStatus: status, code, message, upstreamStatus: null }
+    return {
+      kind: 'retryable',
+      clientStatus: status,
+      code,
+      message,
+      upstreamStatus: null,
+      candidateOnly: !isSafeToRetryTransportError(err),
+    }
   }
 
   // 收到上游响应头，立即写日志（latency = 该次尝试的首包耗时）
@@ -167,18 +194,21 @@ async function forwardAttempt(params: {
     resolved_model: resolvedModel,
     status: res.status,
     latency_ms: headerAt - attemptStartedAt,
-    error_code: res.status >= 400 && (RETRYABLE_STATUS.has(res.status) || res.status >= 500) ? retryableStatusError(res.status).code : null,
+    error_code: res.status >= 400 ? upstreamErrorCode(res.status) : null,
     request_bytes: requestBytes,
     attempt,
   })
 
-  if (res.status >= 500 || RETRYABLE_STATUS.has(res.status)) {
-    if (passthroughRetryable4xx && RETRYABLE_STATUS.has(res.status)) {
-      return { kind: 'done', response: buildPassthroughResponse(res, logId) }
-    }
+  if (res.status >= 400) {
+    // 所有 4xx/5xx 一律拦截错误体，不透传给客户端
     await drainBody(res.body)
-    const { code, clientStatus } = retryableStatusError(res.status)
-    return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})`, upstreamStatus: res.status, retryHeaders: Object.fromEntries(res.headers.entries()) }
+    if (isProviderFaultStatus(res.status)) {
+      // Provider 故障：换 Key/候选重试并按规冷却
+      const { code, clientStatus } = retryableStatusError(res.status)
+      return { kind: 'retryable', clientStatus, code, message: `upstream error (HTTP ${res.status})`, upstreamStatus: res.status, retryHeaders: Object.fromEntries(res.headers.entries()) }
+    }
+    // 客户端请求错误（400/413/422 等其余 4xx）：按原始状态码返回，不切 Key/候选、不冷却
+    return { kind: 'terminal', clientStatus: res.status, code: 'upstream_request_error', message: `upstream request error (HTTP ${res.status})`, upstreamStatus: res.status }
   }
 
   return { kind: 'done', response: buildPassthroughResponse(res, logId) }
@@ -287,6 +317,7 @@ proxyRoutes.all('*', async (c) => {
           const pool = hasKeyPool(candidate.provider)
           const excluded = new Set<string>()
           let failed = false
+          let candidateOnlyFailure = false
           let candidateRetryAfterMs: number | undefined
           do {
             const keyPick = pool ? pickKey(candidate.provider, candidate.model.model_id, excluded) : null
@@ -307,14 +338,11 @@ proxyRoutes.all('*', async (c) => {
               requestBytes,
               attempt: ++outboundAttempt,
               apiKey: keyPick?.credential.key,
-              passthroughRetryable4xx: config.mode === 'single' && !pool,
             })
             if (outcome.kind === 'done') {
-              if (keyPick) {
-                if (outcome.response!.status < 400) reportKeySuccess(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
-                else releaseKeyProbe(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
-              }
-              if (config.mode !== 'single' && outcome.response!.status < 400) {
+              // done 只承载成功响应（<400）：上报 Key 成功并按其释放探测位
+              if (keyPick) reportKeySuccess(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
+              if (config.mode !== 'single') {
                 reportSuccess(aliasKey, candidate.target.id, config, { armAffinity: pick.isProbe || attempt > 1 })
               } else if (pick.isProbe) {
                 reportClientCancel(aliasKey, candidate.target.id)
@@ -322,6 +350,7 @@ proxyRoutes.all('*', async (c) => {
               return outcome.response!
             }
             if (outcome.kind === 'terminal') {
+              // 客户端请求错误：不切 Key/候选、不冷却，仅释放探测位并按原始状态码返回
               if (keyPick?.isProbe) releaseKeyProbe(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
               if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
               return proxyError(c, outcome.clientStatus!, outcome.message!, outcome.code!)
@@ -329,6 +358,16 @@ proxyRoutes.all('*', async (c) => {
             failed = true
             lastFailure = { clientStatus: outcome.clientStatus!, code: outcome.code!, message: outcome.message!, retryAfter: outcome.retryHeaders?.['retry-after'] }
             candidateRetryAfterMs = outcome.retryHeaders ? retryAfterMs(outcome.retryHeaders) ?? undefined : undefined
+            if (outcome.candidateOnly) {
+              // 响应头阶段结果不明的传输错误：请求可能已被上游处理，不冷却 Key/候选，
+              // 仅释放探测位后跳过当前 Provider，不在其内重放其他 Key
+              if (keyPick?.isProbe) releaseKeyProbe(candidate.provider.id, keyPick.credential.id, candidate.model.model_id)
+              if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
+              activeKey = null
+              candidateOnlyFailure = true
+              break
+            }
+            // 可归因失败（Provider 故障或明确未发送的连接错误）：冷却当前 Key，换同 Provider 下一 Key 重试
             if (keyPick) reportKeyFailure(candidate.provider.id, keyPick.credential.id, candidate.model.model_id, outcome.upstreamStatus ?? null, config.cooldown_seconds ?? 60, outcome.retryHeaders)
             activeKey = null
           } while (pool)
@@ -336,8 +375,9 @@ proxyRoutes.all('*', async (c) => {
             const retrySeconds = pool ? nextKeyRetrySeconds(candidate.provider, candidate.model.model_id) : null
             lastFailure = { clientStatus: 503, code: 'no_available_key', message: 'no available provider key', retryAfter: retrySeconds ? String(retrySeconds) : undefined }
           }
-          // Key 池候选不做候选级冷却：冷却已按 Key 粒度记录，候选级冷却会误伤池内其他可用 Key
-          if (config.mode !== 'single' && failed && !pool) reportFailure(aliasKey, candidate.target.id, config, Date.now(), candidateRetryAfterMs)
+          // 候选冷却：Key 池由 Key 各自状态控制（避免误伤池内其他可用 Key）；无 Key 池候选在可归因失败后冷却；
+          // ambiguous 传输错误（candidateOnlyFailure）与 single 模式均不冷却候选
+          if (config.mode !== 'single' && failed && !pool && !candidateOnlyFailure) reportFailure(aliasKey, candidate.target.id, config, Date.now(), candidateRetryAfterMs)
         } catch (err) {
           // 取消不计失败；任何未完成的尝试都必须释放探测位。
           if (pick.isProbe) reportClientCancel(aliasKey, candidate.target.id)
@@ -345,7 +385,7 @@ proxyRoutes.all('*', async (c) => {
           throw err
         }
       }
-      // 所有候选尝试均失败（每 attempt 已写日志，不再补写）；single 模式的 4xx 已在最后一次尝试内透传
+      // 所有候选尝试均失败（每 attempt 已写日志，不再补写）。
       if (lastFailure?.retryAfter) c.header('Retry-After', lastFailure.retryAfter)
       return proxyError(c, lastFailure?.clientStatus ?? 502, lastFailure?.message ?? 'upstream error', lastFailure?.code ?? 'upstream_error')
     } finally {

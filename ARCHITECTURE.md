@@ -148,7 +148,8 @@ Provider 分组按协议隔离，每个 Provider 最多属于一个组。分组�
 | 404 | `not_found` | `/api` 未匹配（代理端点路径已自动归一化，见 §6） |
 | 405 | `method_not_allowed` | 模型列表以外的代理请求使用非 POST 方法 |
 | 503 | `provider_disabled` | 模型启用但 Provider 禁用 |
-| 502 | `upstream_error` | 代理上游不可达/拒绝连接/5xx，或管理侧上游调用失败 |
+| 502 | `upstream_error` / `upstream_auth_error` / `upstream_not_found` / `upstream_rate_limited` | 代理上游错误在候选耗尽后由网关统一包装，或管理侧上游调用失败 |
+| 400/413/422 等 | `upstream_request_error` | 上游判定为客户端请求错误（其余 4xx）：按原始状态码返回，不切 Key/候选、不冷却，不透传上游错误体 |
 | 504 | `upstream_timeout` | 代理连接/响应头阶段或管理侧上游调用超时 |
 | 500 | `backup_export_failed` | 导出备份时某个 Provider 的认证数据无法解密（多为 `ENCRYPTION_KEY` 丢失或更换） |
 | 500 | `internal_error` | 未处理的网关内部异常 |
@@ -164,8 +165,10 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
      → 按候选真实模型名定点改写 body → 选择该 Provider 可用 Key → 构造上游 URL（过 assertSafeOutboundUrl 兜底校验）
      → undici 请求(dispatcher 按 proxy_url+timeout 缓存)
      → 收到响应头 → 立即写日志(latency = 本次尝试首包耗时, attempt=第几次尝试)
-     → 2xx/3xx/普通 4xx 原样透传；5xx/401/402/403/408/429 或明确未发送的连接错误
-       （均发生在首个字节写给客户端之前）→ 冷却该 Key 并试同 Provider 下一 Key；Key 用尽才换候选
+     → 2xx/3xx 原样透传；4xx/5xx 或传输错误（均发生在首个字节写给客户端之前）由网关拦截，不透传上游错误体：
+       · Provider 故障（401/402/403/404/408/429/5xx）→ 按 Key、候选顺序重试并按规冷却，耗尽后包装为 502/504；
+       · 客户端请求错误（其余 4xx，如 400/413/422）→ 按原始状态码返回客户端，不切 Key/候选、不冷却
+       同一候选内「可确认未发送」的连接错误换下一 Key；「结果不明」的传输错误跳过当前 Provider 的其他 Key，切换下一个候选
 ```
 
 路由模式（`src/services/routing.ts` 的 `buildCandidateOrder`）：
@@ -176,13 +179,13 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 健康状态机（`src/services/health.ts`，纯进程内，重启即清空）：
 - **重试上限**：单次请求最多尝试 `min(max_attempts, 候选数)` 个候选；max_attempts 未配置 = 尝试全部。一个候选内最多尝试当时可用的每把 Key 一次；Key 尝试不占候选预算
 - **候选冷却**：无 Key 池的候选失败后，以 `Retry-After`/限流重置头指定的时长或 `cooldown_seconds`（默认 60）冷却；`cooldown_seconds: 0` 显式关闭冷却，此时上游 `Retry-After` 也不再生效；Key 池候选由 Key 各自的状态控制，避免候选冷却掩盖已恢复的 Key
-- **Key 冷却**：401/402/403 冷却整把 Key；429/408/5xx/明确未发送的连接错误按真实模型冷却该 Key。优先采用 `Retry-After`（秒或 HTTP 日期）和 Anthropic/OpenAI 限流重置头，最长 1 小时，否则用 `cooldown_seconds`（显式配 0 同样关闭 Key 冷却，含 `Retry-After`）。普通 4xx 是请求错误，不切 Key、不冷却。状态只在进程内，修改 Provider 认证或导入备份时清空
-- **single 模式**：旧单 Key 配置保持原有行为，不进入候选冷却、成功不计亲和；多 Key 配置仍启用 Key 自身的冷却和恢复探测
+- **Key 冷却**：仅可归因于 Provider 的故障冷却 Key —— 401/402/403 冷却整把 Key；已收到的 429/408/5xx 与明确未发送的连接错误按真实模型冷却该 Key。客户端请求错误（其余 4xx，如 400/413/422）与响应头阶段结果不明的传输错误均不冷却 Key：前者按原始状态码返回客户端，后者只跳过当前 Provider 的其他 Key、切换下一个候选。优先采用 `Retry-After`（秒或 HTTP 日期）和 Anthropic/OpenAI 限流重置头，最长 1 小时，否则用 `cooldown_seconds`（显式配 0 同样关闭 Key 冷却，含 `Retry-After`）。状态只在进程内，修改 Provider 认证或导入备份时清空
+- **single 模式**：只用 active 候选且最多一次出站，不进入候选冷却、成功不计亲和；Provider 故障在耗尽后包装为 502/504，客户端请求错误按原始状态码返回，多 Key 配置仍启用 Key 自身的冷却和恢复探测
 - **单探测**：代理选路在候选或 Key 冷却到期后仅放行一个请求探测；探测完成前并发请求跳过该成员。代理请求不会在冷却未到期时提前探测（另行启用的周期健康探针可主动请求冷却中的候选）；无可用候选返回 503 `no_available_target`，无可用 Key 返回 503 `no_available_key`
 - **亲和**：探测或故障切换后的成功可在 `affinity_seconds` 内把后续请求固定到该候选（未配置则不启用）
 - **客户端取消不计失败**；探测请求被取消时立即释放探测位
 
-重试只在「首个响应字节写给客户端之前」进行：一旦透传流开始，不再切换 Key 或候选。响应头前的传输异常也可能发生在上游已收到请求之后，只有连接建立前的错误（如连接超时/拒绝、DNS 失败）可确认未发送并重试；响应头超时、连接中断等结果不明时直接返回 504/502，防止重复计费。每次实际上游尝试各写一条访问日志（`attempt` 列）。单 Key 的 single 模式保持原有 401/403/408/429 直接透传；多 Key 的 single 模式先换 Key，用尽后包装为 502/504 或返回无可用 Key 的 503。上游提供 `Retry-After` 时，包装错误也保留该头。
+重试只在「首个响应字节写给客户端之前」进行：一旦透传流开始，不再切换 Key 或候选。已收到的 Provider 故障状态码（401/402/403/404/408/429/5xx）由网关拦截并只记录访问日志，再按 Key、候选顺序重试；客户端请求错误（其余 4xx）不透传、不重试，按原始状态码返回客户端。连接建立前的错误可确认未发送时换同 Provider 的 Key；响应头阶段结果不明的传输错误不在**当前 Provider 内**重放（请求可能已被该上游处理），而是直接切换下一个候选——这只保证不在同一 Provider 上重复可能已处理的请求，请求仍会被发往另一个候选，无法完全排除重复处理。每次实际上游尝试各写一条访问日志（`attempt` 列）。候选耗尽后返回网关生成的 502/504/503 错误，客户端请求错误按原始 4xx 返回；均不透传上游错误响应体。上游提供 `Retry-After` 时，包装错误也保留该头。
 
 被动 usage 统计（`src/proxy/usage.ts`）：透传流内扫描未转义的 JSON token 键（`prompt_tokens`/`completion_tokens`/`total_tokens`/`input_tokens`/`output_tokens` 及 Anthropic cache token 键），同键取最后一次出现；**绝不向任何请求注入字段**（因此 OpenAI 流式仅当客户端自行开启 `stream_options.include_usage` 时可见 usage，未携带时列为 null，属预期精度边界）。字符串值内的引号必然被转义，模型输出内容不会误触发计数。
 
@@ -192,8 +195,8 @@ POST 请求 → auth 校验(token) → 50 MiB 上限 → body JSON 解析提取 
 
 - `src/proxy/body.ts` 先按 `Content-Length` 快速拒绝超限请求，再通过 `ReadableStream` 分块读取，累计超过 50 MiB 时立即取消读取。
 - 代理只接受顶层 JSON object 且 `model` 必须是非空字符串。解析器保留原文中顶层 `model` 字符串及 `thinking`/`reasoning_effort` 值的字节范围，路由成功后做定点替换（模型名恒替换；思考字段按映射配置的 override/default 改写，缺失时在对象开头注入）；不重新序列化 JSON，因此空白、字段顺序、数字精度、转义和其他同名字段都保持不变。重复键遵循 `JSON.parse` 的最后一个键语义；思考字段重复时仅替换最后一次出现的值。
-- 上游响应 body 是 Node `Readable`：成功与 3xx/4xx 响应用 `new Response(readable)` 透传，5xx 或无需返回 body 时调用 `.dump()` 排空；上游缺少 `content-type` 时默认补 `application/json`。
-- 上游 3xx/普通 4xx 保留状态码与响应体（401/402/403/408/429 视为凭据或上游故障，按上文重试；候选耗尽后客户端收到 502/504 包装；旧单 Key 的 single 模式仍直接透传这些状态）；5xx 转为 502 `upstream_error`；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
+- 上游响应 body 是 Node `Readable`：成功与 3xx 响应用 `new Response(readable)` 透传；4xx/5xx 错误体一律由网关拦截并调用 `.dump()` 排空，不直接回传（客户端请求错误按原始状态码、Provider 故障按 502/504 包装，正文均为网关生成）；上游缺少 `content-type` 时默认补 `application/json`。
+- 上游 4xx/5xx 统一记录原始状态：Provider 故障（401/402/403/404/408/429/5xx）按 Key、真实模型 Provider 顺序重试，耗尽后客户端收到网关生成的 502/504 包装；客户端请求错误（其余 4xx）按原始状态码返回、不重试。任何上游错误响应体都不透传；连接/响应头阶段超时转为 504 `upstream_timeout`。客户端断连触发 abort，`app.onError` 生成内部 499 响应并抑制噪音错误日志。
 - 转发请求丢弃 hop-by-hop、客户端认证和 `content-length`，强制 `accept-encoding: identity`；Provider 认证头最后写入，`custom_headers` 不能覆盖网关已写入的认证/协议头和 `accept-encoding`；未配置 Key 的 Provider 不写入认证头，可用 `custom_headers` 自带（如 `authorization`）。
 - 收到上游响应头即写访问日志：`latency_ms` 是首包耗时，`status` 记录上游原始状态，`model` 记请求的映射名，`provider_name` / `resolved_model` 记实际路由的提供商名称与真实模型名（冗余落库）。因此上游 5xx 虽向客户端转换为 502，日志仍保留实际的上游 5xx；映射/超时等网关失败则记录网关状态与 `error_code`。
 
