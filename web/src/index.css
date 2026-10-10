@@ -89,54 +89,55 @@
 
 @layer base {
   :root {
-    --background: 54 28% 96%;
-    --foreground: 222 24% 12%;
-    --card: 54 33% 99%;
-    --card-foreground: 222 24% 12%;
-    --popover: 54 33% 99%;
-    --popover-foreground: 222 24% 12%;
-    --primary: 222 24% 12%;
-    --primary-foreground: 72 100% 76%;
-    --secondary: 54 16% 90%;
-    --secondary-foreground: 222 24% 12%;
-    --muted: 54 16% 91%;
-    --muted-foreground: 222 10% 42%;
-    --accent: 72 100% 76%;
-    --accent-foreground: 222 24% 12%;
-    --destructive: 0 70% 48%;
+    --background: 220 20% 97.5%;
+    --foreground: 224 32% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 32% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 32% 12%;
+    --primary: 224 32% 12%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 224 32% 12%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 12% 44%;
+    --accent: 154 85% 38%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 222 16% 81%;
-    --input: 222 16% 81%;
-    --ring: 72 95% 48%;
-    --radius: 0.55rem;
-    --success: 154 65% 35%;
-    --warning: 34 88% 42%;
-    --info: 191 75% 38%;
+    --border: 220 16% 87%;
+    --input: 220 16% 87%;
+    --ring: 154 85% 42%;
+    --radius: 0.625rem;
+    --success: 154 75% 36%;
+    --warning: 34 92% 44%;
+    --info: 199 89% 44%;
   }
 
   .dark {
-    --background: 222 25% 8%;
-    --foreground: 70 25% 94%;
-    --card: 222 22% 11%;
-    --card-foreground: 70 25% 94%;
-    --popover: 222 22% 12%;
-    --popover-foreground: 70 25% 94%;
-    --primary: 72 100% 76%;
-    --primary-foreground: 222 25% 8%;
-    --secondary: 222 18% 16%;
-    --secondary-foreground: 70 25% 94%;
-    --muted: 222 18% 16%;
-    --muted-foreground: 215 12% 64%;
-    --accent: 72 100% 76%;
-    --accent-foreground: 222 25% 8%;
-    --destructive: 0 64% 55%;
+    --background: 224 25% 6%;
+    --foreground: 215 25% 95%;
+    --card: 224 22% 9.5%;
+    --card-foreground: 215 25% 95%;
+    --popover: 224 22% 10.5%;
+    --popover-foreground: 215 25% 95%;
+    --primary: 154 85% 54%;
+    --primary-foreground: 224 28% 6%;
+    --secondary: 224 16% 15%;
+    --secondary-foreground: 215 25% 95%;
+    --muted: 224 16% 15%;
+    --muted-foreground: 215 14% 64%;
+    --accent: 154 85% 54%;
+    --accent-foreground: 224 28% 6%;
+    --destructive: 0 72% 58%;
     --destructive-foreground: 0 0% 100%;
-    --border: 222 16% 24%;
-    --input: 222 16% 25%;
-    --ring: 72 100% 70%;
-    --success: 154 67% 53%;
-    --warning: 34 92% 60%;
-    --info: 191 82% 62%;
+    --border: 224 16% 18%;
+    --input: 224 16% 20%;
+    --ring: 154 85% 54%;
+    --radius: 0.625rem;
+    --success: 154 85% 54%;
+    --warning: 38 95% 58%;
+    --info: 199 89% 58%;
   }
 
   * { @apply border-border; }
@@ -153,36 +154,89 @@
 
 @layer components {
   .surface-grid {
-    background-image: linear-gradient(hsl(var(--foreground) / 0.045) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground) / 0.045) 1px, transparent 1px);
-    background-size: 32px 32px;
+    background-image:
+      radial-gradient(hsl(var(--foreground) / 0.08) 1px, transparent 1px),
+      linear-gradient(hsl(var(--foreground) / 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--foreground) / 0.025) 1px, transparent 1px);
+    background-size: 24px 24px, 48px 48px, 48px 48px;
   }
   .dark .surface-grid {
-    background-image: linear-gradient(hsl(var(--foreground) / 0.065) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground) / 0.065) 1px, transparent 1px);
+    background-image:
+      radial-gradient(hsl(var(--foreground) / 0.12) 1px, transparent 1px),
+      linear-gradient(hsl(var(--foreground) / 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--foreground) / 0.035) 1px, transparent 1px);
+    background-size: 24px 24px, 48px 48px, 48px 48px;
   }
   .eyebrow { @apply font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground; }
-  .page-shell { @apply mx-auto w-full max-w-[1480px] animate-rise-in; }
+  .page-shell { @apply mx-auto w-full max-w-[1520px] animate-rise-in; }
   .page-heading { @apply flex flex-wrap items-end justify-between gap-5 border-b border-foreground/10 pb-7; }
   .page-title { @apply text-2xl font-extrabold tracking-[-0.06em] sm:text-3xl; }
   .page-description { @apply mt-2 max-w-2xl text-sm leading-6 text-muted-foreground; }
-  .console-surface { @apply overflow-hidden border border-foreground/10 bg-card/70; }
+  .console-surface { @apply overflow-hidden rounded-xl border border-foreground/10 bg-card/80 backdrop-blur-md shadow-sm; }
   .console-toolbar { @apply flex flex-wrap items-center justify-between gap-3 border-b border-foreground/10 px-4 py-3; }
   .data-table { @apply min-w-[720px] text-sm; }
   .data-table thead { @apply bg-foreground/[.025]; }
   .data-table th { @apply h-10 whitespace-nowrap px-3 text-left font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground; }
   .data-table td { @apply px-3 py-3 align-middle; }
-  .data-table tbody tr { @apply border-b border-foreground/[.08] transition-colors; }
-  .data-table tbody tr:hover { @apply bg-muted/45; }
+  .data-table tbody tr { @apply border-b border-foreground/[.08] transition-colors duration-150; }
+  .data-table tbody tr:hover { @apply bg-muted/50; }
   .signal-line { @apply relative overflow-hidden; }
-  .signal-line::after { content: ''; @apply absolute inset-y-0 -left-1/2 w-1/2 bg-gradient-to-r from-transparent via-accent/20 to-transparent; animation: signal-sweep 4s ease-in-out infinite; }
-  .status-dot { @apply inline-block h-1.5 w-1.5 rounded-full bg-[hsl(var(--success))] shadow-[0_0_12px_hsl(var(--success)/.8)]; }
+  .signal-line::after { content: ''; @apply absolute inset-y-0 -left-1/2 w-1/2 bg-gradient-to-r from-transparent via-accent/30 to-transparent; animation: signal-sweep 3.5s ease-in-out infinite; }
+
+  .status-dot { @apply inline-block h-2 w-2 rounded-full bg-[hsl(var(--success))] shadow-[0_0_12px_hsl(var(--success)/.8)]; }
   .status-dot.idle { @apply bg-muted-foreground shadow-none; }
   .status-dot.warn { @apply bg-[hsl(var(--warning))] shadow-[0_0_12px_hsl(var(--warning)/.6)]; }
-  .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors; }
+
+  /* 雷达呼吸脉冲指示点 */
+  .pulse-radar {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pulse-radar::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 9999px;
+    background-color: currentColor;
+    opacity: 0.45;
+    animation: radar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes radar-ping {
+    0% { transform: scale(0.8); opacity: 0.8; }
+    75%, 100% { transform: scale(2.4); opacity: 0; }
+  }
+
+  /* 流式打字光标 */
+  .streaming-cursor {
+    display: inline-block;
+    width: 6px;
+    height: 15px;
+    margin-left: 3px;
+    vertical-align: -2px;
+    background: currentColor;
+    border-radius: 1px;
+    animation: cursor-blink 0.85s infinite ease-in-out;
+  }
+  @keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+  }
+
+  /* 玻璃拟态与悬停卡片 */
+  .glass-card {
+    @apply rounded-xl border border-foreground/10 bg-card/75 backdrop-blur-xl transition-all duration-200;
+  }
+  .glass-card-hover {
+    @apply transition-all duration-200 hover:-translate-y-1 hover:border-foreground/20 hover:shadow-xl hover:shadow-black/5 dark:hover:shadow-black/30;
+  }
+
+  .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 active:scale-95; }
   .icon-button:hover { @apply bg-muted text-foreground; }
   .icon-button:disabled { @apply pointer-events-none opacity-40; }
-  /* 通知横幅：不透明实色底 + 白字，浮层（.notice-layer）与内嵌（引导条/弹窗内）共用。
-     注意：本项目构建出的 preflight * { margin/padding/border:0 } 为非分层规则，会压过
-     @layer components 内的同类声明，因此 padding/border 一律由 JSX 工具类提供，不在此 @apply */
+
+  /* 通知横幅 */
   .notice {
     @apply flex items-start gap-2.5 rounded-lg text-sm font-medium leading-5 text-white;
     box-shadow: 0 14px 34px -14px rgb(0 0 0 / 0.55);
@@ -198,7 +252,8 @@
   .notice .icon-button {
     @apply ml-auto h-6 w-6 shrink-0 rounded-md text-white/70 transition-colors hover:bg-white/15 hover:text-white;
   }
-  /* 浮动通知层：portal 到 body，fixed 锚定视口顶部（page-shell 的入场动画会产生 transform 包含块，不能放内部） */
+
+  /* 浮动通知层 */
   .notice-layer {
     @apply pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center;
     flex-direction: row;
@@ -208,7 +263,6 @@
     align-items: center;
   }
   .notice-layer .notice {
-    /* 宽度随内容收缩，短文不占满；长文不超出浮层（浮层带 px-4），到上限后换行 */
     @apply pointer-events-auto w-fit max-w-[min(32rem,100%)];
   }
   .notice > span {
@@ -218,7 +272,6 @@
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  /* 前 5 秒不透明，后 5 秒淡出。放在 pointer-events-auto 之后，淡出时不再接点击。 */
   .notice.is-leaving,
   .notice-layer .notice.is-leaving,
   .toast-banner.is-leaving {
@@ -248,9 +301,9 @@
   .console-toolbar { @apply py-2 px-3; }
 }
 
-/* 结束态必须是 transform:none，否则 fill-mode both 会残留 transform 并成为 fixed 包含块 */
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes signal-sweep { 0%, 35% { transform: translateX(0); opacity: 0; } 55% { opacity: 1; } 85%, 100% { transform: translateX(420%); opacity: 0; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }

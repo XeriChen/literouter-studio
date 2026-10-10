@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import {
+  Bot,
+  Check,
+  Copy,
+  CornerDownLeft,
+  SendHorizontal,
+  Sparkles,
+  Square,
+  Terminal,
+  Trash2,
+  User,
+  Zap,
+} from 'lucide-react'
 import { authHeaders } from '@/api/client'
 import type { ModelAlias } from '@/api/types'
 import { useBottomInset } from '@/hooks/useBottomInset'
@@ -20,6 +32,12 @@ interface ChatUIProps {
   protocol: 'openai' | 'anthropic'
   alias: ModelAlias | null
 }
+
+const QUICK_PROMPTS = [
+  '用 TypeScript 实现一个支持防抖和节流的高阶函数',
+  '输出一段用于大模型配置的 JSON 样例结构',
+  '简述轻量 LLM 网关原生透传设计的核心优势',
+]
 
 function storageKey(protocol: string, aliasName: string): string {
   return `chat:${protocol}:${aliasName}`
@@ -105,7 +123,7 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, streaming])
 
   // 清除当前对话
   const clearChat = useCallback(() => {
@@ -237,48 +255,109 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
+      {/* 消息历史滚动区 */}
+      <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6" aria-live="polite">
         {!hasMessages && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-            <p className="text-sm text-muted-foreground">
-              {alias ? '一键提问，或在下方输入自定义消息' : '选择模型映射后开始对话'}
-            </p>
+          <div className="flex h-full flex-col items-center justify-center gap-5 p-4 text-center">
+            <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-sm border border-primary/20">
+              <Sparkles className="h-7 w-7" />
+              <span className="pulse-radar absolute -right-1 -top-1 h-3 w-3 rounded-full bg-primary" />
+            </div>
+
+            <div className="max-w-md">
+              <h3 className="text-base font-extrabold tracking-tight text-foreground">
+                {alias ? `已就绪：${alias.alias_name}` : '请先在上方选择一个模型映射'}
+              </h3>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                {alias
+                  ? `向本地网关发送真实流式请求，由网关原生透传至 ${alias.provider_name}。`
+                  : '添加 Provider 并导入模型后，即可在此验证真实流式对话。'}
+              </p>
+            </div>
+
             {alias && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={streaming}
-                onClick={() => void send(DEFAULT_PROMPT)}
-                title={`一键提问：${DEFAULT_PROMPT}`}
-                aria-label={`一键提问：${DEFAULT_PROMPT}`}
-              >
-                <SendHorizontal className="h-3.5 w-3.5" />
-                {DEFAULT_PROMPT}
-              </Button>
+              <div className="flex flex-col items-center gap-3">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={streaming}
+                  onClick={() => void send(DEFAULT_PROMPT)}
+                  title={`一键提问：${DEFAULT_PROMPT}`}
+                  aria-label={`一键提问：${DEFAULT_PROMPT}`}
+                  className="rounded-full px-5 py-2 text-xs font-bold shadow-md shadow-primary/20 hover:shadow-lg"
+                >
+                  <Zap className="h-3.5 w-3.5 fill-current" />
+                  {DEFAULT_PROMPT}
+                </Button>
+
+                {/* 快捷示例推荐标签 */}
+                <div className="flex flex-wrap justify-center gap-1.5 max-w-lg mt-2">
+                  {QUICK_PROMPTS.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      disabled={streaming}
+                      onClick={() => void send(q)}
+                      className="rounded-full border border-foreground/10 bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground transition-all duration-150 hover:border-foreground/25 hover:bg-muted/80 hover:text-foreground"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}
+
         {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div
+            key={m.id}
+            className={`flex items-start gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            {m.role === 'assistant' && (
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 text-primary shadow-xs mt-1">
+                <Bot className="h-4 w-4" />
+              </div>
+            )}
+
             <div
-              className={`group relative max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'
+              className={`group relative max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed transition-all duration-150 ${
+                m.role === 'user'
+                  ? 'bg-primary text-primary-foreground rounded-tr-xs shadow-md shadow-primary/10'
+                  : 'glass-card rounded-tl-xs shadow-xs text-foreground'
               }`}
             >
               {m.role === 'user' ? (
-                <div className="whitespace-pre-wrap">{m.content}</div>
+                <div className="whitespace-pre-wrap font-medium">{m.content}</div>
               ) : (
                 <>
+                  <div className="mb-1.5 flex items-center gap-2 border-b border-foreground/5 pb-1">
+                    <span className="font-mono text-[10px] font-bold text-primary">
+                      {alias?.alias_name || 'ASSISTANT'}
+                    </span>
+                    {alias?.provider_name && (
+                      <span className="font-mono text-[9px] text-muted-foreground">
+                        via {alias.provider_name}
+                      </span>
+                    )}
+                  </div>
                   <MarkdownRenderer content={m.content} />
-                  <div className="mt-1 flex items-center justify-end">
+                  {streaming && messages[messages.length - 1]?.id === m.id && (
+                    <span className="streaming-cursor" />
+                  )}
+
+                  <div className="mt-2 flex items-center justify-between border-t border-foreground/5 pt-1.5">
+                    <span className="font-mono text-[9px] text-muted-foreground/70">
+                      {m.content.length} 字符
+                    </span>
                     <button
                       type="button"
                       onClick={() => {
                         void copyText(m.content)
                         setCopiedId(m.id)
-                        setTimeout(() => setCopiedId((curr) => curr === m.id ? null : curr), 1500)
+                        setTimeout(() => setCopiedId((curr) => (curr === m.id ? null : curr)), 1500)
                       }}
-                      className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:bg-background/40"
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-60 transition-all hover:opacity-100 hover:bg-muted"
                       title="复制消息内容"
                       aria-label="复制消息内容"
                     >
@@ -298,17 +377,58 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
                 </>
               )}
             </div>
+
+            {m.role === 'user' && (
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-foreground/10 text-foreground mt-1">
+                <User className="h-4 w-4" />
+              </div>
+            )}
           </div>
         ))}
+
         {streaming && messages.at(-1)?.role !== 'assistant' && (
-          <div className="flex justify-start">
-            <div className="rounded-lg bg-muted px-3 py-2 text-sm">思考中…</div>
+          <div className="flex items-start gap-3 justify-start">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 text-primary mt-1">
+              <Bot className="h-4 w-4" />
+            </div>
+            <div className="glass-card rounded-2xl rounded-tl-xs px-4 py-2.5 text-xs text-muted-foreground flex items-center gap-2">
+              <span className="pulse-radar h-1.5 w-1.5 rounded-full bg-primary" />
+              <span>正在建立连接并生成回复...</span>
+            </div>
           </div>
         )}
       </div>
 
-      <div className="border-t p-4" style={bottomInset > 0 ? { paddingBottom: `calc(1rem + ${bottomInset}px)` } : undefined}>
-        <div className="flex items-end gap-2">
+      {/* 底部输入框与工具栏 */}
+      <div
+        className="border-t border-foreground/10 bg-card/60 p-3 sm:p-4 backdrop-blur-md"
+        style={bottomInset > 0 ? { paddingBottom: `calc(1rem + ${bottomInset}px)` } : undefined}
+      >
+        {/* 输入框上方的快捷提问提示条 */}
+        {hasMessages && !streaming && (
+          <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
+            <span className="font-mono text-[10px] text-muted-foreground shrink-0">快捷提问:</span>
+            <button
+              type="button"
+              onClick={() => void send(DEFAULT_PROMPT)}
+              className="shrink-0 rounded-full border border-foreground/10 bg-muted/30 px-2.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            >
+              ⚡ {DEFAULT_PROMPT}
+            </button>
+            {QUICK_PROMPTS.slice(0, 2).map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => void send(q)}
+                className="shrink-0 rounded-full border border-foreground/10 bg-muted/30 px-2.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors truncate max-w-[200px]"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-end gap-2.5">
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -318,25 +438,53 @@ export function ChatUI({ protocol, alias }: ChatUIProps) {
                 send()
               }
             }}
-            placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
+            placeholder="输入消息，Enter 发送（Shift+Enter 换行）..."
             aria-label="消息输入"
             rows={2}
-            className="resize-none"
+            className="resize-none bg-background/80 shadow-xs focus-visible:ring-1 focus-visible:ring-primary rounded-xl"
           />
+
           {hasMessages && !streaming && (
-            <Button variant="outline" size="icon" onClick={clearChat} title="清除对话" aria-label="清除对话">
-              <Trash2 className="h-4 w-4" />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={clearChat}
+              title="清除对话历史"
+              aria-label="清除对话"
+              className="h-10 w-10 shrink-0 rounded-xl"
+            >
+              <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
             </Button>
           )}
+
           {streaming ? (
-            <Button variant="outline" size="icon" aria-label="停止生成" title="停止生成" onClick={() => abortRef.current?.abort()}>
+            <Button
+              variant="destructive"
+              size="icon"
+              aria-label="停止生成"
+              title="停止生成"
+              onClick={() => abortRef.current?.abort()}
+              className="h-10 w-10 shrink-0 rounded-xl animate-pulse"
+            >
               <Square className="h-4 w-4" />
             </Button>
           ) : (
-            <Button size="icon" aria-label="发送消息" title="发送消息" onClick={() => void send()} disabled={!input.trim() || !alias}>
+            <Button
+              size="icon"
+              aria-label="发送消息"
+              title="发送消息"
+              onClick={() => void send()}
+              disabled={!input.trim() || !alias}
+              className="h-10 w-10 shrink-0 rounded-xl shadow-md shadow-primary/20"
+            >
               <SendHorizontal className="h-4 w-4" />
             </Button>
           )}
+        </div>
+
+        <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground px-1 font-mono">
+          <span>{alias ? `${alias.alias_name} · ${protocol.toUpperCase()}` : '等待选择映射'}</span>
+          <span>ENTER TO SEND / SHIFT+ENTER NEWLINE</span>
         </div>
       </div>
     </div>

@@ -573,7 +573,7 @@ export default function Providers() {
           <button className="flex min-w-0 flex-wrap items-center gap-2 text-left" onClick={() => toggleGroup(key)} aria-expanded={isOpen}>
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
             <CardTitle className="truncate text-sm font-medium">{group?.name ?? '未分组'}</CardTitle>
-            <Badge variant="outline">{protocol}</Badge>
+            <Badge variant={protocol === 'openai' ? 'openai' : 'anthropic'}>{protocol}</Badge>
             <Badge
               variant="secondary"
               className="shrink-0 font-mono whitespace-nowrap"

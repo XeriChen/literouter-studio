@@ -80,10 +80,29 @@ function PeriodFilter({ value, onChange }: { value: LogPeriod; onChange: (value:
 }
 
 function statusBadge(status: number | null) {
-  if (status == null) return <Badge variant="outline">-</Badge>
-  if (status < 400) return <Badge variant="success">{status}</Badge>
-  if (status < 500) return <Badge variant="warning">{status}</Badge>
-  return <Badge variant="destructive">{status}</Badge>
+  if (status == null) return <Badge variant="outline" className="font-mono text-[11px]">-</Badge>
+  if (status < 400) {
+    return (
+      <Badge variant="success" className="font-mono text-[11px] gap-1 font-semibold">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        {status}
+      </Badge>
+    )
+  }
+  if (status < 500) {
+    return (
+      <Badge variant="warning" className="font-mono text-[11px] gap-1 font-semibold">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+        {status}
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="destructive" className="font-mono text-[11px] gap-1 font-semibold">
+      <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+      {status}
+    </Badge>
+  )
 }
 
 function Pagination({ page, totalPages, onPage }: { page: number; totalPages: number; onPage: (p: number) => void }) {

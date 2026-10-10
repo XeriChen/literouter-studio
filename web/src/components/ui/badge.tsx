@@ -3,16 +3,20 @@ import { cn } from '@/lib/utils'
 import { cva, type VariantProps } from 'class-variance-authority'
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium transition-colors',
+  'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-all duration-150',
   {
     variants: {
       variant: {
-        default: 'border-transparent bg-primary text-primary-foreground',
+        default: 'border-transparent bg-primary text-primary-foreground shadow-xs',
         secondary: 'border-transparent bg-secondary text-secondary-foreground',
         destructive: 'border-transparent bg-destructive text-destructive-foreground',
-        outline: 'text-foreground',
-        success: 'border-transparent bg-[hsl(var(--success)/0.15)] text-[hsl(var(--success))] dark:bg-[hsl(var(--success)/0.22)] dark:text-[hsl(var(--success))]',
-        warning: 'border-transparent bg-[hsl(var(--warning)/0.15)] text-[hsl(var(--warning))] dark:bg-[hsl(var(--warning)/0.22)] dark:text-[hsl(var(--warning))]',
+        outline: 'border-foreground/15 text-foreground bg-background/50',
+        success: 'border-emerald-500/20 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+        warning: 'border-amber-500/20 bg-amber-500/15 text-amber-600 dark:text-amber-400',
+        openai: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono text-[11px]',
+        anthropic: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono text-[11px]',
+        purple: 'border-purple-500/30 bg-purple-500/15 text-purple-600 dark:text-purple-400 font-mono',
+        cyan: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 font-mono',
       },
     },
     defaultVariants: {
