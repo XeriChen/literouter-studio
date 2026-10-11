@@ -12,6 +12,8 @@
 
 ## 功能特性
 
+- 控制台提供浅色/深色/跟随系统主题与响应式布局；`⌘K` / `Ctrl+K` 或侧栏搜索打开全局命令面板，可导航页面、切换主题、复制端点 URL，并搜索可用映射直达 Playground。首页 cURL 示例使用当前协议的可用映射名，未配置时需替换 `<MODEL_ALIAS>`；示例 Token 保留为占位符。
+
 - OpenAI（`/openai/v1/*`）与 Anthropic（`/anthropic/v1/*`）代理入口，支持 SSE 流式透传；端点路径缺 `/v1` 自动补齐、多重 `/v1` 自动去重
 - Provider 管理：按名称或地址快速搜索、按分组筛选、分组按最近代理调用时间排序；按协议自定义分组、表单内新建分组、批量选择/移动/启用/禁用/删除、分组启用滑块、配置复制、API Key 显隐、连通性测试、模型拉取、导入弹窗标记已导入/已添加并支持单个取消导入与一键清理导入模型（拉取失败仍可清理）、HTTP 代理、自定义请求头与模型过滤、New API / Sub2API Access Token（可选，仅余额查询用，不参与代理转发）；支持 newapi/sub2api 余额查询：配置 access_token 可查**用户总余额**（newapi 走 `/api/user/self`，`quota/500000=USD`；sub2api 走 `/api/v1/auth/me` 的 `data.balance`）；newapi 令牌额度走 OpenAI 兼容 billing，展示剩余/已用/总额与令牌到期日，无限额密钥只报用量；sub2api 走 `/v1/usage` 展示无限额/剩余、已用成本与日周月限额；带 TTL 缓存与在途去重
 - 模型管理：按 Provider 分组展示（默认折叠）、手动添加或批量导入、启用/禁用、模型测活、批量操作

@@ -1,25 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Braces, ChevronRight, CircleDot, Cpu, MessageSquare, Sparkles, Zap } from 'lucide-react'
 import { api } from '@/api/client'
 import type { ModelAlias } from '@/api/types'
 import { ChatUI } from '@/components/ChatUI'
+import { isAliasAvailable } from '@/lib/aliases'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export default function Playground() {
-  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai')
-  const [aliasName, setAliasName] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const protocol = searchParams.get('protocol') === 'anthropic' ? 'anthropic' : 'openai'
+  const aliasName = searchParams.get('alias') ?? ''
   const aliases = useQuery({ queryKey: ['aliases'], queryFn: () => api<ModelAlias[]>('/api/aliases') })
   const availableAliases = useMemo(
     () =>
       (aliases.data ?? []).filter(
         (a) =>
-          a.protocol === protocol &&
-          a.enabled === 1 &&
-          a.provider_id !== null &&
-          a.model_id !== null &&
-          a.provider_enabled === 1 &&
-          a.target_enabled === 1,
+          a.protocol === protocol && isAliasAvailable(a),
       ),
     [aliases.data, protocol],
   )
@@ -45,14 +42,13 @@ export default function Playground() {
         <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:flex sm:items-end sm:gap-3">
           <div>
             <div className="eyebrow mb-1.5 flex items-center justify-between">
-              <span>协议协议</span>
+              <span>协议</span>
               <span className="text-[9px] uppercase font-bold text-muted-foreground">{protocol}</span>
             </div>
             <Select
               value={protocol}
               onValueChange={(v) => {
-                setProtocol(v as 'openai' | 'anthropic')
-                setAliasName('')
+                setSearchParams({ protocol: v })
               }}
             >
               <SelectTrigger className="w-full sm:w-40 bg-card">
@@ -87,14 +83,14 @@ export default function Playground() {
               <span>模型映射</span>
               <span className="text-[9px] text-muted-foreground">{availableAliases.length} 可用</span>
             </div>
-            <Select value={aliasName} onValueChange={setAliasName} disabled={!availableAliases.length}>
+            <Select value={activeAlias?.alias_name ?? ''} onValueChange={(alias) => setSearchParams({ protocol, alias })} disabled={!availableAliases.length}>
               <SelectTrigger className="w-full sm:w-60 bg-card">
                 <SelectValue placeholder={!availableAliases.length ? '暂无可用映射' : '选择映射'} />
               </SelectTrigger>
               <SelectContent>
                 {availableAliases.map((a) => (
                   <SelectItem key={a.alias_name} value={a.alias_name}>
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center justify-between gap-3">
                       <span className="font-mono font-bold text-foreground">{a.alias_name}</span>
                       <span className="text-[10px] text-muted-foreground truncate">
                         {a.provider_name}

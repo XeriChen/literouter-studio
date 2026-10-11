@@ -109,7 +109,7 @@ export function Layout() {
         <div className="px-3 pt-3.5 pb-1">
           <button
             type="button"
-            onClick={() => setCommandOpen(true)}
+            onClick={() => { setSidebarOpen(false); setCommandOpen(true) }}
             className="group flex w-full items-center gap-2.5 rounded-lg border border-foreground/10 bg-muted/30 px-3 py-2 text-xs text-muted-foreground transition-all duration-150 hover:border-foreground/25 hover:bg-muted/70 hover:text-foreground"
           >
             <Search className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover:text-primary" />

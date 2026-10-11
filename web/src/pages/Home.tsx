@@ -8,12 +8,9 @@ import {
   Box,
   Braces,
   Check,
-  CheckCircle2,
   CircleDot,
   Copy,
   Cpu,
-  GitBranch,
-  Layers,
   LayoutDashboard,
   MessageSquare,
   Radio,
@@ -26,18 +23,21 @@ import {
 } from 'lucide-react'
 import { api } from '@/api/client'
 import { copyText } from '@/lib/clipboard'
-import type { Provider, ProviderModel } from '@/api/types'
+import type { ModelAlias, Provider, ProviderModel } from '@/api/types'
+import { isAliasAvailable } from '@/lib/aliases'
 
 const ENDPOINTS = ['/openai/v1/chat/completions', '/anthropic/v1/messages']
 
 export default function Home() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Provider[]>('/api/providers') })
   const models = useQuery({ queryKey: ['models'], queryFn: () => api<ProviderModel[]>('/api/models') })
+  const aliases = useQuery({ queryKey: ['aliases'], queryFn: () => api<ModelAlias[]>('/api/aliases') })
+  const availableAliases = (aliases.data ?? []).filter(isAliasAvailable)
   const providerRows = providers.data ?? []
   const modelRows = models.data ?? []
   const enabledProviders = providerRows.filter((provider) => provider.enabled).length
   const enabledModels = modelRows.filter((model) => model.enabled).length
-  const setupReady = enabledProviders > 0 && enabledModels > 0
+  const setupReady = !aliases.isError && availableAliases.length > 0
 
   const [copied, setCopied] = useState<{ path: string; ok: boolean } | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -52,13 +52,25 @@ export default function Home() {
     })
   }
 
-  const copyCurl = () => {
-    const origin = window.location.origin
-    const curl =
-      activeSnippetTab === 'openai'
-        ? `curl -X POST ${origin}/openai/v1/chat/completions \\\n  -H "Authorization: Bearer <GATEWAY_TOKEN>" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "gpt-4o",\n    "messages": [{"role": "user", "content": "Hello LiteRouter"}]\n  }'`
-        : `curl -X POST ${origin}/anthropic/v1/messages \\\n  -H "x-api-key: <GATEWAY_TOKEN>" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "claude-3-7-sonnet",\n    "max_tokens": 1024,\n    "messages": [{"role": "user", "content": "Hello LiteRouter"}]\n  }'`
+  const snippetAlias = availableAliases.find((alias) => alias.protocol === activeSnippetTab)
+  const snippetBody = JSON.stringify({
+    model: snippetAlias?.alias_name ?? '<MODEL_ALIAS>',
+    ...(activeSnippetTab === 'anthropic' ? { max_tokens: 1024 } : {}),
+    messages: [{ role: 'user', content: 'Hello LiteRouter' }],
+  }, null, 2)
+  // JSON 放入 shell 单引号时，映射名中的单引号也必须保留为字面量。
+  const shellBody = snippetBody.replaceAll("'", "'\\''")
+  const curl = [
+    `curl -X POST ${window.location.origin}${ENDPOINTS[activeSnippetTab === 'openai' ? 0 : 1]}`,
+    activeSnippetTab === 'openai'
+      ? '  -H "Authorization: Bearer <GATEWAY_TOKEN>"'
+      : '  -H "x-api-key: <GATEWAY_TOKEN>"',
+    ...(activeSnippetTab === 'anthropic' ? ['  -H "anthropic-version: 2023-06-01"'] : []),
+    '  -H "Content-Type: application/json"',
+    `  -d '${shellBody}'`,
+  ].join(' \\\n')
 
+  const copyCurl = () => {
     void copyText(curl).then((ok) => {
       if (ok) {
         setCurlCopied(true)
@@ -177,7 +189,7 @@ export default function Home() {
             <h2 className="mt-1 text-lg font-bold tracking-tight">原生数据流管道与路由拓扑</h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[10px] text-muted-foreground">ZERO RESERIALIZE / MODEL SWAP ONLY</span>
+            <span className="font-mono text-[10px] text-muted-foreground">原生透传 · 仅改写模型与配置的思考字段</span>
           </div>
         </div>
 
@@ -243,7 +255,7 @@ export default function Home() {
       {/* 系统导航与代码快速调用卡片 */}
       <section className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
         {/* 左侧：工作流指引地图 */}
-        <div className="console-surface flex flex-col">
+        <div className="console-surface flex min-w-0 flex-col">
           <div className="flex items-center justify-between border-b border-foreground/10 px-5 py-4">
             <div>
               <div className="eyebrow">Quick Setup Guide</div>
@@ -279,7 +291,7 @@ export default function Home() {
         </div>
 
         {/* 右侧：代码接入与快速测试 Terminal */}
-        <div className="console-surface flex flex-col">
+        <div className="console-surface flex min-w-0 flex-col">
           <div className="flex items-center justify-between border-b border-foreground/10 px-5 py-3.5">
             <div className="flex items-center gap-2">
               <span className="flex gap-1.5">
@@ -327,26 +339,13 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex-1 p-4 font-mono text-[11px] leading-relaxed">
+          <div className="min-w-0 flex-1 p-4 font-mono text-[11px] leading-relaxed">
             <div className="text-muted-foreground"># 直接调用本地网关</div>
-            <pre className="mt-2 overflow-x-auto rounded-lg bg-black/40 p-3 text-emerald-400/90 dark:text-emerald-300">
-              {activeSnippetTab === 'openai' ? (
-                <code>
-                  {`curl -X POST ${window.location.origin}/openai/v1/chat/completions \\
-  -H "Authorization: Bearer <GATEWAY_TOKEN>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]}'`}
-                </code>
-              ) : (
-                <code>
-                  {`curl -X POST ${window.location.origin}/anthropic/v1/messages \\
-  -H "x-api-key: <GATEWAY_TOKEN>" \\
-  -H "anthropic-version: 2023-06-01" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "claude-3-7-sonnet", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hi"}]}'`}
-                </code>
-              )}
+            <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-950 p-3 text-emerald-300">
+              <code>{curl}</code>
             </pre>
+
+            <p className="mt-2 text-xs text-muted-foreground">model 使用当前协议的可用映射名；未配置时请替换 &lt;MODEL_ALIAS&gt;。</p>
 
             <div className="mt-4 space-y-2 border-t border-foreground/10 pt-3">
               <div className="eyebrow text-muted-foreground">Endpoints</div>
@@ -372,7 +371,7 @@ export default function Home() {
                       <span className="font-mono text-[11px] text-foreground">{path}</span>
                     </span>
                     <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 flex items-center gap-1">
-                      {isCopied ? '已复制' : '点击复制'}
+                      {isCopied ? (copied.ok ? '已复制' : '复制失败') : '点击复制'}
                       <Copy className="h-2.5 w-2.5" />
                     </span>
                   </button>
@@ -384,7 +383,7 @@ export default function Home() {
       </section>
 
       {/* 异常或未就绪状态通知 */}
-      {(providers.isError || models.isError) && (
+      {(providers.isError || models.isError || aliases.isError) && (
         <div className="notice notice-error border border-white/[0.14] px-4 py-3">
           <Activity className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
@@ -393,7 +392,9 @@ export default function Home() {
               ? providers.error.message
               : models.error instanceof Error
                 ? models.error.message
-                : 'unknown'}
+                : aliases.error instanceof Error
+                  ? aliases.error.message
+                  : 'unknown'}
           </span>
           <button
             type="button"
@@ -401,6 +402,7 @@ export default function Home() {
             onClick={() => {
               providers.refetch()
               models.refetch()
+              aliases.refetch()
             }}
           >
             重试
@@ -408,10 +410,10 @@ export default function Home() {
         </div>
       )}
 
-      {!setupReady && !providers.isLoading && !models.isLoading && (
+      {!setupReady && !providers.isLoading && !models.isLoading && !aliases.isLoading && (
         <div className="notice notice-warning border border-white/[0.14] px-4 py-3">
           <Activity className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>还没有完整的路由链路。先添加 Provider，再导入模型，即可在 Playground 发起请求。</span>
+          <span>还没有完整的路由链路。先添加 Provider、导入模型并启用映射及其目标，即可在 Playground 发起请求。</span>
           <Link to="/providers" className="ml-auto shrink-0 font-semibold underline underline-offset-4">
             开始配置
           </Link>

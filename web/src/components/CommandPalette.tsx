@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -19,6 +19,7 @@ import {
 import { api } from '@/api/client'
 import type { ModelAlias, Provider } from '@/api/types'
 import { copyText } from '@/lib/clipboard'
+import { isAliasAvailable } from '@/lib/aliases'
 import type { Theme } from '@/lib/theme'
 import {
   CommandDialog,
@@ -40,7 +41,13 @@ interface CommandPaletteProps {
 
 export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme }: CommandPaletteProps) {
   const navigate = useNavigate()
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState<{ label: string; ok: boolean } | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+    setCopyFeedback(null)
+    onOpenChange(nextOpen)
+  }, [onOpenChange])
 
   const aliases = useQuery({
     queryKey: ['aliases'],
@@ -53,28 +60,35 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
     queryFn: () => api<Provider[]>('/api/providers'),
     enabled: open,
   })
+  const availableAliases = (aliases.data ?? []).filter(isAliasAvailable)
+
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+  }, [])
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        onOpenChange(!open)
+        handleOpenChange(!open)
       }
     }
     document.addEventListener('keydown', down)
     return () => document.removeEventListener('keydown', down)
-  }, [open, onOpenChange])
+  }, [open, handleOpenChange])
 
   function handleNavigate(to: string) {
-    onOpenChange(false)
+    handleOpenChange(false)
     navigate(to)
   }
 
   function handleCopy(path: string, label: string) {
     const full = `${window.location.origin}${path}`
-    void copyText(full).then(() => {
-      setCopyFeedback(label)
-      setTimeout(() => {
+    void copyText(full).then((ok) => {
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      setCopyFeedback({ label, ok })
+      if (!ok) return
+      copyTimer.current = setTimeout(() => {
         setCopyFeedback(null)
         onOpenChange(false)
       }, 800)
@@ -82,7 +96,7 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
   }
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
+    <CommandDialog open={open} onOpenChange={handleOpenChange}>
       <CommandInput placeholder="搜索页面、模型映射、操作或快捷指令..." />
       <CommandList>
         <CommandEmpty>未找到相关指令或模型</CommandEmpty>
@@ -91,32 +105,26 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
           <CommandItem onSelect={() => handleNavigate('/')}>
             <Home className="mr-2 h-4 w-4 text-primary" />
             <span>系统总览</span>
-            <CommandShortcut>G H</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => handleNavigate('/providers')}>
             <LayoutDashboard className="mr-2 h-4 w-4 text-primary" />
             <span>Providers 连接管理</span>
-            <CommandShortcut>G P</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => handleNavigate('/models')}>
             <Box className="mr-2 h-4 w-4 text-primary" />
             <span>Models 模型与映射</span>
-            <CommandShortcut>G M</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => handleNavigate('/playground')}>
             <MessageSquare className="mr-2 h-4 w-4 text-primary" />
             <span>Playground 实时调试</span>
-            <CommandShortcut>G L</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => handleNavigate('/logs')}>
             <ScrollText className="mr-2 h-4 w-4 text-primary" />
             <span>Logs 请求与审计日志</span>
-            <CommandShortcut>G O</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => handleNavigate('/settings')}>
             <Settings className="mr-2 h-4 w-4 text-primary" />
             <span>Settings 系统配置</span>
-            <CommandShortcut>G S</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
@@ -140,7 +148,7 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
           <CommandItem onSelect={() => handleCopy('/openai/v1/chat/completions', 'OpenAI Endpoint')}>
             <Copy className="mr-2 h-4 w-4 text-emerald-500" />
             <span>
-              {copyFeedback === 'OpenAI Endpoint' ? '✓ 已复制完整 URL' : '复制 OpenAI 端点完整 URL'}
+              {copyFeedback?.label === 'OpenAI Endpoint' ? (copyFeedback.ok ? '✓ 已复制完整 URL' : '复制失败，请重试') : '复制 OpenAI 端点完整 URL'}
             </span>
             <CommandShortcut className="font-mono">/openai/v1</CommandShortcut>
           </CommandItem>
@@ -148,20 +156,22 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
           <CommandItem onSelect={() => handleCopy('/anthropic/v1/messages', 'Anthropic Endpoint')}>
             <Copy className="mr-2 h-4 w-4 text-amber-500" />
             <span>
-              {copyFeedback === 'Anthropic Endpoint' ? '✓ 已复制完整 URL' : '复制 Anthropic 端点完整 URL'}
+              {copyFeedback?.label === 'Anthropic Endpoint' ? (copyFeedback.ok ? '✓ 已复制完整 URL' : '复制失败，请重试') : '复制 Anthropic 端点完整 URL'}
             </span>
             <CommandShortcut className="font-mono">/anthropic/v1</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
-        {aliases.data && aliases.data.length > 0 && (
+        {availableAliases.length > 0 && (
           <>
             <CommandSeparator />
-            <CommandGroup heading={`模型映射快速直达 (${aliases.data.length})`}>
-              {aliases.data.map((alias) => (
+            <CommandGroup heading={`模型映射快速直达 (${availableAliases.length})`}>
+              {availableAliases.map((alias) => (
                 <CommandItem
                   key={`${alias.protocol}/${alias.alias_name}`}
-                  onSelect={() => handleNavigate(`/playground`)}
+                  value={`alias:${alias.protocol}:${alias.alias_name}`}
+                  keywords={[alias.alias_name, alias.protocol, alias.provider_name ?? '', alias.model_id ?? '']}
+                  onSelect={() => handleNavigate(`/playground?${new URLSearchParams({ protocol: alias.protocol, alias: alias.alias_name })}`)}
                 >
                   <Route className="mr-2 h-4 w-4 text-primary" />
                   <div className="flex flex-1 items-center gap-2 overflow-hidden">

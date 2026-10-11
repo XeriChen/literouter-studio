@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router'
-import { Activity, ArrowRight, Eye, EyeOff, KeyRound, LockKeyhole, Radio, Sparkles } from 'lucide-react'
+import { Activity, ArrowRight, Eye, EyeOff, KeyRound, LockKeyhole, Radio } from 'lucide-react'
 import { api, getToken, setToken } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
