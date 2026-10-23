@@ -61,11 +61,11 @@ pnpm start
 
 ### 部署与 CD 逻辑（本地作为生产机）
 
-本机 3000 是 systemd 托管的生产网关（`literouter.service`），主仓库只作为远端镜像。整套 CD 是**拉取式**的：
+Linux 生产机上 3000 端口是 systemd 托管的生产网关（`literouter.service`）。仓库采用单分支模型：`main` 既是开发线也是生产镜像。整套 CD 是**拉取式**的：
 
 ```
-worktree（dev）→ push origin/dev → 快进合入 main → 生产机手动跑 scripts/deploy.sh
-                                     ↑ 推送 ≠ 部署，部署是显式动作
+本地 main 提交 → git push origin main → 生产机手动跑 scripts/deploy.sh
+                                    ↑ 推送 ≠ 部署，部署是显式动作
 ```
 
 部署用脚本代替手工 `git pull`：
@@ -82,31 +82,37 @@ scripts/deploy.sh
 - 可用 `BRANCH`、`SERVICE`、`HEALTH_URL`、`KEEP_BACKUPS`、`SMOKE_TIMEOUT`、`SMOKE_INTERVAL` 环境变量覆盖默认值。
 - 回滚需手工执行：`git checkout <旧 SHA> && pnpm install && pnpm build:web && systemctl --user restart literouter.service`；**代码回滚不会回滚数据**，必要时先从 `data/deploy-backups/` 恢复。
 
-> 注意：本地仓库既然是远端镜像就不要在本地保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
+> 注意：生产仓库不要保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
 
-### 本机开发：worktree + dev 分支 + 独立端口
+### 本机开发：单分支 + `pnpm dev`
 
-本机 3000 是生产网关，主仓库只做部署；新功能一律在 worktree 的 `dev` 分支上开发，并用独立端口测试：
+功能开发直接在唯一主仓库的 `main` 上进行，不再创建 `dev` 分支或 worktree 副本：
 
 ```bash
-scripts/dev-worktree.sh        # 默认挂 dev 分支，路径 ../literouter-dev
+pnpm dev   # 启动前端口预检；后端 tsx watch + Vite，代理自动对齐库里的后端端口
 ```
 
-脚本创建（或复用）worktree、安装依赖、构建一次前端（`web/dist` 被 gitignore，不预构建则网关对 `/` 返回 404，且 E2E 的服务复用探测会误判）、生成独立的 `.env`（`HOST=127.0.0.1` + 独立 `ENCRYPTION_KEY`），然后前台启动开发实例：
+端口规划（测试与部署分离，互不占用）：
 
-- 网关开发实例 `http://127.0.0.1:3001`（仅本机可达），数据落在 worktree 自己的 `data/`，与生产库完全隔离；
-- Vite 前端 `http://localhost:5174`，`/api`、`/openai`、`/anthropic` 代理到 3001（跟随 `PORT`，不会误连生产）；
-- 指向开发实例跑 E2E：`E2E_GATEWAY_URL=http://127.0.0.1:3001 pnpm test:e2e`（Token 自动从 worktree 自己的库读取）。
+| 场景 | 后端 | 前端 | 说明 |
+| :--- | :--- | :--- | :--- |
+| 生产部署 | 3000 | — | Linux 生产机 systemd `literouter.service` |
+| 本机开发 | 3013 | 5173 | 后端端口由库中 `settings.port` 决定 |
+| E2E 测试 | 3013 | — | Playwright 默认 `http://127.0.0.1:3013`，复用同端口测试实例 |
 
-端口可用 `DEV_PORT` / `VITE_PORT` 覆盖（不允许占用 3000）；临时分支用 `scripts/dev-worktree.sh <分支名>`，路径为 `../literouter-dev-<分支名>`。
+- **每次启动前自动预检端口**：`pnpm dev`、`pnpm dev:server`、`pnpm dev:web`、`pnpm start` 都先执行 `scripts/check-ports.ts`，端口被占用时打印冲突端口和排查命令并中止启动，不会带冲突继续跑。单独检查：`tsx scripts/check-ports.ts [--server|--web|--port=8080]`。
+- Vite 已设 `strictPort`：端口被占用直接失败，不会静默切到 5174，避免访问地址与实际监听不一致。
+- 后端监听以 `data/gateway.db` 的 `settings.host/port` 为准，其次才是 `HOST`/`PORT` 环境变量；本机开发库为 `0.0.0.0:3013`，只想本机访问时在 Settings 里把 host 改成 `127.0.0.1`。
+- 代理目标按 `PORT` > 库中 `settings.port` > 3000 解析（`vite.config.ts` 与 `src/server.ts` 同序），所以 `pnpm dev` 不传参数也会代理到库里的 3013；临时改端口再用 `PORT=...` 覆盖。
+- 3000 属于生产网关，开发实例不要占用或重启它，也不要在生产仓库里跑开发服务。
+- E2E 默认打测试实例：`pnpm test:e2e`；换目标用 `E2E_GATEWAY_URL=...`，未设 `E2E_GATEWAY_TOKEN` 时自动从当前库只读读取 Token。
 
 **开发与发布流程**：
 
-1. 在 worktree 里编码、提交，`git push` 推到 `origin/dev`（dev 上始终线性提交，保证随时可快进）；
-2. 要发布时快进合入 main：`git push origin dev:main`，或在 GitHub 开 `dev → main` 的 PR；
-3. 回生产仓库跑 `scripts/deploy.sh`，拉取并按门禁重启。
+1. 在主仓库 `main` 上编码、提交，`git push origin main`；
+2. 到生产仓库跑 `scripts/deploy.sh`，拉取并按门禁重启。
 
-`dev` 与 `main` 的关系是单向的：`main` 只被 dev 快进推进，不在 main 上直接提交，这样 deploy.sh 的 `--ff-only` 拉取与快进校验永远成立。
+不保留长期并行开发分支；需要试错时用短命 `feat/*` 分支，合入前快进到 main 后即删除，这样 deploy.sh 的 `--ff-only` 拉取与快进校验永远成立。
 
 ## 配置生效规则
 
@@ -173,10 +179,10 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `pnpm dev` | 后端 watch + Vite 开发服务（默认 3000/5173，用 `PORT`/`VITE_PORT` 让位） |
-| `pnpm dev:server` | 仅后端（tsx watch，默认 3000） |
-| `pnpm dev:web` | 仅前端（Vite，默认 5173，代理目标跟随 `PORT`） |
-| `scripts/dev-worktree.sh` | 挂载/复用 worktree（默认 `dev` 分支，`../literouter-dev`）并以 3001/5174 启动开发实例 |
+| `pnpm dev` | 后端 watch + Vite 开发服务（启动前端口预检；默认 3000/5173，用 `PORT`/`VITE_PORT` 让位） |
+| `pnpm dev:server` | 仅后端（tsx watch，启动前端口预检） |
+| `pnpm dev:web` | 仅前端（Vite，启动前端口预检 + `strictPort`，代理目标跟随 `PORT`） |
+| `scripts/check-ports.ts` | 独立端口预检：`tsx scripts/check-ports.ts [--server\|--web\|--port=8080]` |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm test` | Node 单元测试 |
 | `pnpm test:e2e` | Playwright 浏览器测试；构建、服务复用与 Token 前提见下文 |
@@ -186,7 +192,7 @@ Anthropic SDK 通常会占用 `x-api-key` 发送上游 Key，因此接入本项�
 
 ### 浏览器验证
 
-- 先运行 `pnpm build:web` 生成与当前前端对应的 `web/dist`。Playwright 默认访问 `http://127.0.0.1:3000`，非 CI 环境可复用该地址已有服务，否则由配置启动 `pnpm start`；核对目标服务是否对应当前后端及构建，避免用旧服务的结果证明新改动。数据库中的监听设置可能覆盖环境变量，端口冲突或地址不符时先选择受控的测试实例，不随意停止已有服务。
+- 先运行 `pnpm build:web` 生成与当前前端对应的 `web/dist`。Playwright 默认访问测试实例 `http://127.0.0.1:3013`（与部署端口 3000 分离，可用 `E2E_GATEWAY_URL` 覆盖），非 CI 环境可复用该地址已有服务，否则由配置启动 `pnpm start`（自带端口预检）；核对目标服务是否对应当前后端及构建，避免用旧服务的结果证明新改动。数据库中的监听设置可能覆盖环境变量，端口冲突或地址不符时先选择受控的测试实例，不随意停止已有服务。
 - 认证用例优先使用 `E2E_GATEWAY_TOKEN`；未设置时，`test/e2e/global-setup.ts` 尝试从仓库开发库 `data/gateway.db` 只读取得 `admin_token`。两者都不可用时，依赖真实登录的用例跳过；模拟 API 的 UI 用例不依赖真实 Token。
 - 验证结论需覆盖本次受影响场景，并说明相关跳过项。模拟 API 的 UI 用例通过不等于真实后端链路通过，关键登录用例跳过也不能算该场景已验证。
 - `test/ui-check.mjs` 是可按需运行的桌面与移动端 UI 检查脚本，不属于 `pnpm check` 或正式 E2E 套件；需要已运行的后端和有效 Token，产物在 `test-results/ui-check/`。它不是每次改动的额外门槛。

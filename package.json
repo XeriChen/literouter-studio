@@ -9,9 +9,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"pnpm:dev:server\" \"pnpm:dev:web\"",
-    "dev:server": "tsx watch src/server.ts",
-    "dev:web": "vite",
+    "dev": "tsx scripts/check-ports.ts && concurrently -n server,web -c blue,green \"pnpm:dev:server\" \"pnpm:dev:web\"",
+    "dev:server": "tsx scripts/check-ports.ts --server && tsx watch src/server.ts",
+    "dev:web": "tsx scripts/check-ports.ts --web && vite",
     "build:web": "vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -21,7 +21,7 @@
     "test": "tsx --test test/*.test.ts",
     "test:e2e": "playwright test",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build:web",
-    "start": "tsx src/server.ts"
+    "start": "tsx scripts/check-ports.ts --server && tsx src/server.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

@@ -19,9 +19,10 @@
 | 命令 | 说明 |
 | :--- | :--- |
 | `pnpm install` | 安装依赖（镜像：`registry.npmmirror.com`，已在 `.npmrc`） |
-| `pnpm dev` | 后端 (3000) + 前端 dev server (5173) 同时启动 |
-| `pnpm dev:server` | 仅后端，tsx watch |
-| `pnpm dev:web` | 仅前端，Vite（/api、/openai、/anthropic 已代理到 3000） |
+| `pnpm dev` | 后端 + 前端 dev server 同时启动（启动前端口预检，端口见第 6 节） |
+| `pnpm dev:server` | 仅后端，tsx watch（启动前端口预检） |
+| `pnpm dev:web` | 仅前端，Vite（启动前端口预检 + `strictPort`；/api、/openai、/anthropic 代理目标跟随 `PORT`） |
+| `tsx scripts/check-ports.ts` | 单独端口预检：`--server` / `--web` / `--port=8080` |
 | `pnpm typecheck` | `tsc --noEmit` 类型检查 |
 | `pnpm lint` | ESLint |
 | `pnpm test` | Node 原生单元测试（由 tsx 执行） |
@@ -30,7 +31,6 @@
 | `pnpm build:web` | 前端构建到 `web/dist` |
 | `pnpm start` | 生产模式：Hono 托管 API + 前端静态文件 |
 | `scripts/deploy.sh` | 本地生产机从远端拉取并部署（见 README「部署与 CD 逻辑（本地作为生产机）」） |
-| `scripts/dev-worktree.sh` | 挂载/复用 worktree（默认 `dev` 分支，路径 `../literouter-dev`）并以 3001/5174 启动开发实例 |
 | `scripts/rss-sampler.sh` | 网关内存「外部」采样器（由 systemd 用户单元 `literouter-rss-sampler.service` 常驻），网关卡死时仍持续记录 cgroup/进程内存曲线到 `data/rss-sampler.log`；探针发现内存突发时自动用 `perf` 附着采栈（依赖网关 `NODE_OPTIONS` 里的 `--perf-basic-prof`），产出含分配点 JS 函数与源码行的报告到 `data/burst-captures/` |
 
 环境约束：Node ≥ 24，统一使用 **pnpm 11.26.0**（见 `packageManager`），必须用 `tsx` 直接运行后端 TS 源码。
@@ -64,8 +64,8 @@
 - **模型映射是唯一路由入口**：客户端请求的 `model` 字段必须是映射名；每个映射可绑定多个候选；默认 **single** 模式只路由到唯一 `active` 目标；**weighted / failover** 按映射 `routing_config` 消费候选（加权随机 / 优先级故障转移，含冷却、单探测与亲和），禁止在请求期发明配置之外的第四种策略；新增真实模型/导入时为同名映射追加 inactive 候选且不覆盖 active；映射按 `(protocol, alias_name)` 唯一，两协议命名空间独立。
 - 两协议代理入口分别挂 `/openai`、`/anthropic`；端点的版本段自动归一化（缺 `/v1` 自动补齐、多重 `/v1` 自动去重，见 `src/proxy/path.ts`）。除 `GET */v1/models` 外，代理只接受 POST。
 - 前端 `@/*` 别名指向 `web/src/*`（tsconfig paths + vite alias 已配）。
-- **双分支模型与 CD 逻辑**：`main` 只作为生产镜像——生产机仅通过 `scripts/deploy.sh` 快进拉取，禁止在主仓库提交或保留未推送提交；`dev` 是开发线，在 worktree 中编码、提交并推送到 `origin/dev`。发布 = dev 快进合入 main（`git push origin dev:main` 或 GitHub PR）后在生产仓库跑 `scripts/deploy.sh`；推送 ≠ 部署，部署是显式动作。**推送远端 main 后不要在生产仓库本地提前快进（`git merge`/`git pull`）**，一律交给 `scripts/deploy.sh` 执行——脚本靠本地 HEAD 落后于远端来判断有变更，本地提前快进会被判为"已是最新"而跳过备份、质量门禁与重启。生产机上不要跑 `git reset --hard` / `git checkout --`，会静默丢掉未提交改动。
-- **本机 3000 端口是生产网关（systemd `literouter.service`）**：功能开发一律用 `scripts/dev-worktree.sh`（默认 `dev` 分支）在 worktree 里进行，开发实例默认 3001/5174（`HOST=127.0.0.1`，数据与 `.env` 独立），严禁在生产仓库或 3000 端口跑开发服务；vite 代理目标跟随 `PORT`，不会误连生产。
+- **单分支模型与 CD 逻辑**：`main` 同时是开发线与生产镜像，直接在唯一主仓库里提交并推送到 `origin/main`；不再保留 `dev` 开发分支或 worktree 副本。发布 = `git push origin main` 后在生产仓库跑 `scripts/deploy.sh`；推送 ≠ 部署，部署是显式动作。**推送远端 main 后不要在生产仓库本地提前快进（`git merge`/`git pull`）**，一律交给 `scripts/deploy.sh` 执行——脚本靠本地 HEAD 落后于远端来判断有变更，本地提前快进会被判为"已是最新"而跳过备份、质量门禁与重启。生产机上不要跑 `git reset --hard` / `git checkout --`，会静默丢掉未提交改动。需要并行试错时用短命临时分支（如 `feat/*`），合入前快进到 main 后即删除，保证 deploy.sh 的 `--ff-only` 永远成立。
+- **开发实例与端口隔离**：功能开发直接在主仓库进行。端口规划为部署 3000、本机开发/测试 3013 + Vite 5173，E2E 默认打 3013。后端监听以 `data/gateway.db` 的 `settings.host/port` 为准（本机为 `0.0.0.0:3013`，需要收紧暴露面时在 Settings 改为 `127.0.0.1`），Vite 默认 5173 且启用 `strictPort`，代理目标按 `PORT` > 库中 `settings.port` > 3000 解析（与 `src/server.ts` 同序），`pnpm dev` 无需额外传端口。**每次启动服务前必须先做端口预检**：`pnpm dev` / `dev:server` / `dev:web` / `start` 已内置 `scripts/check-ports.ts`，端口被占用时打印冲突端口与排查命令后中止；手工启动或临时实例同样先跑该脚本，不得忽略冲突硬启动。3000 属于生产网关（Linux 生产机由 systemd `literouter.service` 托管），开发不得占用或重启它；原 `dev` 分支、`../literouter-dev` worktree 与 `scripts/dev-worktree.sh` 均已移除。
 - 测试若直接或间接 import `src/db`，必须在 import 之前切到临时目录（`process.chdir(mkdtempSync(join(tmpdir(), ...)))`）或设置 `GATEWAY_DATA_DIR`，因为库路径按进程当前目录解析。`NODE_TEST_CONTEXT` 进程打开非临时目录的库会直接抛错（曾发生测试 DELETE 掉真实 Provider 配置的事故）。
 - 新增 shadcn/ui 组件时用 `pnpm dlx shadcn@latest add ...`，配置见 `components.json`。
 
