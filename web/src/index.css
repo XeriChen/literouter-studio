@@ -253,6 +253,41 @@
     @apply ml-auto h-6 w-6 shrink-0 rounded-md text-white/70 transition-colors hover:bg-white/15 hover:text-white;
   }
 
+  /* 搜索跳转定位：命中项的高亮跳动标记 + 定位提示 */
+  .spotlight-row { animation: spotlight-flash 1.05s cubic-bezier(.4, 0, .6, 1) 3 both; }
+  /* 表格行自身的描边在 border-collapse 下不可靠，用单元格 inset 阴影围出一圈高亮边框 */
+  .spotlight-row > td {
+    box-shadow:
+      inset 0 1px 0 hsl(var(--accent) / .55),
+      inset 0 -1px 0 hsl(var(--accent) / .55);
+  }
+  .spotlight-row > td:first-child {
+    box-shadow:
+      inset 3px 0 0 hsl(var(--accent) / .9),
+      inset 0 1px 0 hsl(var(--accent) / .55),
+      inset 0 -1px 0 hsl(var(--accent) / .55);
+  }
+  .spotlight-row > td:last-child {
+    box-shadow:
+      inset -1px 0 0 hsl(var(--accent) / .55),
+      inset 0 1px 0 hsl(var(--accent) / .55),
+      inset 0 -1px 0 hsl(var(--accent) / .55);
+  }
+
+  .spotlight-block {
+    outline: 2px solid hsl(var(--accent) / .8);
+    outline-offset: 2px;
+    animation:
+      spotlight-beat 1.15s cubic-bezier(.4, 0, .6, 1) 3 both,
+      spotlight-halo 1.15s ease-out 3 both;
+  }
+
+  .spotlight-chip {
+    @apply flex w-fit max-w-full items-center gap-2 rounded-lg border border-accent/35 bg-accent/10 px-3 py-2 text-xs font-medium;
+    animation: spotlight-chip-in .3s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  .spotlight-chip .icon-button { @apply h-5 w-5 shrink-0; }
+
   /* 浮动通知层 */
   .notice-layer {
     @apply pointer-events-none fixed inset-x-0 top-4 z-[200] flex justify-center;
@@ -299,6 +334,26 @@
   .page-title { @apply text-xl; }
   .page-description { @apply mt-0.5 text-xs; }
   .console-toolbar { @apply py-2 px-3; }
+}
+
+/* 搜索跳转命中标：背景呼吸闪动、目标块跳动、外扩光环、提示条入场 */
+@keyframes spotlight-flash {
+  0%, 100% { background-color: hsl(var(--accent) / .08); }
+  50% { background-color: hsl(var(--accent) / .26); }
+}
+@keyframes spotlight-beat {
+  0%, 100% { transform: translateY(0) scale(1); }
+  25% { transform: translateY(-2px) scale(1.015); }
+  60% { transform: translateY(1px) scale(.995); }
+}
+@keyframes spotlight-halo {
+  0% { box-shadow: 0 0 0 0 hsl(var(--accent) / .55); }
+  70% { box-shadow: 0 0 0 8px hsl(var(--accent) / 0); }
+  100% { box-shadow: 0 0 0 0 hsl(var(--accent) / 0); }
+}
+@keyframes spotlight-chip-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }

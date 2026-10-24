@@ -28,6 +28,9 @@ import type { Provider, ProviderGroup, ProviderModel, BalanceResult } from '@/ap
 import { useBottomInset } from '@/hooks/useBottomInset'
 import { useTimedNotice } from '@/hooks/useTimedNotice'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { SpotlightHint } from '@/components/SpotlightHint'
+import { useSearchSpotlight } from '@/lib/spotlight'
+import { cn } from '@/lib/utils'
 import {
   EMPTY_FORM,
   ProviderFormDialog,
@@ -76,8 +79,12 @@ export default function Providers() {
     result ? String(result.id) : null,
     () => setResultState(null),
   )
+  // 命令面板搜索跳转：一次性参数（预填关键字 + 定位目标），落页后滚动并高亮该 Provider
+  const jump = useSearchSpotlight()
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [providerSearch, setProviderSearch] = useState('')
+  // 搜索框文字与「最近一次搜索跳转」绑定：跳转到达时先显示预填关键字，用户输入后接管
+  const [searchDraft, setSearchDraft] = useState({ text: jump.query, pulse: jump.pulseId })
+  const providerSearch = searchDraft.pulse === jump.pulseId ? searchDraft.text : jump.query
   const [groupFilter, setGroupFilter] = useState('all')
   const [groupSort, setGroupSort] = useState<'created' | 'recent'>('created')
   const [groupOpen, setGroupOpen] = useState(false)
@@ -111,6 +118,11 @@ export default function Providers() {
     (!searchQuery || provider.name.toLocaleLowerCase().includes(searchQuery) || provider.base_url.toLocaleLowerCase().includes(searchQuery)) &&
     (groupFilter === 'all' || (groupFilter === 'ungrouped' ? provider.group_id === null : `${provider.protocol}/${provider.group_id}` === groupFilter)),
   ), [providers.data, searchQuery, groupFilter])
+
+  /** 搜索跳转命中的 Provider 名称（数据未到前先用 id 兜底） */
+  const jumpTargetName = jump.target
+    ? (providers.data ?? []).find((provider) => provider.id === jump.target)?.name ?? jump.target
+    : ''
 
   function lastCallFor(protocol: Protocol, groupId: string | null): string {
     return (providers.data ?? []).filter((provider) => provider.protocol === protocol && provider.group_id === groupId)
@@ -499,7 +511,14 @@ export default function Providers() {
             </TableRow></TableHeader>
             <TableBody>
               {rows.map((provider) => (
-                <TableRow key={provider.id} className={selectedProviderIds.has(provider.id) ? 'bg-muted/50' : undefined}>
+                <TableRow
+                  key={provider.id}
+                  ref={jump.bindTarget(provider.id, 'table')}
+                  className={cn(
+                    selectedProviderIds.has(provider.id) && 'bg-muted/50',
+                    jump.isTarget(provider.id) && 'spotlight-row',
+                  )}
+                >
                   {isActive && <TableCell className="pl-4"><Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} /></TableCell>}
                   <TableCell className="font-medium"><div>{provider.name}</div>{provider.auth.api_keys && <div className="text-[11px] font-normal text-muted-foreground">{provider.auth.api_keys.filter((key) => key.enabled).length}/{provider.auth.api_keys.length} Keys{provider.key_health?.some((key) => key.cooldown_until) ? ' · 冷却中' : ''}</div>}</TableCell>
                   <TableCell><Badge variant={provider.protocol === 'openai' ? 'outline' : 'secondary'}>{provider.protocol}</Badge></TableCell>
@@ -523,7 +542,15 @@ export default function Providers() {
 
         <div className="divide-y divide-foreground/10 sm:hidden">
           {rows.map((provider) => (
-            <div key={provider.id} className={`space-y-2 p-3 text-xs ${selectedProviderIds.has(provider.id) ? 'bg-muted/50' : ''}`}>
+            <div
+              key={provider.id}
+              ref={jump.bindTarget(provider.id, 'card')}
+              className={cn(
+                'space-y-2 p-3 text-xs',
+                selectedProviderIds.has(provider.id) && 'bg-muted/50',
+                jump.isTarget(provider.id) && 'spotlight-block',
+              )}
+            >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   {isActive && <Checkbox checked={selectedProviderIds.has(provider.id)} onCheckedChange={() => toggleProviderSelection(provider.id)} aria-label={`选择 ${provider.name}`} />}
@@ -710,7 +737,7 @@ export default function Providers() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[190px] flex-1 sm:max-w-sm">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input aria-label="搜索 Provider" placeholder="搜索 Provider 名称或地址" className="pl-9" value={providerSearch} onChange={(event) => setProviderSearch(event.target.value)} />
+          <Input aria-label="搜索 Provider" placeholder="搜索 Provider 名称或地址" className="pl-9" value={providerSearch} onChange={(event) => setSearchDraft({ text: event.target.value, pulse: jump.pulseId })} />
         </div>
         <Select value={groupFilter} onValueChange={setGroupFilter}>
           <SelectTrigger className="w-[170px] max-w-full" aria-label="按分组筛选 Provider"><SelectValue /></SelectTrigger>
@@ -727,6 +754,14 @@ export default function Providers() {
           <SelectContent><SelectItem value="created">按创建时间</SelectItem><SelectItem value="recent">按最近调用</SelectItem></SelectContent>
         </Select>
       </div>
+
+      {jump.active && jumpTargetName && (
+        <SpotlightHint
+          key={jump.pulseId}
+          label={`已从搜索定位到 Provider「${jumpTargetName}」`}
+          onDismiss={jump.clear}
+        />
+      )}
 
       <div className="space-y-4">
         {providers.isError && (

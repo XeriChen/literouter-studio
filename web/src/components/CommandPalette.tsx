@@ -20,6 +20,7 @@ import { api } from '@/api/client'
 import type { ModelAlias, Provider } from '@/api/types'
 import { copyText } from '@/lib/clipboard'
 import { isAliasAvailable } from '@/lib/aliases'
+import { buildJumpPath } from '@/lib/spotlight'
 import type { Theme } from '@/lib/theme'
 import {
   CommandDialog,
@@ -171,7 +172,10 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
                   key={`${alias.protocol}/${alias.alias_name}`}
                   value={`alias:${alias.protocol}:${alias.alias_name}`}
                   keywords={[alias.alias_name, alias.protocol, alias.provider_name ?? '', alias.model_id ?? '']}
-                  onSelect={() => handleNavigate(`/playground?${new URLSearchParams({ protocol: alias.protocol, alias: alias.alias_name })}`)}
+                  onSelect={() => handleNavigate(buildJumpPath('/playground', {
+                    spotlight: `${alias.protocol}/${alias.alias_name}`,
+                    extra: { protocol: alias.protocol, alias: alias.alias_name },
+                  }))}
                 >
                   <Route className="mr-2 h-4 w-4 text-primary" />
                   <div className="flex flex-1 items-center gap-2 overflow-hidden">
@@ -197,7 +201,7 @@ export function CommandPalette({ open, onOpenChange, currentTheme, onCycleTheme 
             <CommandSeparator />
             <CommandGroup heading={`已连接 Providers (${providers.data.length})`}>
               {providers.data.map((p) => (
-                <CommandItem key={p.id} onSelect={() => handleNavigate('/providers')}>
+                <CommandItem key={p.id} onSelect={() => handleNavigate(buildJumpPath('/providers', { query: p.name, spotlight: p.id }))}>
                   <Braces className="mr-2 h-4 w-4 text-muted-foreground" />
                   <span className="font-medium text-foreground">{p.name}</span>
                   <span className="ml-2 font-mono text-[10px] text-muted-foreground uppercase">

@@ -4,7 +4,9 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import type { ModelAlias } from '@/api/types'
 import { ChatUI } from '@/components/ChatUI'
+import { SpotlightHint } from '@/components/SpotlightHint'
 import { isAliasAvailable } from '@/lib/aliases'
+import { useSearchSpotlight } from '@/lib/spotlight'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export default function Playground() {
@@ -24,6 +26,10 @@ export default function Playground() {
     () => availableAliases.find((a) => a.alias_name === aliasName) ?? null,
     [availableAliases, aliasName],
   )
+  // 命令面板的「映射快速直达」会带上定位标记：命中时高亮映射选择器并给出提示
+  const jump = useSearchSpotlight()
+  const jumpKey = `${protocol}/${aliasName}`
+  const jumpedIn = jump.isTarget(jumpKey)
 
   return (
     <div className="page-shell flex min-h-0 flex-1 flex-col gap-3.5 sm:gap-6">
@@ -78,7 +84,7 @@ export default function Playground() {
             </Select>
           </div>
 
-          <div>
+          <div className={jumpedIn ? 'spotlight-block' : undefined}>
             <div className="eyebrow mb-1.5 flex items-center justify-between">
               <span>模型映射</span>
               <span className="text-[9px] text-muted-foreground">{availableAliases.length} 可用</span>
@@ -103,6 +109,18 @@ export default function Playground() {
           </div>
         </div>
       </div>
+
+      {jumpedIn && (
+        <SpotlightHint
+          key={jump.pulseId}
+          label={
+            activeAlias?.provider_name
+              ? `已从搜索定位到映射「${activeAlias.alias_name}」→ ${activeAlias.provider_name} / ${activeAlias.model_id}`
+              : `已从搜索定位到映射「${aliasName}」`
+          }
+          onDismiss={jump.clear}
+        />
+      )}
 
       <div className="console-surface flex min-h-0 flex-1 flex-col shadow-sm">
         {/* 顶部链路状态指示条 */}
