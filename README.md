@@ -61,37 +61,53 @@ pnpm start
 
 ### 部署与 CD 逻辑（本地作为生产机）
 
-Linux 生产机上 3000 端口是 systemd 托管的生产网关（`literouter.service`）。仓库采用单分支模型：`main` 既是开发线也是生产镜像。整套 CD 是**拉取式**的：
+Linux 生产机上 3000 端口是 systemd 托管的生产网关（`literouter.service`）。仓库采用**双分支**模型：`dev` 是开发线，`main` 只作为生产镜像（禁止直接提交，只接受从 `dev` 合并）。整套 CD 是**拉取式**的：
 
 ```
-本地 main 提交 → git push origin main → 生产机手动跑 scripts/deploy.sh
-                                    ↑ 推送 ≠ 部署，部署是显式动作
+dev 提交 → 自测 + 审查 diff → git merge --no-ff dev → git push origin main
+                                                      ↓
+                                    生产机切回 main 后手动跑 scripts/deploy.sh
+                                                      ↑ 推送 ≠ 部署，部署是显式动作
 ```
 
 部署用脚本代替手工 `git pull`：
 
 ```bash
-scripts/deploy.sh
+git switch main && scripts/deploy.sh
 ```
 
-脚本依次执行：校验本地无已跟踪文件改动 → `git fetch` → 用 `data/last-deployed-sha`（上次成功部署的提交）与 `origin/main` 比较决定是否需要部署 → 打印变更文件 → 按需 `git merge --ff-only` → 用 SQLite 在线备份 API 把 `data/gateway.db` 快照到 `data/deploy-backups/`（校验完整性后才原子落位）→ `pnpm install --frozen-lockfile` → `pnpm check`（类型检查 + 单元测试 + 前端构建）→ 重启 `literouter.service` → 轮询冒烟检查 `http://127.0.0.1:3000/`（默认最多等 60s，冷启动慢于 12s 时不再误报失败）→ 冒烟通过后写回部署记录。
+生产服务直接运行本仓库源码，因此部署前必须停在 `main` 且工作树干净；`deploy.sh` 会校验当前分支，停在 `dev` 时直接拒绝执行。
+
+脚本依次执行：校验当前分支为 `main` 且无已跟踪文件改动 → `git fetch` → 用 `data/last-deployed-sha`（上次成功部署的提交）与 `origin/main` 比较决定是否需要部署 → 打印变更文件 → 按需 `git merge --ff-only` → 用 SQLite 在线备份 API 把 `data/gateway.db` 快照到 `data/deploy-backups/`（校验完整性后才原子落位）→ `pnpm install --frozen-lockfile` → `pnpm check`（类型检查 + 单元测试 + 前端构建）→ 重启 `literouter.service` → 轮询冒烟检查 `http://127.0.0.1:3000/`（默认最多等 60s，冷启动慢于 12s 时不再误报失败）→ 冒烟通过后写回部署记录。
 
 - **按部署记录判断，而不是本地 HEAD**：手工 `git pull` 提前快进、直接在仓库里开发后忘了部署，脚本仍会补跑备份、门禁与重启；只有服务 active 且冒烟 200 才更新记录，中途失败不会污染记录，下次运行自动重试。
 - **已部署版本必须仍在远端历史中**：远端被强推或回滚时脚本拒绝自动部署，避免变更清单与回滚提示失真。
 - **失败即中止**：`pnpm check` 不通过时不会重启服务，旧版本继续对外服务。
 - **数据库与 `.env` 不被触碰**：两者都在 `.gitignore` 内，`data/` 下只有备份目录与 `last-deployed-sha` 会被写入；快照保留最近 10 份。
 - **只允许快进**：本地若存在远端没有的提交会被拒绝，避免在生产机产生分叉或合并提交。
+- **只允许在 `main` 上部署**：当前分支不是 `main` 时脚本直接拒绝，避免把 `dev` 上未发布的代码带上生产。
 - 可用 `BRANCH`、`SERVICE`、`HEALTH_URL`、`KEEP_BACKUPS`、`SMOKE_TIMEOUT`、`SMOKE_INTERVAL`、`STATE_FILE` 环境变量覆盖默认值。
 - 回滚需手工执行：`git checkout <旧 SHA> && pnpm install && pnpm build:web && systemctl --user restart literouter.service`，并把 `data/last-deployed-sha` 改成对应 SHA（否则下次部署会以为线上仍是新版本）；**代码回滚不会回滚数据**，必要时先从 `data/deploy-backups/` 恢复。
 
 > 注意：生产仓库不要保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
 
-### 本机开发：单分支 + `pnpm dev`
+### 本机开发：`dev` 分支 + `pnpm dev`
 
-功能开发直接在唯一主仓库的 `main` 上进行，不再创建 `dev` 分支或 worktree 副本：
+功能开发在同一主仓库切到 `dev` 分支进行，不使用 worktree 副本：
 
 ```bash
+git switch dev
 pnpm dev   # 启动前端口预检；后端 tsx watch + Vite，代理自动对齐库里的后端端口
+```
+
+改动自测并审阅 diff 后合入 `main`（`main` 锁提交，只接受来自 `dev` 的合并）：
+
+```bash
+pnpm check                                   # 自测
+git add -A && git commit -m "feat(scope): ..."
+git push origin dev                          # 备份/协作
+git switch main && git merge --no-ff dev      # 审查通过后合入
+git push origin main                         # 推送 ≠ 部署
 ```
 
 端口规划（测试与部署分离，互不占用）：
