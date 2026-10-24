@@ -45,6 +45,13 @@ for bin in git pnpm curl systemctl flock node; do
 done
 
 # --- 0. 前置：本地必须是远端纯镜像 -------------------------------------------
+# 生产网关运行的就是本工作树的源码：停在 dev 时重启会加载未发布的开发代码，
+# 所以部署必须发生在 $BRANCH 上。
+CURRENT_BRANCH="$(git symbolic-ref --quiet --short HEAD || true)"
+if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+  die "当前分支为 ${CURRENT_BRANCH:-detached HEAD}，部署只允许在 $BRANCH 上进行（开发请留在 dev）"
+fi
+
 # 只拒绝“已跟踪文件的本地改动”（会导致快进失败或合并出意外结果）；未跟踪的草稿文件
 # 不影响拉取，仅告警。本地从不改代码是 pull 部署的前提，否则迟早分叉。
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
