@@ -74,13 +74,15 @@ Linux 生产机上 3000 端口是 systemd 托管的生产网关（`literouter.se
 scripts/deploy.sh
 ```
 
-脚本依次执行：校验本地无已跟踪文件改动 → `git fetch` → 打印变更文件 → `git merge --ff-only` → 用 SQLite 在线备份 API 把 `data/gateway.db` 快照到 `data/deploy-backups/`（校验完整性后才原子落位）→ `pnpm install --frozen-lockfile` → `pnpm check`（类型检查 + 单元测试 + 前端构建）→ 重启 `literouter.service` → 轮询冒烟检查 `http://127.0.0.1:3000/`（默认最多等 60s，冷启动慢于 12s 时不再误报失败）。
+脚本依次执行：校验本地无已跟踪文件改动 → `git fetch` → 用 `data/last-deployed-sha`（上次成功部署的提交）与 `origin/main` 比较决定是否需要部署 → 打印变更文件 → 按需 `git merge --ff-only` → 用 SQLite 在线备份 API 把 `data/gateway.db` 快照到 `data/deploy-backups/`（校验完整性后才原子落位）→ `pnpm install --frozen-lockfile` → `pnpm check`（类型检查 + 单元测试 + 前端构建）→ 重启 `literouter.service` → 轮询冒烟检查 `http://127.0.0.1:3000/`（默认最多等 60s，冷启动慢于 12s 时不再误报失败）→ 冒烟通过后写回部署记录。
 
+- **按部署记录判断，而不是本地 HEAD**：手工 `git pull` 提前快进、直接在仓库里开发后忘了部署，脚本仍会补跑备份、门禁与重启；只有服务 active 且冒烟 200 才更新记录，中途失败不会污染记录，下次运行自动重试。
+- **已部署版本必须仍在远端历史中**：远端被强推或回滚时脚本拒绝自动部署，避免变更清单与回滚提示失真。
 - **失败即中止**：`pnpm check` 不通过时不会重启服务，旧版本继续对外服务。
-- **数据库与 `.env` 不被触碰**：两者都在 `.gitignore` 内，`data/` 下只有备份目录会被写入；快照保留最近 10 份。
+- **数据库与 `.env` 不被触碰**：两者都在 `.gitignore` 内，`data/` 下只有备份目录与 `last-deployed-sha` 会被写入；快照保留最近 10 份。
 - **只允许快进**：本地若存在远端没有的提交会被拒绝，避免在生产机产生分叉或合并提交。
-- 可用 `BRANCH`、`SERVICE`、`HEALTH_URL`、`KEEP_BACKUPS`、`SMOKE_TIMEOUT`、`SMOKE_INTERVAL` 环境变量覆盖默认值。
-- 回滚需手工执行：`git checkout <旧 SHA> && pnpm install && pnpm build:web && systemctl --user restart literouter.service`；**代码回滚不会回滚数据**，必要时先从 `data/deploy-backups/` 恢复。
+- 可用 `BRANCH`、`SERVICE`、`HEALTH_URL`、`KEEP_BACKUPS`、`SMOKE_TIMEOUT`、`SMOKE_INTERVAL`、`STATE_FILE` 环境变量覆盖默认值。
+- 回滚需手工执行：`git checkout <旧 SHA> && pnpm install && pnpm build:web && systemctl --user restart literouter.service`，并把 `data/last-deployed-sha` 改成对应 SHA（否则下次部署会以为线上仍是新版本）；**代码回滚不会回滚数据**，必要时先从 `data/deploy-backups/` 恢复。
 
 > 注意：生产仓库不要保留未提交改动，且不要在生产机上执行 `git reset --hard` / `git checkout --`，那会静默丢弃本地未提交的文档或配置修改。
 
